@@ -1,0 +1,137 @@
+import * as ex from "excalibur";
+import type { CharacterAppearance } from "../types/character.ts";
+import { isActionHeld } from "../systems/keybinds.ts";
+import { compositeCharacter } from "../systems/character-compositor.ts";
+
+const TILE_SIZE = 32;
+const MOVE_SPEED = 160;
+const MAP_TILES = 64;
+
+type Direction = "down" | "up" | "left" | "right";
+
+const DIR_OFFSET: Record<Direction, number> = {
+  down: 0,
+  up: 3,
+  left: 6,
+  right: 9,
+};
+
+function tileCenter(tile: number): number {
+  return tile * TILE_SIZE + TILE_SIZE / 2;
+}
+
+function posToTile(px: number): number {
+  return Math.floor(px / TILE_SIZE);
+}
+
+export class Player extends ex.Actor {
+  readonly appearance: CharacterAppearance;
+  private spriteSheet: ex.SpriteSheet;
+  private tileX: number;
+  private tileY: number;
+  private targetX: number;
+  private targetY: number;
+  private moving = false;
+  private facing: Direction = "down";
+  private walkFrame: 0 | 1 = 0;
+
+  constructor(appearance: CharacterAppearance, startPos: ex.Vector) {
+    super({
+      pos: startPos,
+      width: TILE_SIZE,
+      height: TILE_SIZE,
+      anchor: ex.vec(0.5, 0.5),
+      z: 10,
+    });
+    this.appearance = appearance;
+    this.spriteSheet = compositeCharacter(appearance);
+    this.updateGraphic();
+    this.tileX = posToTile(startPos.x);
+    this.tileY = posToTile(startPos.y);
+    this.targetX = this.tileX;
+    this.targetY = this.tileY;
+  }
+
+  override onPreUpdate(engine: ex.Engine): void {
+    if (this.moving) {
+      const goalX = tileCenter(this.targetX);
+      const goalY = tileCenter(this.targetY);
+      const dx = goalX - this.pos.x;
+      const dy = goalY - this.pos.y;
+      const dist = Math.sqrt(dx * dx + dy * dy);
+
+      if (dist < 2) {
+        this.pos.x = goalX;
+        this.pos.y = goalY;
+        this.tileX = this.targetX;
+        this.tileY = this.targetY;
+        this.vel = ex.vec(0, 0);
+        this.moving = false;
+        this.walkFrame = this.walkFrame === 0 ? 1 : 0;
+        this.updateGraphic();
+      }
+      return;
+    }
+
+    const kb = engine.input.keyboard;
+    let dx = 0;
+    let dy = 0;
+    let newFacing: Direction | null = null;
+
+    if (isActionHeld(kb, "moveLeft")) {
+      dx = -1;
+      newFacing = "left";
+    } else if (isActionHeld(kb, "moveRight")) {
+      dx = 1;
+      newFacing = "right";
+    } else if (isActionHeld(kb, "moveUp")) {
+      dy = -1;
+      newFacing = "up";
+    } else if (isActionHeld(kb, "moveDown")) {
+      dy = 1;
+      newFacing = "down";
+    }
+
+    if (newFacing && newFacing !== this.facing) {
+      this.facing = newFacing;
+      this.updateGraphic();
+    }
+
+    if (dx === 0 && dy === 0) return;
+
+    const nextX = this.tileX + dx;
+    const nextY = this.tileY + dy;
+
+    if (nextX < 0 || nextX >= MAP_TILES || nextY < 0 || nextY >= MAP_TILES) return;
+
+    this.targetX = nextX;
+    this.targetY = nextY;
+    this.moving = true;
+
+    // Show walk frame while moving
+    const walkFrameIdx = DIR_OFFSET[this.facing] + 1 + this.walkFrame;
+    const sprite = this.spriteSheet.getSprite(walkFrameIdx, 0);
+    if (sprite) this.graphics.use(sprite);
+
+    const goalX = tileCenter(this.targetX);
+    const goalY = tileCenter(this.targetY);
+    const vx = goalX - this.pos.x;
+    const vy = goalY - this.pos.y;
+    const len = Math.sqrt(vx * vx + vy * vy);
+    this.vel = ex.vec((vx / len) * MOVE_SPEED, (vy / len) * MOVE_SPEED);
+  }
+
+  private updateGraphic(): void {
+    const frameIdx = DIR_OFFSET[this.facing];
+    const sprite = this.spriteSheet.getSprite(frameIdx, 0);
+    if (sprite) this.graphics.use(sprite);
+  }
+
+  getTileX(): number {
+    return this.tileX;
+  }
+
+  getTileY(): number {
+    return this.tileY;
+  }
+}

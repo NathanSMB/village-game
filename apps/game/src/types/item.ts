@@ -70,6 +70,8 @@ export interface Item {
   slot?: EquipmentSlot;
   colorIndex?: number;
   consumable?: ConsumableEffect;
+  /** Sprite identifier for the 16×16 ground/inventory icon (e.g. "small-rock", "berry") */
+  itemSprite?: string;
 }
 
 export function isConsumable(item: Item): boolean {

@@ -76,13 +76,13 @@ local function drawTrunk(img)
   px(img, 18, 26, TRUNK_DARK)
 end
 
--- Draw shadow at base
+-- Draw shadow at base (tucked under trunk)
 local function drawShadow(img)
   for x = 9, 23 do
-    px(img, x, 27, SHADOW_COLOR)
+    px(img, x, 25, SHADOW_COLOR)
   end
   for x = 11, 21 do
-    px(img, x, 28, SHADOW_COLOR)
+    px(img, x, 26, SHADOW_COLOR)
   end
 end
 

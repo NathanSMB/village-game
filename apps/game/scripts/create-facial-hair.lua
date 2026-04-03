@@ -1,10 +1,11 @@
 -- Create facial hair sprites: stubble, beard, mustache, full
--- 20 frames each: 12 standard + 8 pick (same as idle for facial hair)
+-- 36 frames each: 12 standard + 8 pick (same as idle for facial hair)
+--                + 16 drink (shifted down to match kneeling)
 -- Uses yellow reference colors for palette swapping
 
 local W = 32
 local H = 32
-local FRAMES = 20
+local FRAMES = 36
 
 local scriptPath = app.params["script-path"] or "."
 local outputDir = app.fs.joinPath(app.fs.filePath(scriptPath), "..", "assets", "characters", "facial-hair")
@@ -94,7 +95,72 @@ local function drawFull(img, dir, pose)
   end
 end
 
-local function createSprite(filename, drawFunc)
+-- Drink variants: same facial hair but shifted down for kneeling
+local function drawDrinkStubble(img, dir, drinkPose)
+  clearImg(img)
+  if dir ~= 0 then return end
+  local dropAmounts = { 2, 5, 5, 5 }
+  local dropY = dropAmounts[drinkPose + 1]
+  px(img, headX + 2, 12 + dropY, HAIR)
+  px(img, headX + 4, 12 + dropY, HAIR)
+  px(img, headX + 6, 12 + dropY, HAIR)
+  px(img, headX + headW - 3, 12 + dropY, HAIR)
+  px(img, headX + 3, 13 + dropY, HAIR)
+  px(img, headX + 5, 13 + dropY, HAIR)
+end
+
+local function drawDrinkMustache(img, dir, drinkPose)
+  clearImg(img)
+  local dropAmounts = { 2, 5, 5, 5 }
+  local dropY = dropAmounts[drinkPose + 1]
+  if dir == 0 then
+    rect(img, headX + 2, 10 + dropY, 2, 1, HAIR)
+    rect(img, headX + headW - 4, 10 + dropY, 2, 1, HAIR)
+  elseif dir == 2 then
+    px(img, headX + 1, 10 + dropY, HAIR)
+  elseif dir == 3 then
+    px(img, headX + headW - 2, 10 + dropY, HAIR)
+  end
+end
+
+local function drawDrinkBeard(img, dir, drinkPose)
+  clearImg(img)
+  local dropAmounts = { 2, 5, 5, 5 }
+  local dropY = dropAmounts[drinkPose + 1]
+  if dir == 0 then
+    rect(img, headX + 1, 12 + dropY, headW - 2, 2, HAIR)
+    rect(img, headX + 2, 14 + dropY, headW - 4, 1, HAIR_SHADOW)
+  elseif dir == 2 then
+    rect(img, headX, 12 + dropY, 3, 2, HAIR)
+    px(img, headX + 1, 14 + dropY, HAIR_SHADOW)
+  elseif dir == 3 then
+    rect(img, headX + headW - 3, 12 + dropY, 3, 2, HAIR)
+    px(img, headX + headW - 2, 14 + dropY, HAIR_SHADOW)
+  end
+end
+
+local function drawDrinkFull(img, dir, drinkPose)
+  clearImg(img)
+  local dropAmounts = { 2, 5, 5, 5 }
+  local dropY = dropAmounts[drinkPose + 1]
+  if dir == 0 then
+    rect(img, headX + 2, 10 + dropY, 2, 1, HAIR)
+    rect(img, headX + headW - 4, 10 + dropY, 2, 1, HAIR)
+    rect(img, headX, 12 + dropY, headW, 2, HAIR)
+    rect(img, headX + 1, 14 + dropY, headW - 2, 1, HAIR)
+    rect(img, headX + 2, 15 + dropY, headW - 4, 1, HAIR_SHADOW)
+  elseif dir == 2 then
+    px(img, headX + 1, 10 + dropY, HAIR)
+    rect(img, headX, 12 + dropY, 3, 3, HAIR)
+    px(img, headX + 1, 15 + dropY, HAIR_SHADOW)
+  elseif dir == 3 then
+    px(img, headX + headW - 2, 10 + dropY, HAIR)
+    rect(img, headX + headW - 3, 12 + dropY, 3, 3, HAIR)
+    px(img, headX + headW - 2, 15 + dropY, HAIR_SHADOW)
+  end
+end
+
+local function createSprite(filename, drawFunc, drinkDrawFunc)
   local spr = Sprite{ width = W, height = H, colorMode = ColorMode.RGB }
   for i = 2, FRAMES do
     spr:newEmptyFrame()
@@ -122,11 +188,22 @@ local function createSprite(filename, drawFunc)
     end
   end
 
+  -- Drink frames (16): shifted down for kneeling
+  for dir = 0, 3 do
+    for drinkPose = 0, 3 do
+      local frameIdx = 21 + dir * 4 + drinkPose
+      app.activeFrame = spr.frames[frameIdx]
+      local cel = spr:newCel(spr.layers[1], frameIdx)
+      drinkDrawFunc(cel.image, dir, drinkPose)
+      spr.frames[frameIdx].duration = 0.2
+    end
+  end
+
   spr:saveAs(app.fs.joinPath(outputDir, filename))
   print("Created " .. filename)
 end
 
-createSprite("facial-stubble.aseprite", drawStubble)
-createSprite("facial-mustache.aseprite", drawMustache)
-createSprite("facial-beard.aseprite", drawBeard)
-createSprite("facial-full.aseprite", drawFull)
+createSprite("facial-stubble.aseprite", drawStubble, drawDrinkStubble)
+createSprite("facial-mustache.aseprite", drawMustache, drawDrinkMustache)
+createSprite("facial-beard.aseprite", drawBeard, drawDrinkBeard)
+createSprite("facial-full.aseprite", drawFull, drawDrinkFull)

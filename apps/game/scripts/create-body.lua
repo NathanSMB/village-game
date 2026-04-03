@@ -1,11 +1,12 @@
--- Create male and female body sprites with 20 frames each
+-- Create male and female body sprites with 36 frames each
 -- Frames 1-12:  Down(idle,walk1,walk2), Up(...), Left(...), Right(...)
 -- Frames 13-20: Down(reach,grab), Up(reach,grab), Left(reach,grab), Right(reach,grab)
+-- Frames 21-36: Drink animation: 4 dirs x 4 poses (begin kneel, kneel, reach, drink)
 -- Uses magenta reference colors for palette swapping
 
 local W = 32
 local H = 32
-local FRAMES = 20
+local FRAMES = 36
 
 local scriptPath = app.params["script-path"] or "."
 local outputDir = app.fs.joinPath(app.fs.filePath(scriptPath), "..", "assets", "characters", "body")
@@ -120,6 +121,91 @@ local function drawPickArms(img, dir, pickPose)
   end
 end
 
+-- Draw drink arms for kneeling animation
+-- drinkPose: 0=begin kneel (arms at sides), 1=kneel (arms at sides),
+--            2=reach toward water, 3=drink (hands to mouth)
+local function drawDrinkArms(img, dir, drinkPose, dropY)
+  local armTopY = 14 + dropY
+
+  if drinkPose <= 1 then
+    -- Arms at sides, shortened (kneeling = arms don't hang as low)
+    local armLen = 6
+    rect(img, bodyX - armW, armTopY, armW, armLen, SKIN)
+    rect(img, bodyX + bodyW, armTopY, armW, armLen, SKIN)
+    px(img, bodyX - armW, armTopY, SKIN_SHADOW)
+    px(img, bodyX + bodyW + armW - 1, armTopY, SKIN_SHADOW)
+
+  elseif drinkPose == 2 then
+    -- Reach toward water (direction-dependent)
+    if dir == 0 then
+      -- Down: both arms extend downward
+      rect(img, bodyX - armW, armTopY, armW, 6, SKIN)
+      px(img, bodyX - armW, armTopY, SKIN_SHADOW)
+      rect(img, bodyX + bodyW, armTopY, armW, 10, SKIN)
+      px(img, bodyX + bodyW + armW - 1, armTopY, SKIN_SHADOW)
+      -- Hand highlights at tips
+      px(img, bodyX + bodyW, armTopY + 9, SKIN_HIGHLIGHT)
+      px(img, bodyX + bodyW + 1, armTopY + 9, SKIN_HIGHLIGHT)
+
+    elseif dir == 1 then
+      -- Up: both arms extend upward-forward
+      rect(img, bodyX - armW, armTopY, armW, 6, SKIN)
+      px(img, bodyX - armW, armTopY, SKIN_SHADOW)
+      rect(img, bodyX + bodyW, armTopY - 4, armW, 10, SKIN)
+      px(img, bodyX + bodyW + armW - 1, armTopY - 4, SKIN_SHADOW)
+      px(img, bodyX + bodyW, armTopY - 4, SKIN_HIGHLIGHT)
+      px(img, bodyX + bodyW + 1, armTopY - 4, SKIN_HIGHLIGHT)
+
+    elseif dir == 2 then
+      -- Left: both arms extend left
+      rect(img, bodyX - 7, armTopY + 2, 7, armW, SKIN)
+      px(img, bodyX - 7, armTopY + 2, SKIN_HIGHLIGHT)
+      px(img, bodyX - 7, armTopY + 3, SKIN_SHADOW)
+      -- Right arm at side
+      rect(img, bodyX + bodyW, armTopY, armW, 6, SKIN)
+      px(img, bodyX + bodyW + armW - 1, armTopY, SKIN_SHADOW)
+
+    elseif dir == 3 then
+      -- Right: both arms extend right
+      rect(img, bodyX - armW, armTopY, armW, 6, SKIN)
+      px(img, bodyX - armW, armTopY, SKIN_SHADOW)
+      rect(img, bodyX + bodyW, armTopY + 2, 7, armW, SKIN)
+      px(img, bodyX + bodyW + 6, armTopY + 2, SKIN_HIGHLIGHT)
+      px(img, bodyX + bodyW + 6, armTopY + 3, SKIN_SHADOW)
+    end
+
+  elseif drinkPose == 3 then
+    -- Drink: hands cupped near mouth
+    if dir == 0 then
+      -- Both arms up, hands near chin
+      rect(img, bodyX - 1, armTopY, 3, armW, SKIN)
+      rect(img, bodyX + bodyW - 2, armTopY, 3, armW, SKIN)
+      -- Highlight on hands (wet/water)
+      px(img, bodyX, armTopY, SKIN_HIGHLIGHT)
+      px(img, bodyX + bodyW - 1, armTopY, SKIN_HIGHLIGHT)
+
+    elseif dir == 1 then
+      -- Arms up and forward (from behind, look like they're at face)
+      rect(img, bodyX - armW, armTopY, armW, 4, SKIN)
+      rect(img, bodyX + bodyW, armTopY, armW, 4, SKIN)
+      px(img, bodyX - armW, armTopY, SKIN_HIGHLIGHT)
+      px(img, bodyX + bodyW + 1, armTopY, SKIN_HIGHLIGHT)
+
+    elseif dir == 2 then
+      -- Left: arms bent toward face
+      rect(img, bodyX - 3, armTopY - 1, 4, armW, SKIN)
+      px(img, bodyX - 3, armTopY - 1, SKIN_HIGHLIGHT)
+      rect(img, bodyX + bodyW, armTopY, armW, 4, SKIN)
+
+    elseif dir == 3 then
+      -- Right: arms bent toward face
+      rect(img, bodyX - armW, armTopY, armW, 4, SKIN)
+      rect(img, bodyX + bodyW - 1, armTopY - 1, 4, armW, SKIN)
+      px(img, bodyX + bodyW + 2, armTopY - 1, SKIN_HIGHLIGHT)
+    end
+  end
+end
+
 local function drawBody(img, dir, pose, isFemale, skipArms)
   clearImg(img)
 
@@ -203,6 +289,107 @@ local function drawBody(img, dir, pose, isFemale, skipArms)
   px(img, rightLegX - legShift, 24, SKIN_SHADOW)
 end
 
+-- Draw the kneeling body for drink animation
+-- drinkPose: 0=begin kneel, 1=kneel, 2=reach, 3=drink
+local function drawDrinkBody(img, dir, drinkPose, isFemale)
+  clearImg(img)
+
+  -- Progressive drop amounts per pose
+  local dropAmounts = { 2, 5, 5, 5 }
+  local dropY = dropAmounts[drinkPose + 1]
+
+  -- === HEAD (shifted down) ===
+  rect(img, headX + 1, 4 + dropY, headW - 2, 1, SKIN)
+  rect(img, headX, 5 + dropY, headW, 8, SKIN)
+  rect(img, headX + 1, 13 + dropY, headW - 2, 1, SKIN)
+
+  -- Head shadow
+  if dir == 0 or dir == 1 then
+    rect(img, headX, 5 + dropY, 1, 8, SKIN_SHADOW)
+    rect(img, headX + headW - 1, 5 + dropY, 1, 8, SKIN_SHADOW)
+  elseif dir == 2 then
+    rect(img, headX + headW - 2, 5 + dropY, 2, 8, SKIN_SHADOW)
+  elseif dir == 3 then
+    rect(img, headX, 5 + dropY, 2, 8, SKIN_SHADOW)
+  end
+  rect(img, headX + 2, 5 + dropY, 2, 1, SKIN_HIGHLIGHT)
+
+  -- === EYES ===
+  if dir == 0 then
+    px(img, headX + 2, 8 + dropY, EYE)
+    px(img, headX + 3, 8 + dropY, EYE)
+    px(img, headX + headW - 4, 8 + dropY, EYE)
+    px(img, headX + headW - 3, 8 + dropY, EYE)
+  elseif dir == 2 then
+    px(img, headX + 1, 8 + dropY, EYE)
+    px(img, headX + 2, 8 + dropY, EYE)
+  elseif dir == 3 then
+    px(img, headX + headW - 3, 8 + dropY, EYE)
+    px(img, headX + headW - 2, 8 + dropY, EYE)
+  end
+
+  -- === TORSO (shifted down, slightly shorter for kneeling poses) ===
+  local torsoH = (drinkPose >= 1) and 8 or 10
+  rect(img, bodyX, 14 + dropY, bodyW, torsoH, SKIN)
+  rect(img, bodyX, 14 + dropY, 1, torsoH, SKIN_SHADOW)
+  rect(img, bodyX + bodyW - 1, 14 + dropY, 1, torsoH, SKIN_SHADOW)
+
+  -- === FEMALE DETAIL ===
+  if isFemale then
+    if dir == 0 then
+      rect(img, bodyX + 1, 17 + dropY, 3, 1, SKIN_SHADOW)
+      rect(img, bodyX + bodyW - 4, 17 + dropY, 3, 1, SKIN_SHADOW)
+      rect(img, bodyX, 16 + dropY, bodyW, 2, UNDERWEAR)
+    elseif dir == 2 or dir == 3 then
+      rect(img, bodyX, 16 + dropY, bodyW, 2, UNDERWEAR)
+    end
+  end
+
+  -- === UNDERWEAR ===
+  local uwY = 14 + dropY + torsoH - 2
+  rect(img, bodyX, uwY, bodyW, 2, UNDERWEAR)
+
+  -- === KNEELING LEGS ===
+  local legW = 3
+  local legGap = 2
+  local leftLegX = math.floor((W - legGap) / 2) - legW
+  local rightLegX = math.floor((W - legGap) / 2) + legGap
+  local kneeY = 14 + dropY + torsoH
+
+  if drinkPose == 0 then
+    -- Begin kneel: legs bending, shorter than normal
+    if dir == 0 or dir == 1 then
+      rect(img, leftLegX, kneeY, legW, 4, SKIN)
+      rect(img, rightLegX, kneeY, legW, 4, SKIN)
+    else
+      rect(img, leftLegX, kneeY, legW, 4, SKIN)
+      rect(img, rightLegX, kneeY, legW, 4, SKIN)
+    end
+    px(img, leftLegX, kneeY, SKIN_SHADOW)
+    px(img, rightLegX, kneeY, SKIN_SHADOW)
+  else
+    -- Full kneel: legs folded, wider and flatter (on knees)
+    if dir == 0 or dir == 1 then
+      -- Knees visible, spread wider, short
+      rect(img, leftLegX - 1, kneeY, legW + 2, 3, SKIN)
+      rect(img, rightLegX - 1, kneeY, legW + 2, 3, SKIN)
+      px(img, leftLegX - 1, kneeY + 2, SKIN_SHADOW)
+      px(img, rightLegX - 1, kneeY + 2, SKIN_SHADOW)
+      px(img, leftLegX + legW, kneeY + 2, SKIN_SHADOW)
+      px(img, rightLegX + legW, kneeY + 2, SKIN_SHADOW)
+    else
+      -- Side view: legs tucked under, visible as compact shape
+      rect(img, leftLegX, kneeY, legW + 1, 3, SKIN)
+      rect(img, rightLegX - 1, kneeY, legW + 1, 3, SKIN)
+      px(img, leftLegX, kneeY + 2, SKIN_SHADOW)
+      px(img, rightLegX - 1, kneeY + 2, SKIN_SHADOW)
+    end
+  end
+
+  -- === ARMS ===
+  drawDrinkArms(img, dir, drinkPose, dropY)
+end
+
 local function createBodySprite(filename, isFemale)
   local spr = Sprite{ width = W, height = H, colorMode = ColorMode.RGB }
   for i = 2, FRAMES do
@@ -228,6 +415,17 @@ local function createBodySprite(filename, isFemale)
       local cel = spr:newCel(spr.layers[1], frameIdx)
       drawBody(cel.image, dir, 0, isFemale, true) -- idle body, skip arms
       drawPickArms(cel.image, dir, pickPose)
+      spr.frames[frameIdx].duration = 0.2
+    end
+  end
+
+  -- Drink frames (16): 4 directions x 4 drink poses
+  for dir = 0, 3 do
+    for drinkPose = 0, 3 do
+      local frameIdx = 21 + dir * 4 + drinkPose
+      app.activeFrame = spr.frames[frameIdx]
+      local cel = spr:newCel(spr.layers[1], frameIdx)
+      drawDrinkBody(cel.image, dir, drinkPose, isFemale)
       spr.frames[frameIdx].duration = 0.2
     end
   end

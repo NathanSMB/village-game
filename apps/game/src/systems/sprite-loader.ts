@@ -1,6 +1,7 @@
 import * as ex from "excalibur";
 import grassPng from "../sprites/ground/grass.png";
 import berryBushPng from "../sprites/ground/berry-bush.png";
+import waterPng from "../sprites/ground/water.png";
 import { getCharacterImageSources } from "./character-compositor.ts";
 
 export const grassImage = new ex.ImageSource(grassPng, {
@@ -8,6 +9,10 @@ export const grassImage = new ex.ImageSource(grassPng, {
 });
 
 export const berryBushImage = new ex.ImageSource(berryBushPng, {
+  filtering: ex.ImageFiltering.Pixel,
+});
+
+export const waterImage = new ex.ImageSource(waterPng, {
   filtering: ex.ImageFiltering.Pixel,
 });
 
@@ -69,6 +74,70 @@ export function getBerryBushPickedAnimation(): ex.Animation {
   return ex.Animation.fromSpriteSheet(sheet, [4, 5, 6, 7], 500, ex.AnimationStrategy.Loop);
 }
 
+// Water tile types — 13 types × 4 animation frames = 52 total frames
+// Each type occupies 4 consecutive frames in the sprite sheet
+let waterSheet: ex.SpriteSheet | null = null;
+
+const WATER_ANIM_FRAMES = 4;
+const WATER_TOTAL_FRAMES = 52;
+
+function getWaterSheet(): ex.SpriteSheet {
+  if (!waterSheet) {
+    waterSheet = ex.SpriteSheet.fromImageSource({
+      image: waterImage,
+      grid: {
+        rows: 1,
+        columns: WATER_TOTAL_FRAMES,
+        spriteWidth: 32,
+        spriteHeight: 32,
+      },
+    });
+  }
+  return waterSheet;
+}
+
+/**
+ * Water tile type indices (each maps to 4 consecutive frames):
+ *  0 = center (full water)
+ *  1 = edge-north (grass on top)
+ *  2 = edge-south (grass on bottom)
+ *  3 = edge-east (grass on right)
+ *  4 = edge-west (grass on left)
+ *  5 = outer corner NW
+ *  6 = outer corner NE
+ *  7 = outer corner SW
+ *  8 = outer corner SE
+ *  9 = inner corner NW
+ * 10 = inner corner NE
+ * 11 = inner corner SW
+ * 12 = inner corner SE
+ */
+export const WaterTileType = {
+  Center: 0,
+  EdgeN: 1,
+  EdgeS: 2,
+  EdgeE: 3,
+  EdgeW: 4,
+  OuterNW: 5,
+  OuterNE: 6,
+  OuterSW: 7,
+  OuterSE: 8,
+  InnerNW: 9,
+  InnerNE: 10,
+  InnerSW: 11,
+  InnerSE: 12,
+} as const;
+
+export type WaterTileTypeValue = (typeof WaterTileType)[keyof typeof WaterTileType];
+
+/** Get an animation for a specific water tile type. */
+export function getWaterAnimation(tileType: WaterTileTypeValue): ex.Animation {
+  const sheet = getWaterSheet();
+  const startFrame = tileType * WATER_ANIM_FRAMES;
+  const frames = [startFrame, startFrame + 1, startFrame + 2, startFrame + 3];
+  return ex.Animation.fromSpriteSheet(sheet, frames, 500, ex.AnimationStrategy.Loop);
+}
+
 export function getAllImageSources(): ex.ImageSource[] {
-  return [grassImage, berryBushImage, ...getCharacterImageSources()];
+  return [grassImage, berryBushImage, waterImage, ...getCharacterImageSources()];
 }

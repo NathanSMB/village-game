@@ -1,7 +1,7 @@
 import * as ex from "excalibur";
 import type { CharacterAppearance } from "../types/character.ts";
 import { type InventoryState, defaultInventory } from "../types/inventory.ts";
-import { type VitalsState, defaultVitals, updateVitals } from "../types/vitals.ts";
+import { type VitalsState, clampVital, defaultVitals, updateVitals } from "../types/vitals.ts";
 import { isActionHeld } from "../systems/keybinds.ts";
 import { compositeCharacter } from "../systems/character-compositor.ts";
 
@@ -9,6 +9,8 @@ const TILE_SIZE = 32;
 const MOVE_SPEED = 160;
 const MAP_TILES = 64;
 const PICK_DURATION_MS = 500;
+const DRINK_DURATION_MS = 1000; // 4 frames × 250ms each
+const DRINK_THIRST_RESTORE = 25;
 
 export type Direction = "down" | "up" | "left" | "right";
 
@@ -28,6 +30,14 @@ const PICK_DIR_OFFSET: Record<Direction, number> = {
   up: 14,
   left: 16,
   right: 18,
+};
+
+// Drink animation frame offsets: frames 20-35 (4 dirs × 4 drink poses)
+const DRINK_DIR_OFFSET: Record<Direction, number> = {
+  down: 20,
+  up: 24,
+  left: 28,
+  right: 32,
 };
 
 function tileCenter(tile: number): number {
@@ -57,6 +67,10 @@ export class Player extends ex.Actor {
   // Picking state
   private picking = false;
   private pickTimer = 0;
+
+  // Drinking state
+  private drinking = false;
+  private drinkTimer = 0;
 
   constructor(
     appearance: CharacterAppearance,
@@ -100,6 +114,25 @@ export class Player extends ex.Actor {
     return this.picking;
   }
 
+  /** Start the drinking animation. Locks the player for DRINK_DURATION_MS. */
+  startDrinking(): void {
+    this.drinking = true;
+    this.drinkTimer = DRINK_DURATION_MS;
+    // Show the first drink frame immediately (begin kneel)
+    const drinkIdx = DRINK_DIR_OFFSET[this.facing];
+    const sprite = this.spriteSheet.getSprite(drinkIdx, 0);
+    if (sprite) this.graphics.use(sprite);
+  }
+
+  isDrinking(): boolean {
+    return this.drinking;
+  }
+
+  /** Returns true if the player is locked in any animation. */
+  isBusy(): boolean {
+    return this.picking || this.drinking;
+  }
+
   getFacing(): Direction {
     return this.facing;
   }
@@ -128,6 +161,40 @@ export class Player extends ex.Actor {
 
       if (this.pickTimer <= 0) {
         this.picking = false;
+        this.updateGraphic();
+      }
+      return;
+    }
+
+    // Drinking animation locks movement
+    if (this.drinking) {
+      this.drinkTimer -= delta;
+      const quarterDuration = DRINK_DURATION_MS / 4;
+
+      // 4 frames: begin kneel, kneel, reach, drink
+      const drinkBase = DRINK_DIR_OFFSET[this.facing];
+      let poseIdx: number;
+      if (this.drinkTimer > quarterDuration * 3) {
+        poseIdx = 0; // begin kneel
+      } else if (this.drinkTimer > quarterDuration * 2) {
+        poseIdx = 1; // full kneel
+      } else if (this.drinkTimer > quarterDuration) {
+        poseIdx = 2; // reach toward water
+      } else {
+        poseIdx = 3; // drink
+      }
+
+      const frameIdx = drinkBase + poseIdx;
+      const sprite = this.spriteSheet.getSprite(frameIdx, 0);
+      if (sprite) this.graphics.use(sprite);
+
+      if (this.drinkTimer <= 0) {
+        this.drinking = false;
+        // Restore thirst
+        this.vitals = {
+          ...this.vitals,
+          thirst: clampVital(this.vitals.thirst + DRINK_THIRST_RESTORE),
+        };
         this.updateGraphic();
       }
       return;

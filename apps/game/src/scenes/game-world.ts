@@ -8,7 +8,8 @@ import { FloatingText } from "../actors/floating-text.ts";
 import { VitalsHud } from "../actors/vitals-hud.ts";
 import { wasActionPressed } from "../systems/keybinds.ts";
 import type { BerryBushSaveState, SaveData } from "../systems/save-manager.ts";
-import { getGrassAnimations } from "../systems/sprite-loader.ts";
+import { getGrassAnimations, getWaterAnimation, WaterTileType } from "../systems/sprite-loader.ts";
+import type { WaterTileTypeValue } from "../systems/sprite-loader.ts";
 import type { DeathCause } from "./game-over.ts";
 
 const MAP_COLS = 64;
@@ -16,6 +17,10 @@ const MAP_ROWS = 64;
 const TILE_SIZE = 32;
 const BUSH_COUNT = 25;
 const SPAWN_EXCLUSION = 3; // No bushes within N tiles of center spawn
+const POND_COUNT = 3; // Number of ponds to generate
+const POND_MIN_RADIUS = 3;
+const POND_MAX_RADIUS = 5;
+const WATER_EXCLUSION = 5; // No water within N tiles of center spawn
 
 export type GameWorldData =
   | { type: "new"; appearance: CharacterAppearance }
@@ -33,6 +38,7 @@ export class GameWorld extends ex.Scene<GameWorldData> {
   private bushes: BerryBush[] = [];
   private bushByTile = new Map<number, BerryBush>();
   private blockedTiles = new Set<number>();
+  private waterTiles = new Set<number>(); // Track water tile positions
   private actionPrompt: ex.Label | null = null;
 
   override onInitialize(): void {
@@ -49,13 +55,27 @@ export class GameWorld extends ex.Scene<GameWorldData> {
       return (seed - 1) / 2147483646;
     };
 
+    // Generate pond positions first (before grass/bushes)
+    this.generatePonds(seededRandom);
+
     const grassAnims = getGrassAnimations();
 
     for (let i = 0; i < MAP_COLS * MAP_ROWS; i++) {
       const tile = this.tilemap.getTileByIndex(i);
       if (!tile) continue;
-      const idx = Math.floor(seededRandom() * grassAnims.length);
-      tile.addGraphic(grassAnims[idx].clone());
+
+      const tx = i % MAP_COLS;
+      const ty = Math.floor(i / MAP_COLS);
+      const key = tileKey(tx, ty);
+
+      if (this.waterTiles.has(key)) {
+        // Determine the right water tile variant based on neighbors
+        const waterType = this.getWaterTileType(tx, ty);
+        tile.addGraphic(getWaterAnimation(waterType).clone());
+      } else {
+        const idx = Math.floor(seededRandom() * grassAnims.length);
+        tile.addGraphic(grassAnims[idx].clone());
+      }
     }
 
     this.add(this.tilemap);
@@ -69,12 +89,13 @@ export class GameWorld extends ex.Scene<GameWorldData> {
       const bx = Math.floor(seededRandom() * MAP_COLS);
       const by = Math.floor(seededRandom() * MAP_ROWS);
 
-      // Skip tiles near spawn and duplicates
+      // Skip tiles near spawn, on water, and duplicates
       if (Math.abs(bx - centerX) <= SPAWN_EXCLUSION && Math.abs(by - centerY) <= SPAWN_EXCLUSION) {
         continue;
       }
       const key = tileKey(bx, by);
       if (this.blockedTiles.has(key)) continue;
+      if (this.waterTiles.has(key)) continue;
 
       const bush = new BerryBush(bx, by);
       this.bushes.push(bush);
@@ -101,6 +122,167 @@ export class GameWorld extends ex.Scene<GameWorldData> {
     });
     this.actionPrompt.graphics.visible = false;
     this.add(this.actionPrompt);
+  }
+
+  /** Generate organic pond shapes using seeded random. */
+  private generatePonds(seededRandom: () => number): void {
+    const centerX = MAP_COLS / 2;
+    const centerY = MAP_ROWS / 2;
+    let pondsPlaced = 0;
+    let attempts = 0;
+    const maxAttempts = 200;
+
+    while (pondsPlaced < POND_COUNT && attempts < maxAttempts) {
+      attempts++;
+
+      // Pick a center for the pond
+      const px = Math.floor(seededRandom() * (MAP_COLS - 10)) + 5;
+      const py = Math.floor(seededRandom() * (MAP_ROWS - 10)) + 5;
+
+      // Skip if too close to spawn
+      if (Math.abs(px - centerX) <= WATER_EXCLUSION && Math.abs(py - centerY) <= WATER_EXCLUSION) {
+        continue;
+      }
+
+      // Skip if overlapping another pond
+      let overlaps = false;
+      for (let dy = -POND_MAX_RADIUS; dy <= POND_MAX_RADIUS; dy++) {
+        for (let dx = -POND_MAX_RADIUS; dx <= POND_MAX_RADIUS; dx++) {
+          const wx = px + dx;
+          const wy = py + dy;
+          if (wx >= 0 && wx < MAP_COLS && wy >= 0 && wy < MAP_ROWS) {
+            if (this.waterTiles.has(tileKey(wx, wy))) {
+              overlaps = true;
+              break;
+            }
+          }
+        }
+        if (overlaps) break;
+      }
+      if (overlaps) continue;
+
+      // Generate organic blob shape
+      const rx = POND_MIN_RADIUS + seededRandom() * (POND_MAX_RADIUS - POND_MIN_RADIUS);
+      const ry = POND_MIN_RADIUS + seededRandom() * (POND_MAX_RADIUS - POND_MIN_RADIUS);
+
+      // Create noise offsets for organic shape
+      const noiseAngles = 8;
+      const noiseOffsets: number[] = [];
+      for (let i = 0; i < noiseAngles; i++) {
+        noiseOffsets.push(0.7 + seededRandom() * 0.6); // 0.7 to 1.3 multiplier
+      }
+
+      for (let dy = -Math.ceil(ry) - 1; dy <= Math.ceil(ry) + 1; dy++) {
+        for (let dx = -Math.ceil(rx) - 1; dx <= Math.ceil(rx) + 1; dx++) {
+          const wx = px + dx;
+          const wy = py + dy;
+
+          if (wx < 1 || wx >= MAP_COLS - 1 || wy < 1 || wy >= MAP_ROWS - 1) continue;
+
+          // Calculate distance with organic noise
+          const angle = Math.atan2(dy, dx);
+          const normalizedAngle = ((angle + Math.PI) / (2 * Math.PI)) * noiseAngles;
+          const idx = Math.floor(normalizedAngle) % noiseAngles;
+          const nextIdx = (idx + 1) % noiseAngles;
+          const frac = normalizedAngle - Math.floor(normalizedAngle);
+          const noiseMult = noiseOffsets[idx] * (1 - frac) + noiseOffsets[nextIdx] * frac;
+
+          const ndx = dx / (rx * noiseMult);
+          const ndy = dy / (ry * noiseMult);
+          const dist = ndx * ndx + ndy * ndy;
+
+          if (dist <= 1.0) {
+            const key = tileKey(wx, wy);
+            this.waterTiles.add(key);
+            this.blockedTiles.add(key);
+          }
+        }
+      }
+
+      pondsPlaced++;
+    }
+
+    // Smooth pond shapes: remove water tiles that create 1-tile protrusions
+    // (tiles with fewer than 2 adjacent cardinal water neighbors).
+    // Also remove tiles that only have opposite water neighbors (narrow channels).
+    // Run multiple passes to fully clean up.
+    for (let pass = 0; pass < 3; pass++) {
+      const toRemove: number[] = [];
+      for (const key of this.waterTiles) {
+        const tx = key % MAP_COLS;
+        const ty = Math.floor(key / MAP_COLS);
+        const n = this.waterTiles.has(tileKey(tx, ty - 1));
+        const s = this.waterTiles.has(tileKey(tx, ty + 1));
+        const e = this.waterTiles.has(tileKey(tx + 1, ty));
+        const w = this.waterTiles.has(tileKey(tx - 1, ty));
+        const waterCount = (n ? 1 : 0) + (s ? 1 : 0) + (e ? 1 : 0) + (w ? 1 : 0);
+
+        // Remove tiles with 0 or 1 cardinal water neighbors (tips/isolated)
+        if (waterCount < 2) {
+          toRemove.push(key);
+          continue;
+        }
+
+        // Remove tiles with exactly 2 opposite water neighbors (narrow channels)
+        // These have n+s or e+w but not adjacent pairs
+        if (waterCount === 2) {
+          const hasAdjacentPair = (n && e) || (e && s) || (s && w) || (w && n);
+          if (!hasAdjacentPair) {
+            toRemove.push(key);
+          }
+        }
+      }
+      for (const key of toRemove) {
+        this.waterTiles.delete(key);
+        this.blockedTiles.delete(key);
+      }
+      if (toRemove.length === 0) break; // No changes, done early
+    }
+  }
+
+  /** Determine the correct water tile type based on adjacent tiles. */
+  private getWaterTileType(tx: number, ty: number): WaterTileTypeValue {
+    const isWater = (x: number, y: number): boolean => {
+      if (x < 0 || x >= MAP_COLS || y < 0 || y >= MAP_ROWS) return false;
+      return this.waterTiles.has(tileKey(x, y));
+    };
+
+    const n = isWater(tx, ty - 1);
+    const s = isWater(tx, ty + 1);
+    const e = isWater(tx + 1, ty);
+    const w = isWater(tx - 1, ty);
+    const nw = isWater(tx - 1, ty - 1);
+    const ne = isWater(tx + 1, ty - 1);
+    const sw = isWater(tx - 1, ty + 1);
+    const se = isWater(tx + 1, ty + 1);
+
+    // Outer corners: two adjacent cardinal sides are land
+    if (!n && !w && s && e) return WaterTileType.OuterNW;
+    if (!n && !e && s && w) return WaterTileType.OuterNE;
+    if (!s && !w && n && e) return WaterTileType.OuterSW;
+    if (!s && !e && n && w) return WaterTileType.OuterSE;
+
+    // Edges: one cardinal side is land
+    if (!n && s && e && w) return WaterTileType.EdgeN;
+    if (!s && n && e && w) return WaterTileType.EdgeS;
+    if (!e && n && s && w) return WaterTileType.EdgeE;
+    if (!w && n && s && e) return WaterTileType.EdgeW;
+
+    // Inner corners: all cardinal sides are water but a diagonal is land
+    if (n && s && e && w) {
+      if (!nw) return WaterTileType.InnerNW;
+      if (!ne) return WaterTileType.InnerNE;
+      if (!sw) return WaterTileType.InnerSW;
+      if (!se) return WaterTileType.InnerSE;
+    }
+
+    // Default: full water center
+    return WaterTileType.Center;
+  }
+
+  /** Check if a tile is a water tile. */
+  isWaterTile(x: number, y: number): boolean {
+    return this.waterTiles.has(tileKey(x, y));
   }
 
   override onActivate(context: ex.SceneActivationContext<GameWorldData>): void {
@@ -172,14 +354,17 @@ export class GameWorld extends ex.Scene<GameWorldData> {
       void engine.goToScene("game-over", { sceneActivationData: { cause } });
     }
 
-    // Action prompt + berry bush interaction
-    if (this.player && !this.player.isPicking()) {
+    // Action prompt + interaction
+    if (this.player && !this.player.isBusy()) {
       const facing = this.player.getFacingTile();
-      const bush = this.bushByTile.get(tileKey(facing.x, facing.y));
+      const facingKey = tileKey(facing.x, facing.y);
+      const bush = this.bushByTile.get(facingKey);
+      const facingWater = this.waterTiles.has(facingKey);
 
       if (bush?.canPick()) {
-        // Show prompt above the bush
+        // Berry bush interaction
         if (this.actionPrompt) {
+          this.actionPrompt.text = "[E] Pick";
           this.actionPrompt.pos = ex.vec(bush.pos.x, bush.pos.y - TILE_SIZE / 2 - 4);
           this.actionPrompt.graphics.visible = true;
         }
@@ -197,6 +382,25 @@ export class GameWorld extends ex.Scene<GameWorldData> {
               this.spawnPickupText(`+[${berry.name}]`, currentBush.pos.x, currentBush.pos.y);
             }
           }, 450);
+        }
+      } else if (facingWater) {
+        // Water drinking interaction
+        const waterWorldX = facing.x * TILE_SIZE + TILE_SIZE / 2;
+        const waterWorldY = facing.y * TILE_SIZE + TILE_SIZE / 2;
+
+        if (this.actionPrompt) {
+          this.actionPrompt.text = "[E] Drink";
+          this.actionPrompt.pos = ex.vec(waterWorldX, waterWorldY - TILE_SIZE / 2 - 4);
+          this.actionPrompt.graphics.visible = true;
+        }
+
+        if (wasActionPressed(kb, "action")) {
+          this.player.startDrinking();
+
+          // Spawn floating text after the drinking animation completes
+          setTimeout(() => {
+            this.spawnPickupText("+Thirst", waterWorldX, waterWorldY);
+          }, 950);
         }
       } else {
         if (this.actionPrompt) {

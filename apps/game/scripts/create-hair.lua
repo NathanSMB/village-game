@@ -1,10 +1,10 @@
 -- Create hair style sprites: short, long, ponytail, curly
--- 12 frames each: 4 directions x 3 poses (idle, walk1, walk2)
+-- 20 frames each: 12 standard (4 dirs x 3 poses) + 8 pick (4 dirs x 2 pick poses)
 -- Uses yellow reference colors for palette swapping
 
 local W = 32
 local H = 32
-local FRAMES = 12
+local FRAMES = 20
 
 local scriptPath = app.params["script-path"] or "."
 local outputDir = app.fs.joinPath(app.fs.filePath(scriptPath), "..", "assets", "characters", "hair")
@@ -42,36 +42,29 @@ local headX = math.floor((W - headW) / 2)
 
 local function drawShort(img, dir, pose)
   clearImg(img)
-  -- Top cap on all directions
   rect(img, headX + 1, 2, headW - 2, 1, HAIR)
   rect(img, headX, 3, headW, 2, HAIR)
-  -- Shadow along bottom edge
   rect(img, headX, 4, headW, 1, HAIR_SHADOW)
 end
 
 local function drawLong(img, dir, pose)
   clearImg(img)
-  -- Top cap
   rect(img, headX + 1, 2, headW - 2, 1, HAIR)
   rect(img, headX, 3, headW, 2, HAIR)
   rect(img, headX, 4, headW, 1, HAIR_SHADOW)
 
   if dir == 0 then
-    -- Down: side hair framing face
     rect(img, headX - 1, 5, 2, 10, HAIR)
     rect(img, headX + headW - 1, 5, 2, 10, HAIR)
     px(img, headX - 1, 14, HAIR_SHADOW)
     px(img, headX + headW, 14, HAIR_SHADOW)
   elseif dir == 1 then
-    -- Up (back): full back hair
     rect(img, headX - 1, 5, headW + 2, 10, HAIR)
     rect(img, headX, 14, headW, 1, HAIR_SHADOW)
   elseif dir == 2 then
-    -- Left: hair visible on right side (back of head)
     rect(img, headX + headW - 2, 5, 3, 10, HAIR)
     px(img, headX + headW, 14, HAIR_SHADOW)
   elseif dir == 3 then
-    -- Right: hair visible on left side
     rect(img, headX - 1, 5, 3, 10, HAIR)
     px(img, headX - 1, 14, HAIR_SHADOW)
   end
@@ -79,32 +72,26 @@ end
 
 local function drawPonytail(img, dir, pose)
   clearImg(img)
-  -- Top cap
   rect(img, headX + 1, 2, headW - 2, 1, HAIR)
   rect(img, headX, 3, headW, 2, HAIR)
   rect(img, headX, 4, headW, 1, HAIR_SHADOW)
 
-  -- Ponytail bounce with walk
   local bounce = 0
   if pose == 1 then bounce = -1 end
   if pose == 2 then bounce = 1 end
 
   if dir == 0 then
-    -- Down (facing camera): ponytail hidden behind head, just show tie
     rect(img, headX + 3, 5, 4, 1, HAIR_SHADOW)
   elseif dir == 1 then
-    -- Up (back): ponytail hanging down toward camera
     rect(img, headX + 3, 5, 4, 2, HAIR)
     rect(img, headX + 4, 7, 2, 6 + bounce, HAIR)
     px(img, headX + 4, 12 + bounce, HAIR_SHADOW)
     px(img, headX + 5, 12 + bounce, HAIR_SHADOW)
   elseif dir == 2 then
-    -- Left: ponytail extends to the right
     rect(img, headX + headW - 1, 4, 4, 2, HAIR)
     rect(img, headX + headW + 1, 6, 2, 4 + bounce, HAIR)
     px(img, headX + headW + 1, 9 + bounce, HAIR_SHADOW)
   elseif dir == 3 then
-    -- Right: ponytail extends to the left
     rect(img, headX - 3, 4, 4, 2, HAIR)
     rect(img, headX - 3, 6, 2, 4 + bounce, HAIR)
     px(img, headX - 3, 9 + bounce, HAIR_SHADOW)
@@ -113,27 +100,22 @@ end
 
 local function drawCurly(img, dir, pose)
   clearImg(img)
-  -- Wider, bushier top
   rect(img, headX - 1, 1, headW + 2, 1, HAIR)
   rect(img, headX - 1, 2, headW + 2, 3, HAIR)
   rect(img, headX - 1, 4, headW + 2, 1, HAIR_SHADOW)
 
   if dir == 0 then
-    -- Down: bushy sides
     rect(img, headX - 1, 5, 2, 5, HAIR)
     rect(img, headX + headW - 1, 5, 2, 5, HAIR)
     px(img, headX - 1, 9, HAIR_SHADOW)
     px(img, headX + headW, 9, HAIR_SHADOW)
   elseif dir == 1 then
-    -- Up: full bushy back
     rect(img, headX - 1, 5, headW + 2, 5, HAIR)
     rect(img, headX, 9, headW, 1, HAIR_SHADOW)
   elseif dir == 2 then
-    -- Left: bushy on right
     rect(img, headX + headW - 1, 5, 3, 5, HAIR)
     px(img, headX + headW + 1, 9, HAIR_SHADOW)
   elseif dir == 3 then
-    -- Right: bushy on left
     rect(img, headX - 2, 5, 3, 5, HAIR)
     px(img, headX - 2, 9, HAIR_SHADOW)
   end
@@ -145,12 +127,24 @@ local function createHairSprite(filename, drawFunc)
     spr:newEmptyFrame()
   end
 
+  -- Standard frames (12)
   for dir = 0, 3 do
     for pose = 0, 2 do
       local frameIdx = dir * 3 + pose + 1
       app.activeFrame = spr.frames[frameIdx]
       local cel = spr:newCel(spr.layers[1], frameIdx)
       drawFunc(cel.image, dir, pose)
+      spr.frames[frameIdx].duration = 0.2
+    end
+  end
+
+  -- Pick frames (8): same as idle (pose=0) — hair doesn't change while picking
+  for dir = 0, 3 do
+    for pickPose = 0, 1 do
+      local frameIdx = 13 + dir * 2 + pickPose
+      app.activeFrame = spr.frames[frameIdx]
+      local cel = spr:newCel(spr.layers[1], frameIdx)
+      drawFunc(cel.image, dir, 0)
       spr.frames[frameIdx].duration = 0.2
     end
   end

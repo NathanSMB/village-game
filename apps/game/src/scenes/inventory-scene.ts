@@ -1,10 +1,17 @@
 import * as ex from "excalibur";
 import { wasActionPressed } from "../systems/keybinds.ts";
-import { type InventoryState, totalWeight, equipItem, unequipItem } from "../types/inventory.ts";
+import {
+  type InventoryState,
+  totalWeight,
+  equipItem,
+  unequipItem,
+  consumeItem,
+} from "../types/inventory.ts";
 import {
   ALL_EQUIPMENT_SLOTS,
   EQUIPMENT_SLOT_LABELS,
   RARITY_COLORS,
+  isConsumable,
   type EquipmentSlot,
   type Item,
 } from "../types/item.ts";
@@ -361,8 +368,20 @@ export class InventoryScene extends ex.Scene {
         }
       }
       if (wasActionPressed(kb, "confirm")) {
-        equipItem(this.inventory, this.bagIndex);
-        this.player?.refreshSprite();
+        const selectedItem = this.inventory.bag[this.bagIndex];
+        if (selectedItem && isConsumable(selectedItem)) {
+          // Consume the item (eat it)
+          if (this.player) {
+            const newVitals = consumeItem(this.inventory, this.bagIndex, this.player.vitals);
+            if (newVitals) {
+              this.player.vitals = newVitals;
+            }
+          }
+        } else {
+          // Equip the item
+          equipItem(this.inventory, this.bagIndex);
+          this.player?.refreshSprite();
+        }
         if (this.bagIndex >= this.inventory.bag.length) {
           this.bagIndex = Math.max(0, this.inventory.bag.length - 1);
         }
@@ -434,18 +453,37 @@ export class InventoryScene extends ex.Scene {
       this.detailName.text = item.name;
       this.detailName.color = ex.Color.fromHex(RARITY_COLORS[item.rarity]);
 
-      this.detailRarity.text = `${item.rarity} - ${EQUIPMENT_SLOT_LABELS[item.slot]}`;
+      if (isConsumable(item)) {
+        this.detailRarity.text = `${item.rarity} - Consumable`;
+      } else if (item.slot) {
+        this.detailRarity.text = `${item.rarity} - ${EQUIPMENT_SLOT_LABELS[item.slot]}`;
+      } else {
+        this.detailRarity.text = item.rarity;
+      }
       this.detailRarity.color = ex.Color.fromHex(RARITY_COLORS[item.rarity]);
 
       this.detailDesc.text = item.description;
 
-      const statParts: string[] = [];
-      if (item.stats.attack) statParts.push(`ATK +${item.stats.attack}`);
-      if (item.stats.defense) statParts.push(`DEF +${item.stats.defense}`);
-      if (item.stats.speed) statParts.push(`SPD +${item.stats.speed}`);
-      this.detailStats.text = statParts.length > 0 ? statParts.join("  ") : "No bonuses";
-      this.detailStats.color =
-        statParts.length > 0 ? ex.Color.fromHex("#66cc66") : ex.Color.fromHex("#888888");
+      if (isConsumable(item)) {
+        const effectParts: string[] = [];
+        if (item.consumable?.hungerRestore)
+          effectParts.push(`Hunger +${item.consumable.hungerRestore}`);
+        if (item.consumable?.thirstRestore)
+          effectParts.push(`Thirst +${item.consumable.thirstRestore}`);
+        if (item.consumable?.healthRestore)
+          effectParts.push(`Health +${item.consumable.healthRestore}`);
+        this.detailStats.text = effectParts.length > 0 ? effectParts.join("  ") : "No effects";
+        this.detailStats.color =
+          effectParts.length > 0 ? ex.Color.fromHex("#66cc66") : ex.Color.fromHex("#888888");
+      } else {
+        const statParts: string[] = [];
+        if (item.stats.attack) statParts.push(`ATK +${item.stats.attack}`);
+        if (item.stats.defense) statParts.push(`DEF +${item.stats.defense}`);
+        if (item.stats.speed) statParts.push(`SPD +${item.stats.speed}`);
+        this.detailStats.text = statParts.length > 0 ? statParts.join("  ") : "No bonuses";
+        this.detailStats.color =
+          statParts.length > 0 ? ex.Color.fromHex("#66cc66") : ex.Color.fromHex("#888888");
+      }
 
       this.detailWeight.text = `Weight: ${item.weight}`;
     } else {

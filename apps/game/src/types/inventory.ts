@@ -1,5 +1,7 @@
 import type { CharacterAppearance } from "./character.ts";
 import { EquipmentSlot, type Item } from "./item.ts";
+import type { VitalsState } from "./vitals.ts";
+import { clampVital } from "./vitals.ts";
 import { createStarterItem } from "../data/items.ts";
 
 export type Equipment = Record<EquipmentSlot, Item | null>;
@@ -52,13 +54,38 @@ export function totalWeight(state: InventoryState): number {
 
 export function equipItem(state: InventoryState, bagIndex: number): void {
   const item = state.bag[bagIndex];
-  if (!item) return;
+  if (!item || !item.slot) return;
   const current = state.equipment[item.slot];
   state.equipment[item.slot] = item;
   state.bag.splice(bagIndex, 1);
   if (current) {
     state.bag.push(current);
   }
+}
+
+export function consumeItem(
+  state: InventoryState,
+  bagIndex: number,
+  vitals: VitalsState,
+): VitalsState | null {
+  const item = state.bag[bagIndex];
+  if (!item?.consumable) return null;
+
+  const effect = item.consumable;
+  const newVitals = { ...vitals };
+
+  if (effect.hungerRestore) {
+    newVitals.hunger = clampVital(newVitals.hunger + effect.hungerRestore);
+  }
+  if (effect.thirstRestore) {
+    newVitals.thirst = clampVital(newVitals.thirst + effect.thirstRestore);
+  }
+  if (effect.healthRestore) {
+    newVitals.health = clampVital(newVitals.health + effect.healthRestore);
+  }
+
+  state.bag.splice(bagIndex, 1);
+  return newVitals;
 }
 
 export function unequipItem(state: InventoryState, slot: EquipmentSlot): void {

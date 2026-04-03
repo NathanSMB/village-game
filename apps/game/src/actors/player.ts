@@ -1,6 +1,7 @@
 import * as ex from "excalibur";
 import type { CharacterAppearance } from "../types/character.ts";
 import { type InventoryState, defaultInventory } from "../types/inventory.ts";
+import { type VitalsState, defaultVitals, updateVitals } from "../types/vitals.ts";
 import { isActionHeld } from "../systems/keybinds.ts";
 import { compositeCharacter } from "../systems/character-compositor.ts";
 
@@ -28,6 +29,7 @@ function posToTile(px: number): number {
 export class Player extends ex.Actor {
   readonly appearance: CharacterAppearance;
   readonly inventory: InventoryState;
+  vitals: VitalsState;
   private spriteSheet: ex.SpriteSheet;
   private tileX: number;
   private tileY: number;
@@ -37,7 +39,12 @@ export class Player extends ex.Actor {
   private facing: Direction = "down";
   private walkFrame: 0 | 1 = 0;
 
-  constructor(appearance: CharacterAppearance, startPos: ex.Vector, inventory?: InventoryState) {
+  constructor(
+    appearance: CharacterAppearance,
+    startPos: ex.Vector,
+    inventory?: InventoryState,
+    vitals?: VitalsState,
+  ) {
     super({
       pos: startPos,
       width: TILE_SIZE,
@@ -47,6 +54,7 @@ export class Player extends ex.Actor {
     });
     this.appearance = appearance;
     this.inventory = inventory ?? defaultInventory(appearance);
+    this.vitals = vitals ?? defaultVitals();
     this.spriteSheet = compositeCharacter(appearance, this.inventory.equipment);
     this.updateGraphic();
     this.tileX = posToTile(startPos.x);
@@ -55,7 +63,9 @@ export class Player extends ex.Actor {
     this.targetY = this.tileY;
   }
 
-  override onPreUpdate(engine: ex.Engine): void {
+  override onPreUpdate(engine: ex.Engine, delta: number): void {
+    this.vitals = updateVitals(this.vitals, delta);
+
     if (this.moving) {
       const goalX = tileCenter(this.targetX);
       const goalY = tileCenter(this.targetY);

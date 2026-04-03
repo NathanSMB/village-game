@@ -1,6 +1,7 @@
 import type { CharacterAppearance } from "../types/character.ts";
 import type { Equipment } from "../types/inventory.ts";
 import type { Item } from "../types/item.ts";
+import type { VitalsState } from "../types/vitals.ts";
 
 export interface SaveData {
   name: string;
@@ -12,6 +13,7 @@ export interface SaveData {
     equipment?: Equipment;
     bag?: Item[];
     maxWeight?: number;
+    vitals: VitalsState;
   };
 }
 

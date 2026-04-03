@@ -11,6 +11,7 @@
   "scripts": {
     "ready": "vp fmt && vp lint && vp run -r test && vp run -r build",
     "dev": "vp run website#dev",
+    "game-dev": "vp run game#dev",
     "prepare": "vp config"
   },
   "devDependencies": {

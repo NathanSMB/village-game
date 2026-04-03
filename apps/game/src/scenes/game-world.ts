@@ -1,10 +1,13 @@
 import * as ex from "excalibur";
 import type { CharacterAppearance } from "../types/character.ts";
 import type { InventoryState } from "../types/inventory.ts";
+import { isAlive } from "../types/vitals.ts";
 import { Player } from "../actors/player.ts";
+import { VitalsHud } from "../actors/vitals-hud.ts";
 import { wasActionPressed } from "../systems/keybinds.ts";
 import type { SaveData } from "../systems/save-manager.ts";
 import { getGrassAnimations } from "../systems/sprite-loader.ts";
+import type { DeathCause } from "./game-over.ts";
 
 const MAP_COLS = 64;
 const MAP_ROWS = 64;
@@ -17,6 +20,7 @@ export type GameWorldData =
 export class GameWorld extends ex.Scene<GameWorldData> {
   private tilemap!: ex.TileMap;
   private player: Player | null = null;
+  private hud: VitalsHud | null = null;
 
   override onInitialize(): void {
     this.tilemap = new ex.TileMap({
@@ -49,6 +53,10 @@ export class GameWorld extends ex.Scene<GameWorldData> {
       if (this.player) {
         this.remove(this.player);
       }
+      if (this.hud) {
+        this.remove(this.hud);
+        this.hud = null;
+      }
 
       let appearance: CharacterAppearance;
       let startX: number;
@@ -73,8 +81,12 @@ export class GameWorld extends ex.Scene<GameWorldData> {
         }
       }
 
-      this.player = new Player(appearance, ex.vec(startX, startY), inventory);
+      const vitals = context.data.type === "load" ? context.data.save.player.vitals : undefined;
+      this.player = new Player(appearance, ex.vec(startX, startY), inventory, vitals);
       this.add(this.player);
+
+      this.hud = new VitalsHud(() => this.player!.vitals);
+      this.add(this.hud);
     }
 
     if (this.player) {
@@ -93,6 +105,19 @@ export class GameWorld extends ex.Scene<GameWorldData> {
     if (wasActionPressed(kb, "inventory")) {
       void engine.goToScene("inventory");
     }
+
+    if (this.player && !isAlive(this.player.vitals)) {
+      const cause = this.getDeathCause();
+      void engine.goToScene("game-over", { sceneActivationData: { cause } });
+    }
+  }
+
+  private getDeathCause(): DeathCause {
+    if (!this.player) return "both";
+    const { hunger, thirst } = this.player.vitals;
+    if (hunger <= 0 && thirst <= 0) return "both";
+    if (hunger <= 0) return "starvation";
+    return "dehydration";
   }
 
   getPlayerState(): SaveData["player"] | null {
@@ -104,6 +129,7 @@ export class GameWorld extends ex.Scene<GameWorldData> {
       equipment: this.player.inventory.equipment,
       bag: this.player.inventory.bag,
       maxWeight: this.player.inventory.maxWeight,
+      vitals: this.player.vitals,
     };
   }
 

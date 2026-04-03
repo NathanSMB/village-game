@@ -8,14 +8,26 @@ import { compositeCharacter } from "../systems/character-compositor.ts";
 const TILE_SIZE = 32;
 const MOVE_SPEED = 160;
 const MAP_TILES = 64;
+const PICK_DURATION_MS = 500;
 
-type Direction = "down" | "up" | "left" | "right";
+export type Direction = "down" | "up" | "left" | "right";
 
 const DIR_OFFSET: Record<Direction, number> = {
   down: 0,
   up: 3,
   left: 6,
   right: 9,
+};
+
+const DIR_DX: Record<Direction, number> = { left: -1, right: 1, up: 0, down: 0 };
+const DIR_DY: Record<Direction, number> = { up: -1, down: 1, left: 0, right: 0 };
+
+// Pick animation frame offsets: frames 12-19 (4 dirs × 2 pick poses)
+const PICK_DIR_OFFSET: Record<Direction, number> = {
+  down: 12,
+  up: 14,
+  left: 16,
+  right: 18,
 };
 
 function tileCenter(tile: number): number {
@@ -25,6 +37,8 @@ function tileCenter(tile: number): number {
 function posToTile(px: number): number {
   return Math.floor(px / TILE_SIZE);
 }
+
+export type BlockedCheck = (tileX: number, tileY: number) => boolean;
 
 export class Player extends ex.Actor {
   readonly appearance: CharacterAppearance;
@@ -38,6 +52,11 @@ export class Player extends ex.Actor {
   private moving = false;
   private facing: Direction = "down";
   private walkFrame: 0 | 1 = 0;
+  private isBlocked: BlockedCheck = () => false;
+
+  // Picking state
+  private picking = false;
+  private pickTimer = 0;
 
   constructor(
     appearance: CharacterAppearance,
@@ -63,8 +82,56 @@ export class Player extends ex.Actor {
     this.targetY = this.tileY;
   }
 
+  setBlockedCheck(fn: BlockedCheck): void {
+    this.isBlocked = fn;
+  }
+
+  /** Start the picking animation. Locks the player for PICK_DURATION_MS. */
+  startPicking(): void {
+    this.picking = true;
+    this.pickTimer = PICK_DURATION_MS;
+    // Show the reach frame immediately
+    const reachIdx = PICK_DIR_OFFSET[this.facing];
+    const sprite = this.spriteSheet.getSprite(reachIdx, 0);
+    if (sprite) this.graphics.use(sprite);
+  }
+
+  isPicking(): boolean {
+    return this.picking;
+  }
+
+  getFacing(): Direction {
+    return this.facing;
+  }
+
+  /** Returns the tile position the player is currently facing. */
+  getFacingTile(): { x: number; y: number } {
+    return {
+      x: this.tileX + DIR_DX[this.facing],
+      y: this.tileY + DIR_DY[this.facing],
+    };
+  }
+
   override onPreUpdate(engine: ex.Engine, delta: number): void {
     this.vitals = updateVitals(this.vitals, delta);
+
+    // Picking animation locks movement
+    if (this.picking) {
+      this.pickTimer -= delta;
+      const halfDuration = PICK_DURATION_MS / 2;
+
+      // First half: reach frame, second half: grab frame
+      const pickBase = PICK_DIR_OFFSET[this.facing];
+      const frameIdx = this.pickTimer > halfDuration ? pickBase : pickBase + 1;
+      const sprite = this.spriteSheet.getSprite(frameIdx, 0);
+      if (sprite) this.graphics.use(sprite);
+
+      if (this.pickTimer <= 0) {
+        this.picking = false;
+        this.updateGraphic();
+      }
+      return;
+    }
 
     if (this.moving) {
       const goalX = tileCenter(this.targetX);
@@ -116,6 +183,7 @@ export class Player extends ex.Actor {
     const nextY = this.tileY + dy;
 
     if (nextX < 0 || nextX >= MAP_TILES || nextY < 0 || nextY >= MAP_TILES) return;
+    if (this.isBlocked(nextX, nextY)) return;
 
     this.targetX = nextX;
     this.targetY = nextY;

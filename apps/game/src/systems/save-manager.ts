@@ -3,6 +3,13 @@ import type { Equipment } from "../types/inventory.ts";
 import type { Item } from "../types/item.ts";
 import type { VitalsState } from "../types/vitals.ts";
 
+export interface BerryBushSaveState {
+  tileX: number;
+  tileY: number;
+  hasBerries: boolean;
+  regrowTimer: number;
+}
+
 export interface SaveData {
   name: string;
   timestamp: number;
@@ -15,6 +22,7 @@ export interface SaveData {
     maxWeight?: number;
     vitals: VitalsState;
   };
+  bushes?: BerryBushSaveState[];
 }
 
 const DB_NAME = "village-game";

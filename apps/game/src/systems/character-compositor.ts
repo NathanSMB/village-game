@@ -25,10 +25,10 @@ import torsoTunicPng from "../sprites/characters/equipment/torso/tunic.png";
 import legsPantsPng from "../sprites/characters/equipment/legs/pants.png";
 import feetBootsPng from "../sprites/characters/equipment/feet/boots.png";
 
-const STRIP_W = 384;
+const STRIP_W = 640; // 20 frames × 32px
 const STRIP_H = 32;
 const FRAME_SIZE = 32;
-const FRAME_COUNT = 12;
+const FRAME_COUNT = 20;
 
 // Reference colors (must match what the Lua scripts draw)
 const REF_SKIN = { r: 255, g: 0, b: 255 };

@@ -54,6 +54,12 @@ export interface ItemStats {
   speed?: number;
 }
 
+export interface ConsumableEffect {
+  hungerRestore?: number;
+  thirstRestore?: number;
+  healthRestore?: number;
+}
+
 export interface Item {
   id: string;
   name: string;
@@ -61,6 +67,15 @@ export interface Item {
   rarity: Rarity;
   stats: ItemStats;
   weight: number;
-  slot: EquipmentSlot;
+  slot?: EquipmentSlot;
   colorIndex?: number;
+  consumable?: ConsumableEffect;
+}
+
+export function isConsumable(item: Item): boolean {
+  return item.consumable != null;
+}
+
+export function isEquipment(item: Item): boolean {
+  return item.slot != null && item.consumable == null;
 }

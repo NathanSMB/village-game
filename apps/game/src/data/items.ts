@@ -28,6 +28,15 @@ export const ITEMS: Record<string, Item> = {
     weight: 1,
     slot: EquipmentSlot.Feet,
   },
+  berry: {
+    id: "berry",
+    name: "Berry",
+    description: "A plump red berry. Restores a little hunger.",
+    rarity: Rarity.Common,
+    stats: {},
+    weight: 0.5,
+    consumable: { hungerRestore: 10 },
+  },
 };
 
 export function createStarterItem(baseId: string, colorIndex: number): Item {

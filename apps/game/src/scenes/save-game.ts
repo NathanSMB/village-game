@@ -346,6 +346,7 @@ export class SaveGame extends ex.Scene {
       name: this.saveName.trim(),
       timestamp: Date.now(),
       player: playerState,
+      bushes: gameWorld.getBushStates(),
     };
 
     await saveGame(data);

@@ -1,10 +1,10 @@
 -- Create facial hair sprites: stubble, beard, mustache, full
--- 12 frames each, but most only visible in down-facing view
+-- 20 frames each: 12 standard + 8 pick (same as idle for facial hair)
 -- Uses yellow reference colors for palette swapping
 
 local W = 32
 local H = 32
-local FRAMES = 12
+local FRAMES = 20
 
 local scriptPath = app.params["script-path"] or "."
 local outputDir = app.fs.joinPath(app.fs.filePath(scriptPath), "..", "assets", "characters", "facial-hair")
@@ -40,8 +40,7 @@ local headX = math.floor((W - headW) / 2)
 
 local function drawStubble(img, dir, pose)
   clearImg(img)
-  if dir ~= 0 then return end -- only visible facing down
-  -- Scattered dots on chin
+  if dir ~= 0 then return end
   px(img, headX + 2, 12, HAIR)
   px(img, headX + 4, 12, HAIR)
   px(img, headX + 6, 12, HAIR)
@@ -53,14 +52,11 @@ end
 local function drawMustache(img, dir, pose)
   clearImg(img)
   if dir == 0 then
-    -- Front view
     rect(img, headX + 2, 10, 2, 1, HAIR)
     rect(img, headX + headW - 4, 10, 2, 1, HAIR)
   elseif dir == 2 then
-    -- Left: small bit visible
     px(img, headX + 1, 10, HAIR)
   elseif dir == 3 then
-    -- Right
     px(img, headX + headW - 2, 10, HAIR)
   end
 end
@@ -71,7 +67,6 @@ local function drawBeard(img, dir, pose)
     rect(img, headX + 1, 12, headW - 2, 2, HAIR)
     rect(img, headX + 2, 14, headW - 4, 1, HAIR_SHADOW)
   elseif dir == 2 then
-    -- Left: beard visible on chin left
     rect(img, headX, 12, 3, 2, HAIR)
     px(img, headX + 1, 14, HAIR_SHADOW)
   elseif dir == 3 then
@@ -83,10 +78,8 @@ end
 local function drawFull(img, dir, pose)
   clearImg(img)
   if dir == 0 then
-    -- Mustache
     rect(img, headX + 2, 10, 2, 1, HAIR)
     rect(img, headX + headW - 4, 10, 2, 1, HAIR)
-    -- Beard
     rect(img, headX, 12, headW, 2, HAIR)
     rect(img, headX + 1, 14, headW - 2, 1, HAIR)
     rect(img, headX + 2, 15, headW - 4, 1, HAIR_SHADOW)
@@ -106,6 +99,8 @@ local function createSprite(filename, drawFunc)
   for i = 2, FRAMES do
     spr:newEmptyFrame()
   end
+
+  -- Standard frames (12)
   for dir = 0, 3 do
     for pose = 0, 2 do
       local frameIdx = dir * 3 + pose + 1
@@ -115,6 +110,18 @@ local function createSprite(filename, drawFunc)
       spr.frames[frameIdx].duration = 0.2
     end
   end
+
+  -- Pick frames (8): same as idle — facial hair doesn't change while picking
+  for dir = 0, 3 do
+    for pickPose = 0, 1 do
+      local frameIdx = 13 + dir * 2 + pickPose
+      app.activeFrame = spr.frames[frameIdx]
+      local cel = spr:newCel(spr.layers[1], frameIdx)
+      drawFunc(cel.image, dir, 0)
+      spr.frames[frameIdx].duration = 0.2
+    end
+  end
+
   spr:saveAs(app.fs.joinPath(outputDir, filename))
   print("Created " .. filename)
 end

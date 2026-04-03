@@ -1,3 +1,9 @@
+# Game
+
+This is the projected located in ./apps/game
+
+**Note:** If this is the first message in a session using a git worktree you will need to export sprites.
+
 <!--VITE PLUS START-->
 
 # Using Vite+, the Unified Toolchain for the Web

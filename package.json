@@ -12,6 +12,7 @@
     "ready": "vp fmt && vp lint && vp run -r test && vp run -r build",
     "dev": "vp run website#dev",
     "game-dev": "vp run game#dev",
+    "export-sprites": "vp run game#export-sprites",
     "prepare": "vp config"
   },
   "devDependencies": {

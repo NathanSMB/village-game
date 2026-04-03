@@ -50,6 +50,15 @@ export const ITEMS: Record<string, Item> = {
     weight: 1,
     itemSprite: "small-rock",
   },
+  branch: {
+    id: "branch",
+    name: "Branch",
+    description: "A sturdy wooden branch. Useful for building or kindling.",
+    rarity: Rarity.Common,
+    stats: {},
+    weight: 1,
+    itemSprite: "branch",
+  },
 };
 
 export function createStarterItem(baseId: string, colorIndex: number): Item {

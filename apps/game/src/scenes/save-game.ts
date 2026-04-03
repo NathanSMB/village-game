@@ -347,6 +347,7 @@ export class SaveGame extends ex.Scene {
       timestamp: Date.now(),
       player: playerState,
       bushes: gameWorld.getBushStates(),
+      trees: gameWorld.getTreeStates(),
       groundItems: gameWorld.getGroundItemStates(),
     };
 

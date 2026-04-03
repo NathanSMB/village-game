@@ -6,12 +6,18 @@ import { isAlive } from "../types/vitals.ts";
 import { Player } from "../actors/player.ts";
 import { BerryBush } from "../actors/berry-bush.ts";
 import { BigRock } from "../actors/big-rock.ts";
+import { Tree } from "../actors/tree.ts";
 import { GroundItemStack } from "../actors/ground-item-stack.ts";
 import { FloatingText } from "../actors/floating-text.ts";
 import { VitalsHud } from "../actors/vitals-hud.ts";
 import { wasActionPressed } from "../systems/keybinds.ts";
 import { ITEMS } from "../data/items.ts";
-import type { BerryBushSaveState, GroundItemSaveState, SaveData } from "../systems/save-manager.ts";
+import type {
+  BerryBushSaveState,
+  GroundItemSaveState,
+  TreeSaveState,
+  SaveData,
+} from "../systems/save-manager.ts";
 import { getGrassAnimations, getWaterAnimation, WaterTileType } from "../systems/sprite-loader.ts";
 import type { WaterTileTypeValue } from "../systems/sprite-loader.ts";
 import type { DeathCause } from "./game-over.ts";
@@ -20,6 +26,7 @@ const MAP_COLS = 64;
 const MAP_ROWS = 64;
 const TILE_SIZE = 32;
 const BUSH_COUNT = 25;
+const TREE_COUNT = 15;
 const BIG_ROCK_COUNT = 10;
 const SMALL_ROCK_COUNT = 30;
 const SPAWN_EXCLUSION = 3; // No bushes/rocks within N tiles of center spawn
@@ -43,6 +50,8 @@ export class GameWorld extends ex.Scene<GameWorldData> {
   private hud: VitalsHud | null = null;
   private bushes: BerryBush[] = [];
   private bushByTile = new Map<number, BerryBush>();
+  private trees: Tree[] = [];
+  private treeByTile = new Map<number, Tree>();
   private rocks: BigRock[] = [];
   private blockedTiles = new Set<number>();
   private waterTiles = new Set<number>(); // Track water tile positions
@@ -119,6 +128,26 @@ export class GameWorld extends ex.Scene<GameWorldData> {
       this.blockedTiles.add(key);
       this.add(bush);
       placed++;
+    }
+
+    // Spawn trees at seeded random positions (after bushes)
+    let treesPlaced = 0;
+    while (treesPlaced < TREE_COUNT) {
+      const tx = Math.floor(seededRandom() * MAP_COLS);
+      const ty = Math.floor(seededRandom() * MAP_ROWS);
+      if (Math.abs(tx - centerX) <= SPAWN_EXCLUSION && Math.abs(ty - centerY) <= SPAWN_EXCLUSION) {
+        continue;
+      }
+      const key = tileKey(tx, ty);
+      if (this.blockedTiles.has(key)) continue;
+      if (this.waterTiles.has(key)) continue;
+
+      const tree = new Tree(tx, ty);
+      this.trees.push(tree);
+      this.treeByTile.set(key, tree);
+      this.blockedTiles.add(key);
+      this.add(tree);
+      treesPlaced++;
     }
 
     // Spawn big rocks at seeded random positions (after bushes to preserve seed order)
@@ -382,6 +411,11 @@ export class GameWorld extends ex.Scene<GameWorldData> {
         this.restoreBushStates(context.data.save.bushes);
       }
 
+      // Restore tree states from save
+      if (context.data.type === "load" && context.data.save.trees) {
+        this.restoreTreeStates(context.data.save.trees);
+      }
+
       // Restore ground item states from save
       if (context.data.type === "load" && context.data.save.groundItems) {
         this.restoreGroundItemStates(context.data.save.groundItems);
@@ -417,6 +451,9 @@ export class GameWorld extends ex.Scene<GameWorldData> {
       }
       return; // Block all other input while picker is open
     }
+
+    // Tree branch dropping
+    this.updateTreeBranchDrops();
 
     if (wasActionPressed(kb, "pause")) {
       void engine.goToScene("pause-menu");
@@ -548,6 +585,84 @@ export class GameWorld extends ex.Scene<GameWorldData> {
         bush.restoreState(saved);
       }
     }
+  }
+
+  getTreeStates(): TreeSaveState[] {
+    return this.trees.map((tree) => tree.getState());
+  }
+
+  private restoreTreeStates(states: TreeSaveState[]): void {
+    for (const saved of states) {
+      const key = tileKey(saved.tileX, saved.tileY);
+      const tree = this.treeByTile.get(key);
+      if (tree) {
+        tree.restoreState(saved);
+      }
+    }
+  }
+
+  /** Update branch counts and process pending drops for all trees. */
+  private updateTreeBranchDrops(): void {
+    for (const tree of this.trees) {
+      // Recount branches around this tree (handles picked-up branches)
+      tree.branchCount = this.countBranchesAroundTree(tree);
+
+      if (tree.consumePendingDrop()) {
+        this.tryDropBranch(tree);
+      }
+    }
+  }
+
+  /** Count how many branches exist in tiles adjacent to a tree. */
+  private countBranchesAroundTree(tree: Tree): number {
+    let count = 0;
+    for (let dy = -1; dy <= 1; dy++) {
+      for (let dx = -1; dx <= 1; dx++) {
+        if (dx === 0 && dy === 0) continue;
+        const tx = tree.tileX + dx;
+        const ty = tree.tileY + dy;
+        if (tx < 0 || tx >= MAP_COLS || ty < 0 || ty >= MAP_ROWS) continue;
+        const key = tileKey(tx, ty);
+        const stack = this.groundItems.get(key);
+        if (stack && !stack.isEmpty()) {
+          const items = stack.getItems();
+          if (items.some((item) => item.id === "branch")) {
+            count++;
+          }
+        }
+      }
+    }
+    return count;
+  }
+
+  /** Attempt to drop a branch on a random valid adjacent tile. */
+  private tryDropBranch(tree: Tree): void {
+    if (tree.branchCount >= 3) return;
+
+    const candidates: { tx: number; ty: number }[] = [];
+    for (let dy = -1; dy <= 1; dy++) {
+      for (let dx = -1; dx <= 1; dx++) {
+        if (dx === 0 && dy === 0) continue;
+        const tx = tree.tileX + dx;
+        const ty = tree.tileY + dy;
+        if (tx < 0 || tx >= MAP_COLS || ty < 0 || ty >= MAP_ROWS) continue;
+        const key = tileKey(tx, ty);
+        if (this.blockedTiles.has(key)) continue;
+        if (this.waterTiles.has(key)) continue;
+        // Skip tiles that already have a branch
+        const stack = this.groundItems.get(key);
+        if (stack && !stack.isEmpty()) {
+          const items = stack.getItems();
+          if (items.some((item) => item.id === "branch")) continue;
+        }
+        candidates.push({ tx, ty });
+      }
+    }
+
+    if (candidates.length === 0) return;
+    const chosen = candidates[Math.floor(Math.random() * candidates.length)];
+    this.dropItemAt(chosen.tx, chosen.ty, { ...ITEMS["branch"] });
+    tree.branchCount++;
   }
 
   getPlayerInventory(): InventoryState | null {

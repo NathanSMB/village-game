@@ -2,6 +2,8 @@ import * as ex from "excalibur";
 import grassPng from "../sprites/ground/grass.png";
 import berryBushPng from "../sprites/ground/berry-bush.png";
 import waterPng from "../sprites/ground/water.png";
+import rockBigPng from "../sprites/ground/rock-big.png";
+import itemsPng from "../sprites/ground/items.png";
 import { getCharacterImageSources } from "./character-compositor.ts";
 
 export const grassImage = new ex.ImageSource(grassPng, {
@@ -138,6 +140,78 @@ export function getWaterAnimation(tileType: WaterTileTypeValue): ex.Animation {
   return ex.Animation.fromSpriteSheet(sheet, frames, 500, ex.AnimationStrategy.Loop);
 }
 
+// Big rock sprite
+export const rockBigImage = new ex.ImageSource(rockBigPng, {
+  filtering: ex.ImageFiltering.Pixel,
+});
+
+let rockBigSheet: ex.SpriteSheet | null = null;
+
+function getRockBigSheet(): ex.SpriteSheet {
+  if (!rockBigSheet) {
+    rockBigSheet = ex.SpriteSheet.fromImageSource({
+      image: rockBigImage,
+      grid: {
+        rows: 1,
+        columns: 4,
+        spriteWidth: 32,
+        spriteHeight: 32,
+      },
+    });
+  }
+  return rockBigSheet;
+}
+
+export function getRockBigAnimation(): ex.Animation {
+  const sheet = getRockBigSheet();
+  return ex.Animation.fromSpriteSheet(sheet, [0, 1, 2, 3], 500, ex.AnimationStrategy.Loop);
+}
+
+// Item sprites (16×16)
+export const itemsImage = new ex.ImageSource(itemsPng, {
+  filtering: ex.ImageFiltering.Pixel,
+});
+
+let itemsSheet: ex.SpriteSheet | null = null;
+
+const ITEM_SPRITE_MAP: Record<string, number> = {
+  "small-rock": 0,
+  berry: 1,
+  tunic: 2,
+  pants: 3,
+  boots: 4,
+};
+
+function getItemsSheet(): ex.SpriteSheet {
+  if (!itemsSheet) {
+    itemsSheet = ex.SpriteSheet.fromImageSource({
+      image: itemsImage,
+      grid: {
+        rows: 1,
+        columns: 5,
+        spriteWidth: 16,
+        spriteHeight: 16,
+      },
+    });
+  }
+  return itemsSheet;
+}
+
+/** Get a 16×16 sprite for an item by its itemSprite identifier. */
+export function getItemSprite(itemSpriteId: string): ex.Sprite | null {
+  const idx = ITEM_SPRITE_MAP[itemSpriteId];
+  if (idx == null) return null;
+  const sheet = getItemsSheet();
+  return sheet.getSprite(idx, 0) ?? null;
+}
+
 export function getAllImageSources(): ex.ImageSource[] {
-  return [grassImage, berryBushImage, waterImage, ...getCharacterImageSources()];
+  return [
+    grassImage,
+    berryBushImage,
+    waterImage,
+    rockBigImage,
+    itemsImage,
+    ...getCharacterImageSources(),
+  ];
 }

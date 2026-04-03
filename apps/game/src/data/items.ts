@@ -9,6 +9,7 @@ export const ITEMS: Record<string, Item> = {
     stats: {},
     weight: 2,
     slot: EquipmentSlot.Torso,
+    itemSprite: "tunic",
   },
   starter_pants: {
     id: "starter_pants",
@@ -18,6 +19,7 @@ export const ITEMS: Record<string, Item> = {
     stats: {},
     weight: 2,
     slot: EquipmentSlot.Legs,
+    itemSprite: "pants",
   },
   starter_boots: {
     id: "starter_boots",
@@ -27,6 +29,7 @@ export const ITEMS: Record<string, Item> = {
     stats: {},
     weight: 1,
     slot: EquipmentSlot.Feet,
+    itemSprite: "boots",
   },
   berry: {
     id: "berry",
@@ -36,6 +39,16 @@ export const ITEMS: Record<string, Item> = {
     stats: {},
     weight: 0.5,
     consumable: { hungerRestore: 10 },
+    itemSprite: "berry",
+  },
+  small_rock: {
+    id: "small_rock",
+    name: "Small Rock",
+    description: "A smooth stone. Could be useful for crafting.",
+    rarity: Rarity.Common,
+    stats: {},
+    weight: 1,
+    itemSprite: "small-rock",
   },
 };
 

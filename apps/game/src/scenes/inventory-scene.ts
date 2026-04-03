@@ -18,6 +18,14 @@ import {
 import type { Player } from "../actors/player.ts";
 import type { GameWorld } from "./game-world.ts";
 
+const FONT_DROP_HINT = new ex.Font({
+  family: "monospace",
+  size: 14,
+  color: ex.Color.fromHex("#aaaaaa"),
+  textAlign: ex.TextAlign.Left,
+  baseAlign: ex.BaseAlign.Middle,
+});
+
 const FONT_TITLE = new ex.Font({
   family: "monospace",
   size: 36,
@@ -144,6 +152,7 @@ export class InventoryScene extends ex.Scene {
   private detailDesc!: ex.Label;
   private detailStats!: ex.Label;
   private detailWeight!: ex.Label;
+  private dropHintLabel!: ex.Label;
 
   private allActors: ex.Actor[] = [];
   private centerX = 0;
@@ -292,6 +301,14 @@ export class InventoryScene extends ex.Scene {
     });
     this.add(this.detailWeight);
     this.allActors.push(this.detailWeight);
+
+    this.dropHintLabel = new ex.Label({
+      text: "",
+      pos: ex.vec(detailX, detailY + 94),
+      font: FONT_DROP_HINT.clone(),
+    });
+    this.add(this.dropHintLabel);
+    this.allActors.push(this.dropHintLabel);
   }
 
   override onActivate(): void {
@@ -390,7 +407,34 @@ export class InventoryScene extends ex.Scene {
         }
         this.updateDisplay();
       }
+      if (wasActionPressed(kb, "drop")) {
+        this.dropSelectedItem(engine);
+      }
     }
+  }
+
+  private dropSelectedItem(engine: ex.Engine): void {
+    if (!this.inventory || !this.player) return;
+    const item = this.inventory.bag[this.bagIndex];
+    if (!item) return;
+
+    // Remove from bag
+    this.inventory.bag.splice(this.bagIndex, 1);
+
+    // Drop onto the player's current tile
+    const gameWorld = engine.scenes["game-world"] as GameWorld;
+    const playerTileX = this.player.getTileX();
+    const playerTileY = this.player.getTileY();
+    gameWorld.dropItemAt(playerTileX, playerTileY, item);
+
+    // Adjust selection
+    if (this.bagIndex >= this.inventory.bag.length) {
+      this.bagIndex = Math.max(0, this.inventory.bag.length - 1);
+    }
+    if (this.inventory.bag.length === 0) {
+      this.focus = "equipment";
+    }
+    this.updateDisplay();
   }
 
   private getSelectedItem(): Item | null {
@@ -492,6 +536,14 @@ export class InventoryScene extends ex.Scene {
       this.detailDesc.text = this.focus === "equipment" ? "Slot is empty" : "";
       this.detailStats.text = "";
       this.detailWeight.text = "";
+    }
+
+    // Drop hint (only when focus is on bag and an item is selected)
+    if (this.focus === "bag" && item) {
+      this.dropHintLabel.text = "[Q] Drop";
+      this.dropHintLabel.color = ex.Color.fromHex("#aaaaaa");
+    } else {
+      this.dropHintLabel.text = "";
     }
   }
 }

@@ -1,13 +1,17 @@
 import * as ex from "excalibur";
 import type { CharacterAppearance } from "../types/character.ts";
 import type { InventoryState } from "../types/inventory.ts";
+import type { Item } from "../types/item.ts";
 import { isAlive } from "../types/vitals.ts";
 import { Player } from "../actors/player.ts";
 import { BerryBush } from "../actors/berry-bush.ts";
+import { BigRock } from "../actors/big-rock.ts";
+import { GroundItemStack } from "../actors/ground-item-stack.ts";
 import { FloatingText } from "../actors/floating-text.ts";
 import { VitalsHud } from "../actors/vitals-hud.ts";
 import { wasActionPressed } from "../systems/keybinds.ts";
-import type { BerryBushSaveState, SaveData } from "../systems/save-manager.ts";
+import { ITEMS } from "../data/items.ts";
+import type { BerryBushSaveState, GroundItemSaveState, SaveData } from "../systems/save-manager.ts";
 import { getGrassAnimations, getWaterAnimation, WaterTileType } from "../systems/sprite-loader.ts";
 import type { WaterTileTypeValue } from "../systems/sprite-loader.ts";
 import type { DeathCause } from "./game-over.ts";
@@ -16,7 +20,9 @@ const MAP_COLS = 64;
 const MAP_ROWS = 64;
 const TILE_SIZE = 32;
 const BUSH_COUNT = 25;
-const SPAWN_EXCLUSION = 3; // No bushes within N tiles of center spawn
+const BIG_ROCK_COUNT = 10;
+const SMALL_ROCK_COUNT = 30;
+const SPAWN_EXCLUSION = 3; // No bushes/rocks within N tiles of center spawn
 const POND_COUNT = 3; // Number of ponds to generate
 const POND_MIN_RADIUS = 3;
 const POND_MAX_RADIUS = 5;
@@ -37,9 +43,19 @@ export class GameWorld extends ex.Scene<GameWorldData> {
   private hud: VitalsHud | null = null;
   private bushes: BerryBush[] = [];
   private bushByTile = new Map<number, BerryBush>();
+  private rocks: BigRock[] = [];
   private blockedTiles = new Set<number>();
   private waterTiles = new Set<number>(); // Track water tile positions
+  private groundItems = new Map<number, GroundItemStack>();
   private actionPrompt: ex.Label | null = null;
+
+  // Item picker overlay state
+  private itemPickerOpen = false;
+  private itemPickerItems: Item[] = [];
+  private itemPickerIndex = 0;
+  private itemPickerTileKey = 0;
+  private itemPickerLabels: ex.Label[] = [];
+  private itemPickerBg: ex.Actor | null = null;
 
   override onInitialize(): void {
     this.tilemap = new ex.TileMap({
@@ -103,6 +119,41 @@ export class GameWorld extends ex.Scene<GameWorldData> {
       this.blockedTiles.add(key);
       this.add(bush);
       placed++;
+    }
+
+    // Spawn big rocks at seeded random positions (after bushes to preserve seed order)
+    let rocksPlaced = 0;
+    while (rocksPlaced < BIG_ROCK_COUNT) {
+      const rx = Math.floor(seededRandom() * MAP_COLS);
+      const ry = Math.floor(seededRandom() * MAP_ROWS);
+      if (Math.abs(rx - centerX) <= SPAWN_EXCLUSION && Math.abs(ry - centerY) <= SPAWN_EXCLUSION) {
+        continue;
+      }
+      const key = tileKey(rx, ry);
+      if (this.blockedTiles.has(key)) continue;
+      if (this.waterTiles.has(key)) continue;
+
+      const rock = new BigRock(rx, ry);
+      this.rocks.push(rock);
+      this.blockedTiles.add(key);
+      this.add(rock);
+      rocksPlaced++;
+    }
+
+    // Spawn small rocks as ground items at seeded random positions
+    let smallRocksPlaced = 0;
+    while (smallRocksPlaced < SMALL_ROCK_COUNT) {
+      const sx = Math.floor(seededRandom() * MAP_COLS);
+      const sy = Math.floor(seededRandom() * MAP_ROWS);
+      if (Math.abs(sx - centerX) <= SPAWN_EXCLUSION && Math.abs(sy - centerY) <= SPAWN_EXCLUSION) {
+        continue;
+      }
+      const key = tileKey(sx, sy);
+      if (this.blockedTiles.has(key)) continue;
+      if (this.waterTiles.has(key)) continue;
+
+      this.dropItemAt(sx, sy, { ...ITEMS["small_rock"] });
+      smallRocksPlaced++;
     }
 
     // Action prompt label (shown when facing interactable)
@@ -330,6 +381,11 @@ export class GameWorld extends ex.Scene<GameWorldData> {
       if (context.data.type === "load" && context.data.save.bushes) {
         this.restoreBushStates(context.data.save.bushes);
       }
+
+      // Restore ground item states from save
+      if (context.data.type === "load" && context.data.save.groundItems) {
+        this.restoreGroundItemStates(context.data.save.groundItems);
+      }
     }
 
     if (this.player) {
@@ -342,6 +398,26 @@ export class GameWorld extends ex.Scene<GameWorldData> {
 
   override onPreUpdate(engine: ex.Engine): void {
     const kb = engine.input.keyboard;
+
+    // Item picker overlay input handling
+    if (this.itemPickerOpen) {
+      if (wasActionPressed(kb, "moveUp")) {
+        this.itemPickerIndex = Math.max(0, this.itemPickerIndex - 1);
+        this.updateItemPicker();
+      }
+      if (wasActionPressed(kb, "moveDown")) {
+        this.itemPickerIndex = Math.min(this.itemPickerItems.length - 1, this.itemPickerIndex + 1);
+        this.updateItemPicker();
+      }
+      if (wasActionPressed(kb, "confirm") || wasActionPressed(kb, "action")) {
+        this.pickItemFromPicker();
+      }
+      if (wasActionPressed(kb, "back")) {
+        this.closeItemPicker();
+      }
+      return; // Block all other input while picker is open
+    }
+
     if (wasActionPressed(kb, "pause")) {
       void engine.goToScene("pause-menu");
     }
@@ -355,11 +431,13 @@ export class GameWorld extends ex.Scene<GameWorldData> {
     }
 
     // Action prompt + interaction
-    if (this.player && !this.player.isBusy()) {
+    if (this.player && !this.player.isBusy() && !this.player.isMoving()) {
       const facing = this.player.getFacingTile();
       const facingKey = tileKey(facing.x, facing.y);
       const bush = this.bushByTile.get(facingKey);
       const facingWater = this.waterTiles.has(facingKey);
+      const groundStack = this.groundItems.get(facingKey);
+      const hasGroundItems = groundStack && !groundStack.isEmpty();
 
       if (bush?.canPick()) {
         // Berry bush interaction
@@ -401,6 +479,27 @@ export class GameWorld extends ex.Scene<GameWorldData> {
           setTimeout(() => {
             this.spawnPickupText("+Thirst", waterWorldX, waterWorldY);
           }, 950);
+        }
+      } else if (hasGroundItems) {
+        // Ground item interaction
+        const worldX = facing.x * TILE_SIZE + TILE_SIZE / 2;
+        const worldY = facing.y * TILE_SIZE + TILE_SIZE / 2;
+        const count = groundStack.getCount();
+
+        if (this.actionPrompt) {
+          this.actionPrompt.text = count > 1 ? `[E] Pick up (${count})` : "[E] Pick up";
+          this.actionPrompt.pos = ex.vec(worldX, worldY - TILE_SIZE / 2 - 4);
+          this.actionPrompt.graphics.visible = true;
+        }
+
+        if (wasActionPressed(kb, "action")) {
+          if (count === 1) {
+            // Single item: pick up directly
+            this.pickupSingleItem(groundStack, facingKey, worldX, worldY);
+          } else {
+            // Multiple items: open item picker
+            this.openItemPicker(groundStack, facingKey, worldX, worldY);
+          }
         }
       } else {
         if (this.actionPrompt) {
@@ -457,5 +556,214 @@ export class GameWorld extends ex.Scene<GameWorldData> {
 
   getPlayer(): Player | null {
     return this.player;
+  }
+
+  // ==================== Ground Item System ====================
+
+  /** Drop an item onto a tile. Creates a GroundItemStack if none exists. */
+  dropItemAt(tx: number, ty: number, item: Item): void {
+    const key = tileKey(tx, ty);
+    let stack = this.groundItems.get(key);
+    if (!stack) {
+      stack = new GroundItemStack(tx, ty);
+      this.groundItems.set(key, stack);
+      this.add(stack);
+    }
+    stack.addItem(item);
+  }
+
+  /** Get ground items at a tile position. */
+  getGroundItemsAt(tx: number, ty: number): Item[] | null {
+    const key = tileKey(tx, ty);
+    const stack = this.groundItems.get(key);
+    if (!stack || stack.isEmpty()) return null;
+    return stack.getItems();
+  }
+
+  /** Remove a ground item by index from a tile. Cleans up empty stacks. */
+  private removeGroundItem(key: number, index: number): Item | null {
+    const stack = this.groundItems.get(key);
+    if (!stack) return null;
+    const item = stack.removeItem(index);
+    if (stack.isEmpty()) {
+      this.remove(stack);
+      this.groundItems.delete(key);
+    }
+    return item;
+  }
+
+  /** Pick up a single item from a ground stack. */
+  private pickupSingleItem(
+    _stack: GroundItemStack,
+    key: number,
+    worldX: number,
+    worldY: number,
+  ): void {
+    if (!this.player) return;
+    this.player.startPickingUpItem();
+
+    const currentPlayer = this.player;
+    const currentKey = key;
+    setTimeout(() => {
+      const item = this.removeGroundItem(currentKey, 0);
+      if (item) {
+        currentPlayer.inventory.bag.push(item);
+        this.spawnPickupText(`+[${item.name}]`, worldX, worldY);
+      }
+    }, 700); // Slightly before animation ends
+  }
+
+  // ==================== Item Picker Overlay ====================
+
+  private openItemPicker(
+    stack: GroundItemStack,
+    key: number,
+    worldX: number,
+    worldY: number,
+  ): void {
+    this.itemPickerOpen = true;
+    this.itemPickerItems = stack.getItems();
+    this.itemPickerIndex = 0;
+    this.itemPickerTileKey = key;
+
+    // Lock player input while picker is open
+    this.player?.lockInput();
+
+    // Hide action prompt
+    if (this.actionPrompt) this.actionPrompt.graphics.visible = false;
+
+    // Create background
+    const bgHeight = Math.min(this.itemPickerItems.length, 5) * 20 + 12;
+    this.itemPickerBg = new ex.Actor({
+      pos: ex.vec(worldX, worldY - TILE_SIZE / 2 - bgHeight - 4),
+      width: 140,
+      height: bgHeight,
+      anchor: ex.vec(0.5, 0),
+      z: 100,
+    });
+    this.itemPickerBg.graphics.use(
+      new ex.Rectangle({
+        width: 140,
+        height: bgHeight,
+        color: ex.Color.fromRGB(20, 20, 30, 0.9),
+      }),
+    );
+    this.add(this.itemPickerBg);
+
+    // Create item labels
+    const maxVisible = Math.min(this.itemPickerItems.length, 5);
+    for (let i = 0; i < maxVisible; i++) {
+      const label = new ex.Label({
+        text: "",
+        pos: ex.vec(worldX - 60, worldY - TILE_SIZE / 2 - bgHeight + i * 20 + 2),
+        z: 101,
+        font: new ex.Font({
+          family: "monospace",
+          size: 12,
+          color: ex.Color.White,
+          textAlign: ex.TextAlign.Left,
+          baseAlign: ex.BaseAlign.Top,
+        }),
+      });
+      this.add(label);
+      this.itemPickerLabels.push(label);
+    }
+
+    this.updateItemPicker();
+  }
+
+  private updateItemPicker(): void {
+    const maxVisible = this.itemPickerLabels.length;
+    for (let i = 0; i < maxVisible; i++) {
+      const label = this.itemPickerLabels[i];
+      if (i < this.itemPickerItems.length) {
+        const item = this.itemPickerItems[i];
+        const selected = i === this.itemPickerIndex;
+        label.text = selected ? `> ${item.name}` : `  ${item.name}`;
+        label.color = selected ? ex.Color.fromHex("#f0c040") : ex.Color.White;
+        label.font.bold = selected;
+      } else {
+        label.text = "";
+      }
+    }
+  }
+
+  private pickItemFromPicker(): void {
+    if (!this.player) return;
+    const stack = this.groundItems.get(this.itemPickerTileKey);
+    if (!stack) {
+      this.closeItemPicker();
+      return;
+    }
+
+    const facing = this.player.getFacingTile();
+    const worldX = facing.x * TILE_SIZE + TILE_SIZE / 2;
+    const worldY = facing.y * TILE_SIZE + TILE_SIZE / 2;
+
+    this.player.startPickingUpItem();
+
+    const currentPlayer = this.player;
+    const currentKey = this.itemPickerTileKey;
+    const pickIndex = this.itemPickerIndex;
+
+    this.closeItemPicker();
+
+    setTimeout(() => {
+      const item = this.removeGroundItem(currentKey, pickIndex);
+      if (item) {
+        currentPlayer.inventory.bag.push(item);
+        this.spawnPickupText(`+[${item.name}]`, worldX, worldY);
+      }
+    }, 700);
+  }
+
+  private closeItemPicker(): void {
+    this.itemPickerOpen = false;
+    this.itemPickerItems = [];
+    this.itemPickerIndex = 0;
+
+    // Unlock player input
+    this.player?.unlockInput();
+
+    // Clean up UI
+    if (this.itemPickerBg) {
+      this.remove(this.itemPickerBg);
+      this.itemPickerBg = null;
+    }
+    for (const label of this.itemPickerLabels) {
+      this.remove(label);
+    }
+    this.itemPickerLabels = [];
+  }
+
+  // ==================== Ground Item Save/Load ====================
+
+  getGroundItemStates(): GroundItemSaveState[] {
+    const states: GroundItemSaveState[] = [];
+    for (const stack of this.groundItems.values()) {
+      if (!stack.isEmpty()) {
+        states.push({
+          tileX: stack.tileX,
+          tileY: stack.tileY,
+          items: stack.getItems(),
+        });
+      }
+    }
+    return states;
+  }
+
+  private restoreGroundItemStates(states: GroundItemSaveState[]): void {
+    // Clear all existing ground items (including initial small rocks)
+    for (const stack of this.groundItems.values()) {
+      this.remove(stack);
+    }
+    this.groundItems.clear();
+
+    // Restore saved ground items
+    for (const saved of states) {
+      for (const item of saved.items) {
+        this.dropItemAt(saved.tileX, saved.tileY, item);
+      }
+    }
   }
 }

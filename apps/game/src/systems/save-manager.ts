@@ -10,6 +10,12 @@ export interface BerryBushSaveState {
   regrowTimer: number;
 }
 
+export interface GroundItemSaveState {
+  tileX: number;
+  tileY: number;
+  items: Item[];
+}
+
 export interface SaveData {
   name: string;
   timestamp: number;
@@ -23,6 +29,7 @@ export interface SaveData {
     vitals: VitalsState;
   };
   bushes?: BerryBushSaveState[];
+  groundItems?: GroundItemSaveState[];
 }
 
 const DB_NAME = "village-game";

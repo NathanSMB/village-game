@@ -36,6 +36,16 @@ echo "Exporting ground/water..."
   --format json-array \
   --list-tags
 
+echo "Exporting ground/rock-big..."
+"$ASEPRITE" -b "$ASSETS_DIR/ground/rock-big.aseprite" \
+  --sheet "$SPRITES_DIR/ground/rock-big.png" \
+  --sheet-type horizontal
+
+echo "Exporting ground/items..."
+"$ASEPRITE" -b "$ASSETS_DIR/ground/items.aseprite" \
+  --sheet "$SPRITES_DIR/ground/items.png" \
+  --sheet-type horizontal
+
 # Character layers
 for file in "$ASSETS_DIR"/characters/**/*.aseprite; do
   relative="${file#"$ASSETS_DIR"/}"

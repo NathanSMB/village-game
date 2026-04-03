@@ -11,6 +11,7 @@ const MAP_TILES = 64;
 const PICK_DURATION_MS = 500;
 const DRINK_DURATION_MS = 1000; // 4 frames × 250ms each
 const DRINK_THIRST_RESTORE = 25;
+const PICKUP_DURATION_MS = 800; // 4 frames × 200ms each
 
 export type Direction = "down" | "up" | "left" | "right";
 
@@ -40,6 +41,14 @@ const DRINK_DIR_OFFSET: Record<Direction, number> = {
   right: 32,
 };
 
+// Pickup-item animation frame offsets: frames 36-51 (4 dirs × 4 pickup poses)
+const PICKUP_DIR_OFFSET: Record<Direction, number> = {
+  down: 36,
+  up: 40,
+  left: 44,
+  right: 48,
+};
+
 function tileCenter(tile: number): number {
   return tile * TILE_SIZE + TILE_SIZE / 2;
 }
@@ -63,6 +72,7 @@ export class Player extends ex.Actor {
   private facing: Direction = "down";
   private walkFrame: 0 | 1 = 0;
   private isBlocked: BlockedCheck = () => false;
+  private inputLocked = false;
 
   // Picking state
   private picking = false;
@@ -71,6 +81,10 @@ export class Player extends ex.Actor {
   // Drinking state
   private drinking = false;
   private drinkTimer = 0;
+
+  // Pickup-item state
+  private pickingUpItem = false;
+  private pickupTimer = 0;
 
   constructor(
     appearance: CharacterAppearance,
@@ -100,8 +114,35 @@ export class Player extends ex.Actor {
     this.isBlocked = fn;
   }
 
+  /** Lock all player input (movement + actions). Used by UI overlays. */
+  lockInput(): void {
+    this.inputLocked = true;
+  }
+
+  /** Unlock player input. */
+  unlockInput(): void {
+    this.inputLocked = false;
+  }
+
+  /** Stop any in-progress movement, snapping to the nearest tile. */
+  private stopMovement(): void {
+    if (!this.moving) return;
+    this.moving = false;
+    this.vel = ex.vec(0, 0);
+    // Snap back to the tile we started from
+    this.targetX = this.tileX;
+    this.targetY = this.tileY;
+    this.pos.x = tileCenter(this.tileX);
+    this.pos.y = tileCenter(this.tileY);
+  }
+
+  isMoving(): boolean {
+    return this.moving;
+  }
+
   /** Start the picking animation. Locks the player for PICK_DURATION_MS. */
   startPicking(): void {
+    this.stopMovement();
     this.picking = true;
     this.pickTimer = PICK_DURATION_MS;
     // Show the reach frame immediately
@@ -116,6 +157,7 @@ export class Player extends ex.Actor {
 
   /** Start the drinking animation. Locks the player for DRINK_DURATION_MS. */
   startDrinking(): void {
+    this.stopMovement();
     this.drinking = true;
     this.drinkTimer = DRINK_DURATION_MS;
     // Show the first drink frame immediately (begin kneel)
@@ -128,9 +170,24 @@ export class Player extends ex.Actor {
     return this.drinking;
   }
 
+  /** Start the pickup-item animation. Locks the player for PICKUP_DURATION_MS. */
+  startPickingUpItem(): void {
+    this.stopMovement();
+    this.pickingUpItem = true;
+    this.pickupTimer = PICKUP_DURATION_MS;
+    // Show the first pickup frame immediately (begin bend)
+    const pickupIdx = PICKUP_DIR_OFFSET[this.facing];
+    const sprite = this.spriteSheet.getSprite(pickupIdx, 0);
+    if (sprite) this.graphics.use(sprite);
+  }
+
+  isPickingUpItem(): boolean {
+    return this.pickingUpItem;
+  }
+
   /** Returns true if the player is locked in any animation. */
   isBusy(): boolean {
-    return this.picking || this.drinking;
+    return this.picking || this.drinking || this.pickingUpItem;
   }
 
   getFacing(): Direction {
@@ -200,6 +257,35 @@ export class Player extends ex.Actor {
       return;
     }
 
+    // Pickup-item animation locks movement
+    if (this.pickingUpItem) {
+      this.pickupTimer -= delta;
+      const quarterDuration = PICKUP_DURATION_MS / 4;
+
+      // 4 frames: begin bend, crouch, reach ground, grab
+      const pickupBase = PICKUP_DIR_OFFSET[this.facing];
+      let poseIdx: number;
+      if (this.pickupTimer > quarterDuration * 3) {
+        poseIdx = 0; // begin bend
+      } else if (this.pickupTimer > quarterDuration * 2) {
+        poseIdx = 1; // crouch
+      } else if (this.pickupTimer > quarterDuration) {
+        poseIdx = 2; // reach to ground
+      } else {
+        poseIdx = 3; // grab/rise
+      }
+
+      const frameIdx = pickupBase + poseIdx;
+      const sprite = this.spriteSheet.getSprite(frameIdx, 0);
+      if (sprite) this.graphics.use(sprite);
+
+      if (this.pickupTimer <= 0) {
+        this.pickingUpItem = false;
+        this.updateGraphic();
+      }
+      return;
+    }
+
     if (this.moving) {
       const goalX = tileCenter(this.targetX);
       const goalY = tileCenter(this.targetY);
@@ -219,6 +305,9 @@ export class Player extends ex.Actor {
       }
       return;
     }
+
+    // Skip all input when locked (e.g. item picker overlay is open)
+    if (this.inputLocked) return;
 
     const kb = engine.input.keyboard;
     let dx = 0;

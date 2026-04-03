@@ -1,6 +1,7 @@
 import * as ex from "excalibur";
 import grassPng from "../sprites/ground/grass.png";
 import berryBushPng from "../sprites/ground/berry-bush.png";
+import treePng from "../sprites/ground/tree.png";
 import waterPng from "../sprites/ground/water.png";
 import rockBigPng from "../sprites/ground/rock-big.png";
 import itemsPng from "../sprites/ground/items.png";
@@ -11,6 +12,10 @@ export const grassImage = new ex.ImageSource(grassPng, {
 });
 
 export const berryBushImage = new ex.ImageSource(berryBushPng, {
+  filtering: ex.ImageFiltering.Pixel,
+});
+
+export const treeImage = new ex.ImageSource(treePng, {
   filtering: ex.ImageFiltering.Pixel,
 });
 
@@ -74,6 +79,29 @@ export function getBerryBushFullAnimation(): ex.Animation {
 export function getBerryBushPickedAnimation(): ex.Animation {
   const sheet = getBerryBushSheet();
   return ex.Animation.fromSpriteSheet(sheet, [4, 5, 6, 7], 500, ex.AnimationStrategy.Loop);
+}
+
+// Tree sprite
+let treeSheet: ex.SpriteSheet | null = null;
+
+function getTreeSheet(): ex.SpriteSheet {
+  if (!treeSheet) {
+    treeSheet = ex.SpriteSheet.fromImageSource({
+      image: treeImage,
+      grid: {
+        rows: 1,
+        columns: 4,
+        spriteWidth: 32,
+        spriteHeight: 32,
+      },
+    });
+  }
+  return treeSheet;
+}
+
+export function getTreeAnimation(): ex.Animation {
+  const sheet = getTreeSheet();
+  return ex.Animation.fromSpriteSheet(sheet, [0, 1, 2, 3], 500, ex.AnimationStrategy.Loop);
 }
 
 // Water tile types — 13 types × 4 animation frames = 52 total frames
@@ -180,6 +208,7 @@ const ITEM_SPRITE_MAP: Record<string, number> = {
   tunic: 2,
   pants: 3,
   boots: 4,
+  branch: 5,
 };
 
 function getItemsSheet(): ex.SpriteSheet {
@@ -188,7 +217,7 @@ function getItemsSheet(): ex.SpriteSheet {
       image: itemsImage,
       grid: {
         rows: 1,
-        columns: 5,
+        columns: 6,
         spriteWidth: 16,
         spriteHeight: 16,
       },
@@ -209,6 +238,7 @@ export function getAllImageSources(): ex.ImageSource[] {
   return [
     grassImage,
     berryBushImage,
+    treeImage,
     waterImage,
     rockBigImage,
     itemsImage,

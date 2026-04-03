@@ -1,10 +1,10 @@
 -- Create 16x16 item sprites for ground/inventory display
--- 5 items in a horizontal strip: small-rock, berry, tunic, pants, boots
+-- 6 items in a horizontal strip: small-rock, berry, tunic, pants, boots, branch
 -- Run: aseprite -b --script-param script-path="$(pwd)/scripts/create-item-sprites.lua" --script scripts/create-item-sprites.lua
 
 local W = 16
 local H = 16
-local TOTAL_FRAMES = 5
+local TOTAL_FRAMES = 6
 
 local scriptPath = app.params["script-path"] or "."
 local outputDir = app.fs.joinPath(app.fs.filePath(scriptPath), "..", "assets", "ground")
@@ -221,8 +221,55 @@ local function drawBoots(img)
   px(img, 14, 11, LEATHER_L)
 end
 
+-- ============================================================
+-- Frame 5: Branch (wooden stick)
+-- ============================================================
+local function drawBranch(img)
+  clearImg(img)
+  local WOOD = Color{ r = 110, g = 75, b = 42, a = 255 }
+  local WOOD_D = Color{ r = 80, g = 52, b = 28, a = 255 }
+  local WOOD_L = Color{ r = 140, g = 100, b = 60, a = 255 }
+  local SHADOW = Color{ r = 45, g = 35, b = 25, a = 80 }
+
+  -- Shadow
+  rect(img, 3, 13, 11, 1, SHADOW)
+
+  -- Main branch (diagonal stick going from bottom-left to upper-right)
+  -- Using individual pixels to draw the diagonal
+  px(img, 2, 12, WOOD_D)
+  px(img, 3, 11, WOOD)
+  px(img, 3, 12, WOOD_D)
+  px(img, 4, 10, WOOD)
+  px(img, 4, 11, WOOD)
+  px(img, 5, 9, WOOD)
+  px(img, 5, 10, WOOD_L)
+  px(img, 6, 8, WOOD)
+  px(img, 6, 9, WOOD)
+  px(img, 7, 7, WOOD)
+  px(img, 7, 8, WOOD_L)
+  px(img, 8, 6, WOOD)
+  px(img, 8, 7, WOOD)
+  px(img, 9, 5, WOOD)
+  px(img, 9, 6, WOOD_L)
+  px(img, 10, 4, WOOD)
+  px(img, 10, 5, WOOD)
+  px(img, 11, 3, WOOD_L)
+  px(img, 11, 4, WOOD)
+  px(img, 12, 3, WOOD_D)
+
+  -- Small fork at the top
+  px(img, 12, 2, WOOD)
+  px(img, 13, 2, WOOD_L)
+  px(img, 11, 2, WOOD_D)
+  px(img, 10, 3, WOOD)
+
+  -- Small nub on the side
+  px(img, 5, 8, WOOD_D)
+  px(img, 8, 8, WOOD_D)
+end
+
 -- Generate frames
-local drawFuncs = { drawSmallRock, drawBerry, drawTunic, drawPants, drawBoots }
+local drawFuncs = { drawSmallRock, drawBerry, drawTunic, drawPants, drawBoots, drawBranch }
 
 for i, drawFunc in ipairs(drawFuncs) do
   app.activeFrame = spr.frames[i]

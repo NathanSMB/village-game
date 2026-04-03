@@ -41,6 +41,11 @@ echo "Exporting ground/rock-big..."
   --sheet "$SPRITES_DIR/ground/rock-big.png" \
   --sheet-type horizontal
 
+echo "Exporting ground/tree..."
+"$ASEPRITE" -b "$ASSETS_DIR/ground/tree.aseprite" \
+  --sheet "$SPRITES_DIR/ground/tree.png" \
+  --sheet-type horizontal
+
 echo "Exporting ground/items..."
 "$ASEPRITE" -b "$ASSETS_DIR/ground/items.aseprite" \
   --sheet "$SPRITES_DIR/ground/items.png" \

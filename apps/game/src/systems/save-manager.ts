@@ -16,6 +16,13 @@ export interface GroundItemSaveState {
   items: Item[];
 }
 
+export interface TreeSaveState {
+  tileX: number;
+  tileY: number;
+  dropTimer: number;
+  branchCount: number;
+}
+
 export interface SaveData {
   name: string;
   timestamp: number;
@@ -29,6 +36,7 @@ export interface SaveData {
     vitals: VitalsState;
   };
   bushes?: BerryBushSaveState[];
+  trees?: TreeSaveState[];
   groundItems?: GroundItemSaveState[];
 }
 

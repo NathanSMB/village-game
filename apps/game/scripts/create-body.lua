@@ -118,10 +118,18 @@ local function drawBody(img, dir, pose, isFemale)
   px(img, bodyX - armW, leftArmY, SKIN_SHADOW)
   px(img, bodyX + bodyW + armW - 1, rightArmY, SKIN_SHADOW)
 
-  -- === FEMALE CHEST DETAIL ===
-  if isFemale and dir == 0 then
-    rect(img, bodyX + 1, 16, 3, 1, SKIN_SHADOW)
-    rect(img, bodyX + bodyW - 4, 16, 3, 1, SKIN_SHADOW)
+  -- === FEMALE CHEST DETAIL + BRA ===
+  if isFemale then
+    if dir == 0 then
+      -- Breast shading (front view only)
+      rect(img, bodyX + 1, 17, 3, 1, SKIN_SHADOW)
+      rect(img, bodyX + bodyW - 4, 17, 3, 1, SKIN_SHADOW)
+      -- Bra / bandeau (covers chest)
+      rect(img, bodyX, 16, bodyW, 2, UNDERWEAR)
+    elseif dir == 2 or dir == 3 then
+      -- Side view bra band
+      rect(img, bodyX, 16, bodyW, 2, UNDERWEAR)
+    end
   end
 
   -- === UNDERWEAR ===

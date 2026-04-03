@@ -1,4 +1,6 @@
 import type { CharacterAppearance } from "../types/character.ts";
+import type { Equipment } from "../types/inventory.ts";
+import type { Item } from "../types/item.ts";
 
 export interface SaveData {
   name: string;
@@ -7,6 +9,9 @@ export interface SaveData {
     tileX: number;
     tileY: number;
     appearance: CharacterAppearance;
+    equipment?: Equipment;
+    bag?: Item[];
+    maxWeight?: number;
   };
 }
 
@@ -127,7 +132,7 @@ export async function saveSettings(key: string, value: unknown): Promise<void> {
   });
 }
 
-export async function loadSettings(key: string): Promise<unknown | null> {
+export async function loadSettings(key: string): Promise<unknown> {
   return new Promise((resolve, reject) => {
     const tx = getDB().transaction(SETTINGS_STORE, "readonly");
     const request = tx.objectStore(SETTINGS_STORE).get(key);

@@ -1,5 +1,6 @@
 import * as ex from "excalibur";
 import type { CharacterAppearance } from "../types/character.ts";
+import { type InventoryState, defaultInventory } from "../types/inventory.ts";
 import { isActionHeld } from "../systems/keybinds.ts";
 import { compositeCharacter } from "../systems/character-compositor.ts";
 
@@ -26,6 +27,7 @@ function posToTile(px: number): number {
 
 export class Player extends ex.Actor {
   readonly appearance: CharacterAppearance;
+  readonly inventory: InventoryState;
   private spriteSheet: ex.SpriteSheet;
   private tileX: number;
   private tileY: number;
@@ -35,7 +37,7 @@ export class Player extends ex.Actor {
   private facing: Direction = "down";
   private walkFrame: 0 | 1 = 0;
 
-  constructor(appearance: CharacterAppearance, startPos: ex.Vector) {
+  constructor(appearance: CharacterAppearance, startPos: ex.Vector, inventory?: InventoryState) {
     super({
       pos: startPos,
       width: TILE_SIZE,
@@ -44,7 +46,8 @@ export class Player extends ex.Actor {
       z: 10,
     });
     this.appearance = appearance;
-    this.spriteSheet = compositeCharacter(appearance);
+    this.inventory = inventory ?? defaultInventory(appearance);
+    this.spriteSheet = compositeCharacter(appearance, this.inventory.equipment);
     this.updateGraphic();
     this.tileX = posToTile(startPos.x);
     this.tileY = posToTile(startPos.y);
@@ -119,6 +122,11 @@ export class Player extends ex.Actor {
     const vy = goalY - this.pos.y;
     const len = Math.sqrt(vx * vx + vy * vy);
     this.vel = ex.vec((vx / len) * MOVE_SPEED, (vy / len) * MOVE_SPEED);
+  }
+
+  refreshSprite(): void {
+    this.spriteSheet = compositeCharacter(this.appearance, this.inventory.equipment);
+    this.updateGraphic();
   }
 
   private updateGraphic(): void {

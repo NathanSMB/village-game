@@ -1,5 +1,6 @@
 import * as ex from "excalibur";
 import type { CharacterAppearance } from "../types/character.ts";
+import type { InventoryState } from "../types/inventory.ts";
 import { Player } from "../actors/player.ts";
 import { wasActionPressed } from "../systems/keybinds.ts";
 import type { SaveData } from "../systems/save-manager.ts";
@@ -53,6 +54,8 @@ export class GameWorld extends ex.Scene<GameWorldData> {
       let startX: number;
       let startY: number;
 
+      let inventory: InventoryState | undefined;
+
       if (context.data.type === "new") {
         appearance = context.data.appearance;
         startX = (MAP_COLS / 2) * TILE_SIZE + TILE_SIZE / 2;
@@ -61,9 +64,16 @@ export class GameWorld extends ex.Scene<GameWorldData> {
         appearance = context.data.save.player.appearance;
         startX = context.data.save.player.tileX * TILE_SIZE + TILE_SIZE / 2;
         startY = context.data.save.player.tileY * TILE_SIZE + TILE_SIZE / 2;
+        if (context.data.save.player.equipment) {
+          inventory = {
+            equipment: context.data.save.player.equipment,
+            bag: context.data.save.player.bag ?? [],
+            maxWeight: context.data.save.player.maxWeight ?? 50,
+          };
+        }
       }
 
-      this.player = new Player(appearance, ex.vec(startX, startY));
+      this.player = new Player(appearance, ex.vec(startX, startY), inventory);
       this.add(this.player);
     }
 
@@ -76,8 +86,12 @@ export class GameWorld extends ex.Scene<GameWorldData> {
   }
 
   override onPreUpdate(engine: ex.Engine): void {
-    if (wasActionPressed(engine.input.keyboard, "pause")) {
+    const kb = engine.input.keyboard;
+    if (wasActionPressed(kb, "pause")) {
       void engine.goToScene("pause-menu");
+    }
+    if (wasActionPressed(kb, "inventory")) {
+      void engine.goToScene("inventory");
     }
   }
 
@@ -87,6 +101,17 @@ export class GameWorld extends ex.Scene<GameWorldData> {
       tileX: this.player.getTileX(),
       tileY: this.player.getTileY(),
       appearance: this.player.appearance,
+      equipment: this.player.inventory.equipment,
+      bag: this.player.inventory.bag,
+      maxWeight: this.player.inventory.maxWeight,
     };
+  }
+
+  getPlayerInventory(): InventoryState | null {
+    return this.player?.inventory ?? null;
+  }
+
+  getPlayer(): Player | null {
+    return this.player;
   }
 }

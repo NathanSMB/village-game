@@ -1,5 +1,7 @@
 import * as ex from "excalibur";
 import type { CharacterAppearance, PaletteOption } from "../types/character.ts";
+import type { Equipment } from "../types/inventory.ts";
+import { EquipmentSlot } from "../types/item.ts";
 import {
   CLOTHING_COLORS,
   FACIAL_HAIR_STYLES,
@@ -74,8 +76,8 @@ export function getCharacterImageSources(): ex.ImageSource[] {
 // Palette swap cache
 const compositeCache = new Map<string, ex.SpriteSheet>();
 
-function appearanceKey(a: CharacterAppearance): string {
-  return JSON.stringify(a);
+function compositeKey(a: CharacterAppearance, equipment?: Equipment): string {
+  return JSON.stringify({ a, equipment });
 }
 
 function darken(c: PaletteOption, amount: number): RGB {
@@ -163,8 +165,22 @@ function getHairMappings(hairColor: PaletteOption): PaletteMap[] {
   ];
 }
 
-export function compositeCharacter(appearance: CharacterAppearance): ex.SpriteSheet {
-  const key = appearanceKey(appearance);
+function drawFemaleChestDetail(ctx: CanvasRenderingContext2D, shadow: RGB): void {
+  // Draw breast shading on front-facing frames (dir=0: frames 0, 1, 2)
+  // Matches body Lua positions: bodyX+1=12 w3 and bodyX+bodyW-4=17 w3, y=16
+  ctx.fillStyle = `rgb(${shadow.r},${shadow.g},${shadow.b})`;
+  for (let frame = 0; frame < 3; frame++) {
+    const fx = frame * FRAME_SIZE;
+    ctx.fillRect(fx + 12, 17, 3, 1);
+    ctx.fillRect(fx + 17, 17, 3, 1);
+  }
+}
+
+export function compositeCharacter(
+  appearance: CharacterAppearance,
+  equipment?: Equipment,
+): ex.SpriteSheet {
+  const key = compositeKey(appearance, equipment);
   const cached = compositeCache.get(key);
   if (cached) return cached;
 
@@ -176,22 +192,43 @@ export function compositeCharacter(appearance: CharacterAppearance): ex.SpriteSh
 
   const skin = SKIN_TONES[appearance.skinTone];
   const hairColor = HAIR_COLORS[appearance.hairColor];
-  const torsoColor = CLOTHING_COLORS[appearance.equipmentColors.torso];
-  const legsColor = CLOTHING_COLORS[appearance.equipmentColors.legs];
-  const feetColor = CLOTHING_COLORS[appearance.equipmentColors.feet];
 
   // 1. Body
   const bodyKey = appearance.sex === "male" ? "body-male" : "body-female";
   paletteSwapLayer(ctx, LAYER_IMAGES[bodyKey].image, getSkinMappings(skin));
 
-  // 2. Feet equipment
-  paletteSwapLayer(ctx, LAYER_IMAGES["feet-boots"].image, getClothMappings(feetColor));
-
-  // 3. Legs equipment
-  paletteSwapLayer(ctx, LAYER_IMAGES["legs-pants"].image, getClothMappings(legsColor));
-
-  // 4. Torso equipment
-  paletteSwapLayer(ctx, LAYER_IMAGES["torso-tunic"].image, getClothMappings(torsoColor));
+  // 2-4. Equipment layers — conditional on equipped items
+  if (equipment) {
+    const feetItem = equipment[EquipmentSlot.Feet];
+    if (feetItem) {
+      const color = CLOTHING_COLORS[feetItem.colorIndex ?? 0];
+      paletteSwapLayer(ctx, LAYER_IMAGES["feet-boots"].image, getClothMappings(color));
+    }
+    const legsItem = equipment[EquipmentSlot.Legs];
+    if (legsItem) {
+      const color = CLOTHING_COLORS[legsItem.colorIndex ?? 0];
+      paletteSwapLayer(ctx, LAYER_IMAGES["legs-pants"].image, getClothMappings(color));
+    }
+    const torsoItem = equipment[EquipmentSlot.Torso];
+    if (torsoItem) {
+      const color = CLOTHING_COLORS[torsoItem.colorIndex ?? 0];
+      paletteSwapLayer(ctx, LAYER_IMAGES["torso-tunic"].image, getClothMappings(color));
+      if (appearance.sex === "female") {
+        drawFemaleChestDetail(ctx, darken(color, 0.25));
+      }
+    }
+  } else {
+    // Character creator preview — render all layers from appearance colors
+    const feetColor = CLOTHING_COLORS[appearance.equipmentColors.feet];
+    const legsColor = CLOTHING_COLORS[appearance.equipmentColors.legs];
+    const torsoColor = CLOTHING_COLORS[appearance.equipmentColors.torso];
+    paletteSwapLayer(ctx, LAYER_IMAGES["feet-boots"].image, getClothMappings(feetColor));
+    paletteSwapLayer(ctx, LAYER_IMAGES["legs-pants"].image, getClothMappings(legsColor));
+    paletteSwapLayer(ctx, LAYER_IMAGES["torso-tunic"].image, getClothMappings(torsoColor));
+    if (appearance.sex === "female") {
+      drawFemaleChestDetail(ctx, darken(torsoColor, 0.25));
+    }
+  }
 
   // 5. Facial hair (male only, skip "none")
   if (appearance.sex === "male") {

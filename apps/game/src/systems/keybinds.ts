@@ -10,7 +10,8 @@ export type ActionName =
   | "confirm"
   | "action"
   | "pause"
-  | "back";
+  | "back"
+  | "inventory";
 
 export interface KeyBinding {
   slot1: Keys | null;
@@ -28,6 +29,7 @@ export const ALL_ACTIONS: ActionName[] = [
   "action",
   "pause",
   "back",
+  "inventory",
 ];
 
 export const ACTION_LABELS: Record<ActionName, string> = {
@@ -39,6 +41,7 @@ export const ACTION_LABELS: Record<ActionName, string> = {
   action: "Action",
   pause: "Pause",
   back: "Back",
+  inventory: "Inventory",
 };
 
 function makeDefaults(): KeyBindings {
@@ -51,6 +54,7 @@ function makeDefaults(): KeyBindings {
     action: { slot1: Keys.E, slot2: Keys.Enter },
     pause: { slot1: Keys.Escape, slot2: null },
     back: { slot1: Keys.Escape, slot2: null },
+    inventory: { slot1: Keys.KeyI, slot2: null },
   };
 }
 

@@ -37,4 +37,16 @@ export const RECIPES: Recipe[] = [
     ],
     resultId: "spear",
   },
+  {
+    id: "simple_tunic",
+    name: "Simple Tunic",
+    ingredients: [{ itemId: "wool", count: 3 }],
+    resultId: "starter_tunic",
+  },
+  {
+    id: "simple_pants",
+    name: "Simple Pants",
+    ingredients: [{ itemId: "wool", count: 3 }],
+    resultId: "starter_pants",
+  },
 ];

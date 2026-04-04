@@ -942,7 +942,8 @@ export class InventoryScene extends ex.Scene {
       if (isConsumable(item)) {
         this.detailRarity.text = `${item.rarity} - Consumable`;
       } else if (item.slot) {
-        this.detailRarity.text = `${item.rarity} - ${EQUIPMENT_SLOT_LABELS[item.slot]}`;
+        const dyeSuffix = item.dye ? ` (${item.dye})` : "";
+        this.detailRarity.text = `${item.rarity} - ${EQUIPMENT_SLOT_LABELS[item.slot]}${dyeSuffix}`;
       } else {
         this.detailRarity.text = item.rarity;
       }

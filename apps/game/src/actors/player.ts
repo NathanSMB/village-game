@@ -304,6 +304,11 @@ export class Player extends ex.Actor {
     return this.picking || this.drinking || this.pickingUpItem || this.attacking;
   }
 
+  /** Returns true when energy has hit 0. */
+  isExhausted(): boolean {
+    return this.vitals.energy <= 0;
+  }
+
   getFacing(): Direction {
     return this.facing;
   }
@@ -510,12 +515,13 @@ export class Player extends ex.Actor {
     const walkFrameIdx = DIR_OFFSET[this.facing] + 1 + this.walkFrame;
     this.showFrame(walkFrameIdx);
 
+    const speed = this.isExhausted() ? MOVE_SPEED / 2 : MOVE_SPEED;
     const goalX = tileCenter(this.targetX);
     const goalY = tileCenter(this.targetY);
     const vx = goalX - this.pos.x;
     const vy = goalY - this.pos.y;
     const len = Math.sqrt(vx * vx + vy * vy);
-    this.vel = ex.vec((vx / len) * MOVE_SPEED, (vy / len) * MOVE_SPEED);
+    this.vel = ex.vec((vx / len) * speed, (vy / len) * speed);
   }
 
   refreshSprite(): void {
@@ -532,18 +538,20 @@ export class Player extends ex.Actor {
     return this.tileY;
   }
 
-  /** Enter bed: hide character and weapon sprites, set sleeping flag. */
-  enterBed(): void {
+  /** Enter bed: show idle frame facing the given direction (head on pillow), hide weapon. */
+  enterBed(facing: Direction = "down"): void {
     this.sleeping = true;
     this.stopMovement();
-    this.graphics.visible = false;
+    // Face toward the pillow so the top of the sprite (head/hair) is visible
+    this.facing = facing;
+    this.showFrame(DIR_OFFSET[this.facing]);
+    // Hide weapon while in bed
     this.weaponActor.graphics.visible = false;
   }
 
-  /** Exit bed: restore character and weapon sprites, clear sleeping flag. */
+  /** Exit bed: restore weapon sprite, clear sleeping flag. */
   exitBed(): void {
     this.sleeping = false;
-    this.graphics.visible = true;
     if (this.weaponSheet) {
       this.weaponActor.graphics.visible = true;
     }

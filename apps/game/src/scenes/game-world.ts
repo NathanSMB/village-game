@@ -121,6 +121,8 @@ export class GameWorld extends ex.Scene<GameWorldData> {
   // Sleeping state
   private playerSleeping = false;
   private sleepingBed: Building | null = null;
+  private preSleepPos: ex.Vector | null = null;
+  private blanketOverlay: ex.Actor | null = null;
 
   // Indoor tile cache (computed when entering planning mode for bed validation)
   private indoorTilesCache: Set<number> | null = null;
@@ -135,13 +137,14 @@ export class GameWorld extends ex.Scene<GameWorldData> {
   private selectedBuildType: BuildingType | null = null;
   private plannedBuildings = new Map<
     number,
-    { type: BuildingType; x: number; y: number; actor: ex.Actor }
+    { type: BuildingType; x: number; y: number; rotation: number; actor: ex.Actor }
   >();
   private plannedEdges = new Map<
     number,
     { type: BuildingType; edgeKey: number; axis: EdgeAxis; x: number; y: number; actor: ex.Actor }
   >();
   private planEdgeOrientation: EdgeOrientation = "N";
+  private planTileRotation = 0;
   private planRadiusOverlay: ex.Actor | null = null;
   private planMenuPanel: ex.ScreenElement | null = null;
   private planPlayerTileX = 0;
@@ -611,7 +614,12 @@ export class GameWorld extends ex.Scene<GameWorldData> {
     if (wasActionPressed(kb, "inventory")) {
       void engine.goToScene("inventory");
     }
-    if (this.player && !this.player.isBusy() && !this.player.isMoving()) {
+    if (
+      this.player &&
+      !this.player.isBusy() &&
+      !this.player.isMoving() &&
+      !this.player.isExhausted()
+    ) {
       if (wasActionPressed(kb, "build")) {
         this.enterPlanningMode();
       }
@@ -622,8 +630,13 @@ export class GameWorld extends ex.Scene<GameWorldData> {
       void engine.goToScene("game-over", { sceneActivationData: { cause } });
     }
 
-    // Attack handling
-    if (this.player && !this.player.isBusy() && !this.player.isMoving()) {
+    // Attack handling (blocked when exhausted)
+    if (
+      this.player &&
+      !this.player.isBusy() &&
+      !this.player.isMoving() &&
+      !this.player.isExhausted()
+    ) {
       if (wasActionPressed(kb, "attack")) {
         const style = this.player.startAttack();
         const facing = this.player.getFacingTile();
@@ -790,136 +803,143 @@ export class GameWorld extends ex.Scene<GameWorldData> {
     if (this.player && !this.player.isBusy() && !this.player.isMoving()) {
       const facing = this.player.getFacingTile();
       const facingKey = tileKey(facing.x, facing.y);
-      const bush = this.bushByTile.get(facingKey);
-      const facingWater = this.waterTiles.has(facingKey);
-      const groundStack = this.groundItems.get(facingKey);
-      const hasGroundItems = groundStack && !groundStack.isEmpty();
-      const facingSheep = this.sheepByTile.get(facingKey);
-      const hasSheep = facingSheep && !facingSheep.isDead;
+      const facingBuilding = this.buildingByTile.get(facingKey);
+      const exhausted = this.player.isExhausted();
 
-      if (bush?.canPick()) {
-        // Berry bush interaction
-        if (this.actionPrompt) {
-          this.actionPrompt.text = "[E] Pick";
-          this.actionPrompt.pos = ex.vec(bush.pos.x, bush.pos.y - TILE_SIZE / 2 - 4);
-          this.actionPrompt.graphics.visible = true;
-        }
-
-        if (wasActionPressed(kb, "action")) {
-          this.player.startPicking();
-
-          // Delay the actual pick until the animation finishes
-          const currentBush = bush;
-          const currentPlayer = this.player;
-          setTimeout(() => {
-            const berry = currentBush.pick();
-            if (berry) {
-              currentPlayer.inventory.bag.push(berry);
-              this.spawnPickupText(`+[${berry.name}]`, currentBush.pos.x, currentBush.pos.y);
-            }
-          }, 450);
-        }
-      } else if (facingWater) {
-        // Water drinking interaction
-        const waterWorldX = facing.x * TILE_SIZE + TILE_SIZE / 2;
-        const waterWorldY = facing.y * TILE_SIZE + TILE_SIZE / 2;
-
-        if (this.actionPrompt) {
-          this.actionPrompt.text = "[E] Drink";
-          this.actionPrompt.pos = ex.vec(waterWorldX, waterWorldY - TILE_SIZE / 2 - 4);
-          this.actionPrompt.graphics.visible = true;
-        }
-
-        if (wasActionPressed(kb, "action")) {
-          this.player.startDrinking();
-
-          // Spawn floating text after the drinking animation completes
-          setTimeout(() => {
-            this.spawnPickupText("+Thirst", waterWorldX, waterWorldY);
-          }, 950);
-        }
-      } else if (hasSheep) {
-        // Sheep petting interaction
-        const sheepWorldX = facingSheep.pos.x;
-        const sheepWorldY = facingSheep.pos.y;
-
-        if (this.actionPrompt) {
-          this.actionPrompt.text = "[E] Pet";
-          this.actionPrompt.pos = ex.vec(sheepWorldX, sheepWorldY - TILE_SIZE / 2 - 4);
-          this.actionPrompt.graphics.visible = true;
-        }
-
-        if (wasActionPressed(kb, "action")) {
-          facingSheep.toggleFollow();
-          this.spawnPickupText("*baaaa*", sheepWorldX, sheepWorldY);
-        }
-      } else if (hasGroundItems) {
-        // Ground item interaction
+      // Bed interaction — always allowed, even when exhausted
+      if (
+        facingBuilding &&
+        facingBuilding.type.id === "bed" &&
+        facingBuilding.state === "complete"
+      ) {
         const worldX = facing.x * TILE_SIZE + TILE_SIZE / 2;
         const worldY = facing.y * TILE_SIZE + TILE_SIZE / 2;
-        const count = groundStack.getCount();
 
         if (this.actionPrompt) {
-          this.actionPrompt.text = count > 1 ? `[E] Pick up (${count})` : "[E] Pick up";
+          this.actionPrompt.text = "[E] Sleep";
           this.actionPrompt.pos = ex.vec(worldX, worldY - TILE_SIZE / 2 - 4);
           this.actionPrompt.graphics.visible = true;
         }
 
         if (wasActionPressed(kb, "action")) {
-          if (count === 1) {
-            // Single item: pick up directly
-            this.pickupSingleItem(groundStack, facingKey, worldX, worldY);
-          } else {
-            // Multiple items: open item picker
-            this.openItemPicker(groundStack, facingKey, worldX, worldY);
-          }
+          this.enterSleep(facingBuilding);
+        }
+      } else if (exhausted) {
+        // Too tired to do anything — hide prompt
+        if (this.actionPrompt) {
+          this.actionPrompt.graphics.visible = false;
         }
       } else {
-        // Edge building interaction (doors/gates on edges)
-        const pTX = this.player.getTileX();
-        const pTY = this.player.getTileY();
-        const fEdgeKey = edgeKeyBetween(pTX, pTY, facing.x, facing.y);
-        const facingEdge = fEdgeKey != null ? this.edgeBuildings.get(fEdgeKey) : undefined;
-        if (facingEdge && facingEdge.type.interactable && facingEdge.state === "complete") {
-          const worldX = facing.x * TILE_SIZE + TILE_SIZE / 2;
-          const worldY = facing.y * TILE_SIZE + TILE_SIZE / 2;
-          const promptText = facingEdge.isOpen ? "[E] Close" : "[E] Open";
+        // Normal interactions (only when not exhausted)
+        const bush = this.bushByTile.get(facingKey);
+        const facingWater = this.waterTiles.has(facingKey);
+        const groundStack = this.groundItems.get(facingKey);
+        const hasGroundItems = groundStack && !groundStack.isEmpty();
+        const facingSheep = this.sheepByTile.get(facingKey);
+        const hasSheep = facingSheep && !facingSheep.isDead;
+
+        if (bush?.canPick()) {
+          // Berry bush interaction
+          if (this.actionPrompt) {
+            this.actionPrompt.text = "[E] Pick";
+            this.actionPrompt.pos = ex.vec(bush.pos.x, bush.pos.y - TILE_SIZE / 2 - 4);
+            this.actionPrompt.graphics.visible = true;
+          }
+
+          if (wasActionPressed(kb, "action")) {
+            this.player.startPicking();
+
+            // Delay the actual pick until the animation finishes
+            const currentBush = bush;
+            const currentPlayer = this.player;
+            setTimeout(() => {
+              const berry = currentBush.pick();
+              if (berry) {
+                currentPlayer.inventory.bag.push(berry);
+                this.spawnPickupText(`+[${berry.name}]`, currentBush.pos.x, currentBush.pos.y);
+              }
+            }, 450);
+          }
+        } else if (facingWater) {
+          // Water drinking interaction
+          const waterWorldX = facing.x * TILE_SIZE + TILE_SIZE / 2;
+          const waterWorldY = facing.y * TILE_SIZE + TILE_SIZE / 2;
 
           if (this.actionPrompt) {
-            this.actionPrompt.text = promptText;
+            this.actionPrompt.text = "[E] Drink";
+            this.actionPrompt.pos = ex.vec(waterWorldX, waterWorldY - TILE_SIZE / 2 - 4);
+            this.actionPrompt.graphics.visible = true;
+          }
+
+          if (wasActionPressed(kb, "action")) {
+            this.player.startDrinking();
+
+            // Spawn floating text after the drinking animation completes
+            setTimeout(() => {
+              this.spawnPickupText("+Thirst", waterWorldX, waterWorldY);
+            }, 950);
+          }
+        } else if (hasSheep) {
+          // Sheep petting interaction
+          const sheepWorldX = facingSheep.pos.x;
+          const sheepWorldY = facingSheep.pos.y;
+
+          if (this.actionPrompt) {
+            this.actionPrompt.text = "[E] Pet";
+            this.actionPrompt.pos = ex.vec(sheepWorldX, sheepWorldY - TILE_SIZE / 2 - 4);
+            this.actionPrompt.graphics.visible = true;
+          }
+
+          if (wasActionPressed(kb, "action")) {
+            facingSheep.toggleFollow();
+            this.spawnPickupText("*baaaa*", sheepWorldX, sheepWorldY);
+          }
+        } else if (hasGroundItems) {
+          // Ground item interaction
+          const worldX = facing.x * TILE_SIZE + TILE_SIZE / 2;
+          const worldY = facing.y * TILE_SIZE + TILE_SIZE / 2;
+          const count = groundStack.getCount();
+
+          if (this.actionPrompt) {
+            this.actionPrompt.text = count > 1 ? `[E] Pick up (${count})` : "[E] Pick up";
             this.actionPrompt.pos = ex.vec(worldX, worldY - TILE_SIZE / 2 - 4);
             this.actionPrompt.graphics.visible = true;
           }
 
           if (wasActionPressed(kb, "action")) {
-            facingEdge.toggle();
-            if (facingEdge.isSolid()) {
-              this.blockedEdges.add(fEdgeKey!);
+            if (count === 1) {
+              // Single item: pick up directly
+              this.pickupSingleItem(groundStack, facingKey, worldX, worldY);
             } else {
-              this.blockedEdges.delete(fEdgeKey!);
+              // Multiple items: open item picker
+              this.openItemPicker(groundStack, facingKey, worldX, worldY);
             }
-            this.recalculateIndoorLighting();
           }
         } else {
-          const facingBuilding = this.buildingByTile.get(facingKey);
-
-          if (
-            facingBuilding &&
-            facingBuilding.type.id === "bed" &&
-            facingBuilding.state === "complete"
-          ) {
-            // Bed interaction — sleep
+          // Edge building interaction (doors/gates on edges)
+          const pTX = this.player.getTileX();
+          const pTY = this.player.getTileY();
+          const fEdgeKey = edgeKeyBetween(pTX, pTY, facing.x, facing.y);
+          const facingEdge = fEdgeKey != null ? this.edgeBuildings.get(fEdgeKey) : undefined;
+          if (facingEdge && facingEdge.type.interactable && facingEdge.state === "complete") {
             const worldX = facing.x * TILE_SIZE + TILE_SIZE / 2;
             const worldY = facing.y * TILE_SIZE + TILE_SIZE / 2;
+            const promptText = facingEdge.isOpen ? "[E] Close" : "[E] Open";
 
             if (this.actionPrompt) {
-              this.actionPrompt.text = "[E] Sleep";
+              this.actionPrompt.text = promptText;
               this.actionPrompt.pos = ex.vec(worldX, worldY - TILE_SIZE / 2 - 4);
               this.actionPrompt.graphics.visible = true;
             }
 
             if (wasActionPressed(kb, "action")) {
-              this.enterSleep(facingBuilding);
+              facingEdge.toggle();
+              if (facingEdge.isSolid()) {
+                this.blockedEdges.add(fEdgeKey!);
+              } else {
+                this.blockedEdges.delete(fEdgeKey!);
+              }
+              this.recalculateIndoorLighting();
             }
           } else if (
             facingBuilding &&
@@ -970,11 +990,116 @@ export class GameWorld extends ex.Scene<GameWorldData> {
     this.playerSleeping = true;
     this.sleepingBed = bed;
     this.player.lockInput();
-    this.player.enterBed();
+
+    // Save original position so we can snap back on wake-up
+    this.preSleepPos = this.player.pos.clone();
+
+    // Position the player's head on the pillow.  The character sprite always
+    // has the head at the TOP of the 32×32 frame, so we rotate the whole
+    // actor to point the head toward the headboard, then nudge toward the
+    // footboard so the head lands on the pillow.
+    //
+    // Rotation 0 (N): headboard top    → actor rotation 0,       nudge +y
+    // Rotation 1 (E): headboard right  → actor rotation 90° CW,  nudge +y (maps to +x on screen)
+    // Rotation 2 (S): headboard bottom → actor rotation 180°,    nudge +y (maps to -y on screen)
+    // Rotation 3 (W): headboard left   → actor rotation 270° CW, nudge +y (maps to -x on screen)
+    const rot = bed.tileRotation;
+    const NUDGE = 3;
+    const offsets = [
+      { dx: 0, dy: NUDGE },
+      { dx: NUDGE, dy: 0 },
+      { dx: 0, dy: -NUDGE },
+      { dx: -NUDGE, dy: 0 },
+    ];
+
+    this.player.pos.x = bed.pos.x + offsets[rot].dx;
+    this.player.pos.y = bed.pos.y + offsets[rot].dy;
+    // Rotate the actor so the head (sprite top) points toward the headboard
+    this.player.rotation = (rot * Math.PI) / 2;
+    this.player.enterBed("down");
+
+    // Create a blanket overlay (z=11, above the player at z=10) that hides
+    // the character's body below the head.  The blanket is drawn in default
+    // (rotation 0) coordinates and then canvas-rotated to match the bed.
+    // Colours match the bed sheet (Gray clothing colour: 100, 100, 105).
+    this.blanketOverlay = new ex.Actor({
+      pos: ex.vec(bed.pos.x, bed.pos.y),
+      anchor: ex.vec(0.5, 0.5),
+      z: 11,
+    });
+
+    const blanketCanvas = new ex.Canvas({
+      width: TILE_SIZE,
+      height: TILE_SIZE,
+      cache: true,
+      draw: (ctx) => {
+        ctx.imageSmoothingEnabled = false;
+
+        // Apply the same rotation as the bed sprite
+        if (rot !== 0) {
+          ctx.save();
+          ctx.translate(TILE_SIZE / 2, TILE_SIZE / 2);
+          ctx.rotate((rot * Math.PI) / 2);
+          ctx.translate(-TILE_SIZE / 2, -TILE_SIZE / 2);
+        }
+
+        // Sheet area: x 2-30, y 14-30 (matches drawBed exactly)
+        const sx = 2;
+        const sw = 28;
+        const sy = 14;
+        const sh = 16;
+
+        // Base sheet colour
+        ctx.fillStyle = "rgb(100,100,105)";
+        ctx.fillRect(sx, sy, sw, sh);
+
+        // Subtle body bump — slightly lighter centre strip
+        ctx.fillStyle = "rgb(112,112,117)";
+        ctx.fillRect(sx + 6, sy + 1, sw - 12, sh - 3);
+
+        // Vertical fold lines
+        ctx.fillStyle = "rgb(80,80,84)";
+        ctx.fillRect(sx + 4, sy, 1, sh);
+        ctx.fillRect(sx + sw - 5, sy, 1, sh);
+
+        // Horizontal fold
+        ctx.fillRect(sx, sy + Math.floor(sh / 2), sw, 1);
+
+        // Top edge highlight (blanket pulled up to chin)
+        ctx.fillStyle = "rgb(131,131,135)";
+        ctx.fillRect(sx + 1, sy, sw - 2, 1);
+
+        // Bottom edge shadow
+        ctx.fillStyle = "rgb(70,70,74)";
+        ctx.fillRect(sx, sy + sh - 1, sw, 1);
+
+        if (rot !== 0) {
+          ctx.restore();
+        }
+      },
+    });
+
+    this.blanketOverlay.graphics.use(blanketCanvas);
+    this.add(this.blanketOverlay);
   }
 
   private exitSleep(): void {
     if (!this.player) return;
+
+    // Move the player back to where they were standing and reset rotation
+    if (this.preSleepPos) {
+      this.player.pos.x = this.preSleepPos.x;
+      this.player.pos.y = this.preSleepPos.y;
+      this.preSleepPos = null;
+    }
+    this.player.rotation = 0;
+
+    // Remove blanket overlay
+    if (this.blanketOverlay) {
+      this.remove(this.blanketOverlay);
+      this.blanketOverlay = null;
+    }
+
     this.playerSleeping = false;
     this.sleepingBed = null;
     this.player.exitBed();
@@ -1368,6 +1493,7 @@ export class GameWorld extends ex.Scene<GameWorldData> {
     this.planMenuOpen = true;
     this.selectedBuildType = null;
     this.planEdgeOrientation = "N";
+    this.planTileRotation = 0;
 
     // Compute indoor tiles once for bed placement validation
     this.indoorTilesCache = getIndoorTiles(this.buildingByTile, this.edgeBuildings);
@@ -1403,7 +1529,13 @@ export class GameWorld extends ex.Scene<GameWorldData> {
           }
         }
 
-        const building = new Building(planned.type, planned.x, planned.y, "hologram");
+        const building = new Building(
+          planned.type,
+          planned.x,
+          planned.y,
+          "hologram",
+          planned.rotation,
+        );
         building.onDestroy = () => this.removeBuilding(building, key);
         this.buildings.push(building);
         this.buildingByTile.set(key, building);
@@ -1511,13 +1643,18 @@ export class GameWorld extends ex.Scene<GameWorldData> {
         }
       }
 
-      // Rotate edge orientation
-      if (wasActionPressed(kb, "rotate") && this.selectedBuildType?.placement === "edge") {
-        const cycle: EdgeOrientation[] = ["N", "E", "S", "W"];
-        const idx = cycle.indexOf(this.planEdgeOrientation);
-        this.planEdgeOrientation = cycle[(idx + 1) % 4];
-        this.planCursor?.setOrientation(this.planEdgeOrientation);
-        this.updateCursorValidity();
+      // Rotate building orientation
+      if (wasActionPressed(kb, "rotate")) {
+        if (this.selectedBuildType?.placement === "edge") {
+          const cycle: EdgeOrientation[] = ["N", "E", "S", "W"];
+          const idx = cycle.indexOf(this.planEdgeOrientation);
+          this.planEdgeOrientation = cycle[(idx + 1) % 4];
+          this.planCursor?.setOrientation(this.planEdgeOrientation);
+          this.updateCursorValidity();
+        } else if (this.selectedBuildType?.placement === "tile") {
+          this.planTileRotation = (this.planTileRotation + 1) % 4;
+          this.updateCursorValidity();
+        }
       }
 
       // Place a building at cursor
@@ -1582,7 +1719,9 @@ export class GameWorld extends ex.Scene<GameWorldData> {
       anchor: ex.vec(0.5, 0.5),
       z: 5,
     });
-    ghost.graphics.use(buildingGraphic(this.selectedBuildType.id, "ghost"));
+    ghost.graphics.use(
+      buildingGraphic(this.selectedBuildType.id, "ghost", false, this.planTileRotation),
+    );
     ghost.graphics.opacity = 0.4;
     this.add(ghost);
 
@@ -1590,6 +1729,7 @@ export class GameWorld extends ex.Scene<GameWorldData> {
       type: this.selectedBuildType,
       x: this.planCursorX,
       y: this.planCursorY,
+      rotation: this.planTileRotation,
       actor: ghost,
     });
 
@@ -1962,7 +2102,7 @@ export class GameWorld extends ex.Scene<GameWorldData> {
       // Only restore tile-based buildings (floors); skip old wall/fence entries
       if (type.placement !== "tile") continue;
 
-      const building = new Building(type, saved.tileX, saved.tileY, saved.state);
+      const building = new Building(type, saved.tileX, saved.tileY, saved.state, saved.rotation);
       building.restoreState(saved);
       building.onDestroy = () => this.removeBuilding(building, tileKey(saved.tileX, saved.tileY));
 

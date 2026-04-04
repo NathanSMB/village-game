@@ -41,6 +41,8 @@ export interface BuildingSaveState {
   materialsDelivered: number;
   hp: number;
   isOpen: boolean;
+  /** 0-3 clockwise quarter-turns (0 = default). Absent in old saves → 0. */
+  rotation?: number;
 }
 
 export interface EdgeBuildingSaveState {

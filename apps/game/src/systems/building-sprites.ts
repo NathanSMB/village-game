@@ -505,9 +505,15 @@ const TILE_DRAW_MAP: Record<string, TileDrawFn> = {
 };
 
 /**
- * Create an Excalibur Canvas graphic for a tile-based building type (floor).
+ * Create an Excalibur Canvas graphic for a tile-based building type.
+ * @param rotation  0-3 clockwise quarter-turns applied around the tile centre.
  */
-export function buildingGraphic(typeId: string, mode: SpriteMode, isOpen = false): ex.Canvas {
+export function buildingGraphic(
+  typeId: string,
+  mode: SpriteMode,
+  isOpen = false,
+  rotation = 0,
+): ex.Canvas {
   const canvas = new ex.Canvas({
     width: TILE,
     height: TILE,
@@ -515,8 +521,20 @@ export function buildingGraphic(typeId: string, mode: SpriteMode, isOpen = false
     draw: (ctx) => {
       ctx.imageSmoothingEnabled = false;
       ctx.clearRect(0, 0, TILE, TILE);
+
+      if (rotation !== 0) {
+        ctx.save();
+        ctx.translate(TILE / 2, TILE / 2);
+        ctx.rotate((rotation * Math.PI) / 2);
+        ctx.translate(-TILE / 2, -TILE / 2);
+      }
+
       const fn = TILE_DRAW_MAP[typeId];
       if (fn) fn(ctx, mode, isOpen);
+
+      if (rotation !== 0) {
+        ctx.restore();
+      }
     },
   });
   return canvas;

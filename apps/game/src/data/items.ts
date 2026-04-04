@@ -129,6 +129,24 @@ export const ITEMS: Record<string, Item> = {
     weight: 3,
     itemSprite: "log",
   },
+  mutton: {
+    id: "mutton",
+    name: "Raw Mutton",
+    description: "Raw meat from a sheep. Needs to be cooked before eating.",
+    rarity: Rarity.Common,
+    stats: {},
+    weight: 2,
+    itemSprite: "mutton",
+  },
+  wool: {
+    id: "wool",
+    name: "Wool",
+    description: "Soft wool from a sheep. Useful for crafting warm clothing.",
+    rarity: Rarity.Common,
+    stats: {},
+    weight: 1,
+    itemSprite: "wool",
+  },
 };
 
 export function createStarterItem(baseId: string, colorIndex: number): Item {

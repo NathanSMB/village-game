@@ -33,6 +33,16 @@ export interface BigRockSaveState {
   damageAccum: number;
 }
 
+export interface BuildingSaveState {
+  typeId: string;
+  tileX: number;
+  tileY: number;
+  state: "hologram" | "complete";
+  materialsDelivered: number;
+  hp: number;
+  isOpen: boolean;
+}
+
 export interface SaveData {
   name: string;
   timestamp: number;
@@ -49,6 +59,7 @@ export interface SaveData {
   trees?: TreeSaveState[];
   rocks?: BigRockSaveState[];
   groundItems?: GroundItemSaveState[];
+  buildings?: BuildingSaveState[];
 }
 
 const DB_NAME = "village-game";

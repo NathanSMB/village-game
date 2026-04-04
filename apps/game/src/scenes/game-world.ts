@@ -13,9 +13,14 @@ import { AttackEffect } from "../actors/attack-effect.ts";
 import { VitalsHud } from "../actors/vitals-hud.ts";
 import { wasActionPressed } from "../systems/keybinds.ts";
 import { ITEMS } from "../data/items.ts";
+import { BUILDING_TYPES, BUILDING_TYPE_MAP, type BuildingType } from "../data/buildings.ts";
+import { Building } from "../actors/building.ts";
+import { PlanCursor } from "../actors/plan-cursor.ts";
+import { buildingGraphic } from "../systems/building-sprites.ts";
 import type {
   BerryBushSaveState,
   BigRockSaveState,
+  BuildingSaveState,
   GroundItemSaveState,
   TreeSaveState,
   SaveData,
@@ -68,6 +73,27 @@ export class GameWorld extends ex.Scene<GameWorldData> {
   private itemPickerTileKey = 0;
   private itemPickerLabels: ex.Label[] = [];
   private itemPickerBg: ex.Actor | null = null;
+
+  // Building system
+  private buildings: Building[] = [];
+  private buildingByTile = new Map<number, Building>();
+
+  // Planning mode state
+  private planningMode = false;
+  private planCursor: PlanCursor | null = null;
+  private planCursorX = 0;
+  private planCursorY = 0;
+  private planMenuIndex = 0;
+  private planMenuOpen = true; // true = browsing menu, false = placing
+  private selectedBuildType: BuildingType | null = null;
+  private plannedBuildings = new Map<
+    number,
+    { type: BuildingType; x: number; y: number; actor: ex.Actor }
+  >();
+  private planRadiusOverlay: ex.Actor | null = null;
+  private planMenuPanel: ex.ScreenElement | null = null;
+  private planPlayerTileX = 0;
+  private planPlayerTileY = 0;
 
   override onInitialize(): void {
     this.tilemap = new ex.TileMap({
@@ -429,6 +455,11 @@ export class GameWorld extends ex.Scene<GameWorldData> {
       if (context.data.type === "load" && context.data.save.groundItems) {
         this.restoreGroundItemStates(context.data.save.groundItems);
       }
+
+      // Restore building states from save
+      if (context.data.type === "load" && context.data.save.buildings) {
+        this.restoreBuildingStates(context.data.save.buildings);
+      }
     }
 
     if (this.player) {
@@ -441,6 +472,12 @@ export class GameWorld extends ex.Scene<GameWorldData> {
 
   override onPreUpdate(engine: ex.Engine): void {
     const kb = engine.input.keyboard;
+
+    // Planning mode input handling
+    if (this.planningMode) {
+      this.handlePlanningInput(kb);
+      return; // Block all other input while planning
+    }
 
     // Item picker overlay input handling
     if (this.itemPickerOpen) {
@@ -469,6 +506,11 @@ export class GameWorld extends ex.Scene<GameWorldData> {
     }
     if (wasActionPressed(kb, "inventory")) {
       void engine.goToScene("inventory");
+    }
+    if (this.player && !this.player.isBusy() && !this.player.isMoving()) {
+      if (wasActionPressed(kb, "build")) {
+        this.enterPlanningMode();
+      }
     }
 
     if (this.player && !isAlive(this.player.vitals)) {
@@ -524,6 +566,54 @@ export class GameWorld extends ex.Scene<GameWorldData> {
               }
               if (damage > 0) {
                 this.spawnPickupText(`-${damage}`, targetX, targetY);
+              }
+            }
+
+            // Building construction / repair / damage
+            const building = this.buildingByTile.get(facingKey);
+            if (building) {
+              if (building.state === "hologram") {
+                // Under construction — only hammer can deliver materials
+                if (weapon.id === "hammer") {
+                  const delivered = building.deliverMaterial(this.player!.inventory);
+                  if (delivered) {
+                    const itemName = ITEMS[delivered]?.name ?? delivered;
+                    this.spawnPickupText(`+[${itemName}]`, targetX, targetY);
+                    // deliverMaterial() may have called completeConstruction() internally
+                    if ((building.state as string) === "complete") {
+                      this.spawnPickupText("Built!", targetX, targetY - 16);
+                      if (building.isSolid()) {
+                        this.blockedTiles.add(facingKey);
+                      }
+                    }
+                  } else {
+                    const nextReq = building.getNextRequired();
+                    if (nextReq) {
+                      const reqName = ITEMS[nextReq]?.name ?? nextReq;
+                      this.spawnPickupText(`Need [${reqName}]!`, targetX, targetY);
+                    }
+                  }
+                }
+                // Non-hammer weapons do nothing to holograms
+              } else {
+                // Complete building
+                if (weapon.id === "hammer") {
+                  const mult = canonical.toolMultipliers?.building ?? 1;
+                  const repairAmount = baseDamage * mult;
+                  const repaired = building.repair(repairAmount);
+                  if (repaired > 0) {
+                    this.spawnPickupText(`+${repaired}`, targetX, targetY);
+                  }
+                } else {
+                  const damage = baseDamage;
+                  const destroyed = building.takeBuildingDamage(damage);
+                  if (damage > 0) {
+                    this.spawnPickupText(`-${damage}`, targetX, targetY);
+                  }
+                  if (destroyed) {
+                    this.removeBuilding(building, facingKey);
+                  }
+                }
               }
             }
           }
@@ -603,7 +693,33 @@ export class GameWorld extends ex.Scene<GameWorldData> {
           }
         }
       } else {
-        if (this.actionPrompt) {
+        // Building interaction (doors/gates)
+        const facingBuilding = this.buildingByTile.get(facingKey);
+        if (
+          facingBuilding &&
+          facingBuilding.type.interactable &&
+          facingBuilding.state === "complete"
+        ) {
+          const worldX = facing.x * TILE_SIZE + TILE_SIZE / 2;
+          const worldY = facing.y * TILE_SIZE + TILE_SIZE / 2;
+          const promptText = facingBuilding.isOpen ? "[E] Close" : "[E] Open";
+
+          if (this.actionPrompt) {
+            this.actionPrompt.text = promptText;
+            this.actionPrompt.pos = ex.vec(worldX, worldY - TILE_SIZE / 2 - 4);
+            this.actionPrompt.graphics.visible = true;
+          }
+
+          if (wasActionPressed(kb, "action")) {
+            facingBuilding.toggle();
+            // Update blockedTiles based on new state
+            if (facingBuilding.isSolid()) {
+              this.blockedTiles.add(facingKey);
+            } else {
+              this.blockedTiles.delete(facingKey);
+            }
+          }
+        } else if (this.actionPrompt) {
           this.actionPrompt.graphics.visible = false;
         }
       }
@@ -985,6 +1101,417 @@ export class GameWorld extends ex.Scene<GameWorldData> {
     for (const saved of states) {
       for (const item of saved.items) {
         this.dropItemAt(saved.tileX, saved.tileY, item);
+      }
+    }
+  }
+
+  // ==================== Planning Mode ====================
+
+  private enterPlanningMode(): void {
+    if (!this.player || this.planningMode) return;
+
+    this.planningMode = true;
+    this.player.lockInput();
+    this.planPlayerTileX = this.player.getTileX();
+    this.planPlayerTileY = this.player.getTileY();
+    this.planCursorX = this.planPlayerTileX;
+    this.planCursorY = this.planPlayerTileY;
+    this.planMenuIndex = 0;
+    this.planMenuOpen = true;
+    this.selectedBuildType = null;
+
+    // Create radius overlay
+    this.createPlanRadiusOverlay();
+
+    // Create cursor
+    this.planCursor = new PlanCursor(this.planCursorX, this.planCursorY);
+    this.add(this.planCursor);
+    this.updateCursorValidity();
+
+    // Create build menu panel
+    this.createPlanMenu();
+  }
+
+  private exitPlanningMode(confirm: boolean): void {
+    if (!this.player) return;
+
+    if (confirm && this.plannedBuildings.size > 0) {
+      // Spawn buildings as holograms
+      for (const planned of this.plannedBuildings.values()) {
+        const building = new Building(planned.type, planned.x, planned.y, "hologram");
+        building.onDestroy = () => this.removeBuilding(building, tileKey(planned.x, planned.y));
+        this.buildings.push(building);
+        this.buildingByTile.set(tileKey(planned.x, planned.y), building);
+        this.add(building);
+      }
+    }
+
+    // Clean up ghost actors from planned buildings
+    for (const planned of this.plannedBuildings.values()) {
+      this.remove(planned.actor);
+    }
+    this.plannedBuildings.clear();
+
+    // Clean up UI
+    if (this.planCursor) {
+      this.remove(this.planCursor);
+      this.planCursor = null;
+    }
+    if (this.planRadiusOverlay) {
+      this.remove(this.planRadiusOverlay);
+      this.planRadiusOverlay = null;
+    }
+    this.cleanupPlanMenu();
+
+    this.planningMode = false;
+    this.selectedBuildType = null;
+    this.player.unlockInput();
+  }
+
+  private handlePlanningInput(kb: ex.Keyboard): void {
+    // Escape exits planning mode without confirming
+    if (wasActionPressed(kb, "back")) {
+      this.exitPlanningMode(false);
+      return;
+    }
+
+    if (this.planMenuOpen) {
+      // Menu navigation
+      if (wasActionPressed(kb, "moveUp")) {
+        this.planMenuIndex = Math.max(0, this.planMenuIndex - 1);
+        this.updatePlanMenu();
+      }
+      if (wasActionPressed(kb, "moveDown")) {
+        this.planMenuIndex = Math.min(BUILDING_TYPES.length - 1, this.planMenuIndex + 1);
+        this.updatePlanMenu();
+      }
+      // Select a build type and enter placement mode
+      if (wasActionPressed(kb, "action") || wasActionPressed(kb, "confirm")) {
+        this.selectedBuildType = BUILDING_TYPES[this.planMenuIndex];
+        this.planMenuOpen = false;
+        this.updatePlanMenu();
+        this.updateCursorValidity();
+      }
+    } else {
+      // Placement mode — cursor movement
+      let dx = 0;
+      let dy = 0;
+      if (wasActionPressed(kb, "moveUp")) dy = -1;
+      if (wasActionPressed(kb, "moveDown")) dy = 1;
+      if (wasActionPressed(kb, "moveLeft")) dx = -1;
+      if (wasActionPressed(kb, "moveRight")) dx = 1;
+
+      if (dx !== 0 || dy !== 0) {
+        const newX = this.planCursorX + dx;
+        const newY = this.planCursorY + dy;
+        // Clamp within 5-tile Chebyshev distance of player
+        if (
+          Math.abs(newX - this.planPlayerTileX) <= 5 &&
+          Math.abs(newY - this.planPlayerTileY) <= 5 &&
+          newX >= 0 &&
+          newX < MAP_COLS &&
+          newY >= 0 &&
+          newY < MAP_ROWS
+        ) {
+          this.planCursorX = newX;
+          this.planCursorY = newY;
+          this.planCursor?.moveTo(newX, newY);
+          this.updateCursorValidity();
+        }
+      }
+
+      // Place a building at cursor
+      if (wasActionPressed(kb, "action") || wasActionPressed(kb, "confirm")) {
+        if (this.selectedBuildType) {
+          this.placePlannedBuilding();
+        } else if (this.plannedBuildings.size > 0) {
+          // No type selected + confirm = finalize
+          this.exitPlanningMode(true);
+          return;
+        }
+      }
+
+      // Remove a planned building at cursor
+      if (wasActionPressed(kb, "drop")) {
+        this.removePlannedBuilding();
+      }
+
+      // Go back to menu to pick a different type (or deselect)
+      if (wasActionPressed(kb, "inventory")) {
+        this.selectedBuildType = null;
+        this.planMenuOpen = true;
+        this.updatePlanMenu();
+        this.updateCursorValidity();
+      }
+
+      // Confirm all planned builds with build key
+      if (wasActionPressed(kb, "build")) {
+        if (this.plannedBuildings.size > 0) {
+          this.exitPlanningMode(true);
+          return;
+        }
+      }
+    }
+  }
+
+  private placePlannedBuilding(): void {
+    if (!this.selectedBuildType) return;
+    const key = tileKey(this.planCursorX, this.planCursorY);
+
+    // Validate placement
+    if (!this.isTileValidForBuilding(this.planCursorX, this.planCursorY)) return;
+
+    // Create ghost actor for visual feedback
+    const worldX = this.planCursorX * TILE_SIZE + TILE_SIZE / 2;
+    const worldY = this.planCursorY * TILE_SIZE + TILE_SIZE / 2;
+    const ghost = new ex.Actor({
+      pos: ex.vec(worldX, worldY),
+      width: TILE_SIZE,
+      height: TILE_SIZE,
+      anchor: ex.vec(0.5, 0.5),
+      z: 5,
+    });
+    ghost.graphics.use(buildingGraphic(this.selectedBuildType.id, "ghost"));
+    ghost.graphics.opacity = 0.4;
+    this.add(ghost);
+
+    this.plannedBuildings.set(key, {
+      type: this.selectedBuildType,
+      x: this.planCursorX,
+      y: this.planCursorY,
+      actor: ghost,
+    });
+
+    this.updateCursorValidity();
+  }
+
+  private removePlannedBuilding(): void {
+    const key = tileKey(this.planCursorX, this.planCursorY);
+    const planned = this.plannedBuildings.get(key);
+    if (planned) {
+      this.remove(planned.actor);
+      this.plannedBuildings.delete(key);
+      this.updateCursorValidity();
+    }
+  }
+
+  private isTileValidForBuilding(tx: number, ty: number): boolean {
+    const key = tileKey(tx, ty);
+    // Can't place on blocked tiles (trees, rocks, bushes, water, other buildings)
+    if (this.blockedTiles.has(key)) return false;
+    if (this.waterTiles.has(key)) return false;
+    // Can't place on existing buildings (including holograms)
+    if (this.buildingByTile.has(key)) return false;
+    // Can't place on already-planned tiles
+    if (this.plannedBuildings.has(key)) return false;
+    // Can't place on player's tile
+    if (this.player && tx === this.player.getTileX() && ty === this.player.getTileY()) return false;
+    return true;
+  }
+
+  private updateCursorValidity(): void {
+    if (!this.planCursor) return;
+    const valid = this.isTileValidForBuilding(this.planCursorX, this.planCursorY);
+    this.planCursor.setValid(valid);
+  }
+
+  // ==================== Planning Mode UI ====================
+
+  private createPlanRadiusOverlay(): void {
+    if (!this.player) return;
+
+    const centerX = this.planPlayerTileX * TILE_SIZE + TILE_SIZE / 2;
+    const centerY = this.planPlayerTileY * TILE_SIZE + TILE_SIZE / 2;
+    const radius = 5;
+    const size = (radius * 2 + 1) * TILE_SIZE;
+
+    this.planRadiusOverlay = new ex.Actor({
+      pos: ex.vec(centerX, centerY),
+      anchor: ex.vec(0.5, 0.5),
+      z: 1,
+    });
+
+    const canvas = new ex.Canvas({
+      width: size,
+      height: size,
+      cache: true,
+      draw: (ctx) => {
+        ctx.imageSmoothingEnabled = false;
+
+        // Subtle blue tinted interior
+        ctx.fillStyle = "rgba(0, 100, 200, 0.04)";
+        ctx.fillRect(0, 0, size, size);
+
+        // Dashed border
+        ctx.strokeStyle = "rgba(80, 160, 255, 0.5)";
+        ctx.lineWidth = 2;
+        ctx.setLineDash([6, 4]);
+        ctx.strokeRect(1, 1, size - 2, size - 2);
+        ctx.setLineDash([]);
+      },
+    });
+
+    this.planRadiusOverlay.graphics.use(canvas);
+    this.add(this.planRadiusOverlay);
+  }
+
+  private readonly PLAN_PANEL_WIDTH = 190;
+  private readonly PLAN_LINE_HEIGHT = 22;
+
+  private createPlanMenu(): void {
+    this.planMenuPanel = new ex.ScreenElement({
+      x: 8,
+      y: 40,
+      z: 200,
+    });
+    this.add(this.planMenuPanel);
+    this.updatePlanMenu();
+  }
+
+  private updatePlanMenu(): void {
+    if (!this.planMenuPanel) return;
+
+    const w = this.PLAN_PANEL_WIDTH;
+    const lh = this.PLAN_LINE_HEIGHT;
+    const headerH = 28;
+    const hintH = 40;
+    const h = headerH + BUILDING_TYPES.length * lh + hintH + 12;
+    const menuOpen = this.planMenuOpen;
+    const menuIdx = this.planMenuIndex;
+    const activeId = this.selectedBuildType?.id ?? null;
+
+    const canvas = new ex.Canvas({
+      width: w,
+      height: h,
+      cache: false,
+      draw: (ctx) => {
+        ctx.imageSmoothingEnabled = false;
+
+        // Background
+        ctx.fillStyle = "rgba(10, 10, 20, 0.88)";
+        ctx.beginPath();
+        const r = 4;
+        ctx.moveTo(r, 0);
+        ctx.lineTo(w - r, 0);
+        ctx.arcTo(w, 0, w, r, r);
+        ctx.lineTo(w, h - r);
+        ctx.arcTo(w, h, w - r, h, r);
+        ctx.lineTo(r, h);
+        ctx.arcTo(0, h, 0, h - r, r);
+        ctx.lineTo(0, r);
+        ctx.arcTo(0, 0, r, 0, r);
+        ctx.closePath();
+        ctx.fill();
+        ctx.strokeStyle = "rgba(80, 160, 255, 0.3)";
+        ctx.lineWidth = 1;
+        ctx.stroke();
+
+        // Header
+        ctx.fillStyle = "#ffffff";
+        ctx.font = "bold 14px monospace";
+        ctx.textAlign = "center";
+        ctx.fillText("BUILD", w / 2, 18);
+
+        // Divider
+        ctx.strokeStyle = "rgba(80, 160, 255, 0.2)";
+        ctx.beginPath();
+        ctx.moveTo(8, headerH);
+        ctx.lineTo(w - 8, headerH);
+        ctx.stroke();
+
+        // Options
+        for (let i = 0; i < BUILDING_TYPES.length; i++) {
+          const bt = BUILDING_TYPES[i];
+          const y = headerH + 6 + i * lh + lh / 2;
+          const selected = menuOpen && i === menuIdx;
+          const active = !menuOpen && bt.id === activeId;
+
+          // Selection highlight bar
+          if (selected) {
+            ctx.fillStyle = "rgba(240, 192, 64, 0.12)";
+            ctx.fillRect(4, headerH + 4 + i * lh, w - 8, lh);
+          }
+
+          // Name
+          const prefix = selected ? "> " : active ? "* " : "  ";
+          ctx.textAlign = "left";
+          ctx.font = selected || active ? "bold 12px monospace" : "12px monospace";
+          ctx.fillStyle = selected ? "#f0c040" : active ? "#40c0ff" : "#ffffff";
+          ctx.fillText(prefix + bt.name, 8, y + 1);
+
+          // Cost
+          const costStr = bt.ingredients
+            .map((ing) => `${ing.count}x${ITEMS[ing.itemId]?.name ?? ing.itemId}`)
+            .join(" ");
+          ctx.textAlign = "right";
+          ctx.font = "10px monospace";
+          ctx.fillStyle = selected ? "#f0c040" : active ? "#40c0ff" : "#888888";
+          ctx.fillText(costStr, w - 8, y + 1);
+        }
+
+        // Hint text
+        ctx.textAlign = "center";
+        ctx.font = "9px monospace";
+        ctx.fillStyle = "#666666";
+        const hintY = headerH + 6 + BUILDING_TYPES.length * lh + 12;
+        if (menuOpen) {
+          ctx.fillText("[E] Select  [Esc] Cancel", w / 2, hintY);
+        } else {
+          ctx.fillText("[E] Place  [Q] Remove  [I] Menu", w / 2, hintY);
+          ctx.fillText("[B] Confirm  [Esc] Cancel", w / 2, hintY + 12);
+        }
+      },
+    });
+
+    this.planMenuPanel.graphics.use(canvas);
+  }
+
+  private cleanupPlanMenu(): void {
+    if (this.planMenuPanel) {
+      this.remove(this.planMenuPanel);
+      this.planMenuPanel = null;
+    }
+  }
+
+  // ==================== Building Management ====================
+
+  private removeBuilding(building: Building, key: number): void {
+    this.blockedTiles.delete(key);
+    this.buildingByTile.delete(key);
+    const idx = this.buildings.indexOf(building);
+    if (idx !== -1) this.buildings.splice(idx, 1);
+  }
+
+  // ==================== Building Save/Load ====================
+
+  getBuildingStates(): BuildingSaveState[] {
+    return this.buildings.map((b) => b.getState());
+  }
+
+  private restoreBuildingStates(states: BuildingSaveState[]): void {
+    // Clear any existing buildings
+    for (const building of this.buildings) {
+      this.remove(building);
+    }
+    this.buildings = [];
+    this.buildingByTile.clear();
+
+    for (const saved of states) {
+      const type = BUILDING_TYPE_MAP[saved.typeId];
+      if (!type) continue;
+
+      const building = new Building(type, saved.tileX, saved.tileY, saved.state);
+      building.restoreState(saved);
+      building.onDestroy = () => this.removeBuilding(building, tileKey(saved.tileX, saved.tileY));
+
+      const key = tileKey(saved.tileX, saved.tileY);
+      this.buildings.push(building);
+      this.buildingByTile.set(key, building);
+      this.add(building);
+
+      // Restore blocked state
+      if (building.isSolid()) {
+        this.blockedTiles.add(key);
       }
     }
   }

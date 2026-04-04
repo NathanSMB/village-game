@@ -21,6 +21,8 @@ import { RECIPES } from "../data/recipes.ts";
 import { canCraft, craft } from "../types/crafting.ts";
 import { ITEMS } from "../data/items.ts";
 
+/* ── Font constants ─────────────────────────────────────────────── */
+
 const FONT_DROP_HINT = new ex.Font({
   family: "monospace",
   size: 14,
@@ -155,11 +157,50 @@ const FONT_CRAFT_SELECTED = new ex.Font({
   baseAlign: ex.BaseAlign.Middle,
 });
 
-const MAX_VISIBLE_BAG = 8;
+const FONT_FILTER = new ex.Font({
+  family: "monospace",
+  size: 14,
+  color: ex.Color.fromHex("#555555"),
+  textAlign: ex.TextAlign.Left,
+  baseAlign: ex.BaseAlign.Middle,
+});
+
+const FONT_FILTER_ACTIVE = new ex.Font({
+  family: "monospace",
+  size: 14,
+  bold: true,
+  color: ex.Color.fromHex("#f0c040"),
+  textAlign: ex.TextAlign.Left,
+  baseAlign: ex.BaseAlign.Middle,
+});
+
+const FONT_FILTER_TYPING = new ex.Font({
+  family: "monospace",
+  size: 14,
+  bold: true,
+  color: ex.Color.fromHex("#66cc66"),
+  textAlign: ex.TextAlign.Left,
+  baseAlign: ex.BaseAlign.Middle,
+});
+
+/* ── Layout constants ───────────────────────────────────────────── */
+
+const MAX_VISIBLE_BAG = 7;
 const MAX_VISIBLE_RECIPES = 8;
 const SLOT_COUNT = ALL_EQUIPMENT_SLOTS.length;
+const MAX_FILTER_LENGTH = 16;
+
+/* ── Types ──────────────────────────────────────────────────────── */
 
 type Focus = "equipment" | "bag" | "crafting";
+type SortMode = "default" | "a-z" | "z-a";
+
+interface BagEntry {
+  item: Item;
+  realIndex: number;
+}
+
+/* ── Scene ──────────────────────────────────────────────────────── */
 
 export class InventoryScene extends ex.Scene {
   private focus: Focus = "equipment";
@@ -171,8 +212,18 @@ export class InventoryScene extends ex.Scene {
   private inventory: InventoryState | null = null;
   private player: Player | null = null;
 
+  // Filter & sort
+  private filterText = "";
+  private filterActive = false;
+  private sortMode: SortMode = "default";
+  private viewBag: BagEntry[] = [];
+  private onFilterBar = false;
+
+  // Labels
   private slotLabels: ex.Label[] = [];
   private slotValues: ex.Label[] = [];
+  private bagHeaderLabel!: ex.Label;
+  private filterLabel!: ex.Label;
   private bagLabels: ex.Label[] = [];
   private bagEmptyLabel!: ex.Label;
   private weightLabel!: ex.Label;
@@ -189,6 +240,8 @@ export class InventoryScene extends ex.Scene {
   private allActors: ex.Actor[] = [];
   private centerX = 0;
 
+  /* ── Lifecycle ──────────────────────────────────────────────── */
+
   override onInitialize(engine: ex.Engine): void {
     this.centerX = engine.drawWidth / 2;
 
@@ -200,7 +253,7 @@ export class InventoryScene extends ex.Scene {
     this.add(title);
     this.allActors.push(title);
 
-    // Equipment panel (left side)
+    // ── Equipment panel (left side) ──
     const eqHeaderX = this.centerX * 0.35;
     const eqHeader = new ex.Label({
       text: "Equipment",
@@ -243,27 +296,42 @@ export class InventoryScene extends ex.Scene {
       this.slotValues.push(value);
     }
 
-    // Bag panel (center)
+    // ── Bag panel (center) ──
     const bagHeaderX = this.centerX;
-    const bagHeader = new ex.Label({
+    const bagItemX = bagHeaderX - 60;
+
+    this.bagHeaderLabel = new ex.Label({
       text: "Bag",
       pos: ex.vec(bagHeaderX, 65),
       font: FONT_HEADER,
     });
-    this.add(bagHeader);
-    this.allActors.push(bagHeader);
+    this.add(this.bagHeaderLabel);
+    this.allActors.push(this.bagHeaderLabel);
 
-    const bagStartY = 95;
-    const bagItemX = bagHeaderX - 60;
+    // Filter bar (sits between header and item list)
+    this.filterLabel = new ex.Label({
+      text: "",
+      pos: ex.vec(bagItemX, 90),
+      font: FONT_FILTER.clone(),
+    });
+    this.filterLabel.on("pointerdown", () => {
+      this.focus = "bag";
+      this.onFilterBar = true;
+      this.filterActive = true;
+      this.updateDisplay();
+    });
+    this.add(this.filterLabel);
+    this.allActors.push(this.filterLabel);
 
     this.bagEmptyLabel = new ex.Label({
       text: "Empty",
-      pos: ex.vec(bagHeaderX, 160),
+      pos: ex.vec(bagHeaderX, 185),
       font: FONT_BAG_EMPTY,
     });
     this.add(this.bagEmptyLabel);
     this.allActors.push(this.bagEmptyLabel);
 
+    const bagStartY = 115;
     for (let i = 0; i < MAX_VISIBLE_BAG; i++) {
       const y = bagStartY + i * 28;
       const label = new ex.Label({
@@ -272,16 +340,20 @@ export class InventoryScene extends ex.Scene {
         font: FONT_BAG_ITEM.clone(),
       });
       label.on("pointerdown", () => {
-        this.focus = "bag";
-        this.bagIndex = this.bagScrollOffset + i;
-        this.updateDisplay();
+        const viewIdx = this.bagScrollOffset + i;
+        if (viewIdx < this.viewBag.length) {
+          this.focus = "bag";
+          this.onFilterBar = false;
+          this.bagIndex = viewIdx;
+          this.updateDisplay();
+        }
       });
       this.add(label);
       this.allActors.push(label);
       this.bagLabels.push(label);
     }
 
-    // Crafting panel (right side)
+    // ── Crafting panel (right side) ──
     const craftHeaderX = this.centerX * 1.65;
     const craftHeader = new ex.Label({
       text: "Craft",
@@ -311,7 +383,7 @@ export class InventoryScene extends ex.Scene {
       this.craftLabels.push(label);
     }
 
-    // Weight display
+    // ── Weight display ──
     this.weightLabel = new ex.Label({
       text: "",
       pos: ex.vec(this.centerX, 325),
@@ -320,7 +392,7 @@ export class InventoryScene extends ex.Scene {
     this.add(this.weightLabel);
     this.allActors.push(this.weightLabel);
 
-    // Detail panel (bottom area)
+    // ── Detail panel (bottom area) ──
     const detailX = 30;
     const detailY = 350;
 
@@ -383,18 +455,31 @@ export class InventoryScene extends ex.Scene {
     this.bagScrollOffset = 0;
     this.craftIndex = 0;
     this.craftScrollOffset = 0;
+    this.filterText = "";
+    this.filterActive = false;
+    this.sortMode = "default";
+    this.onFilterBar = false;
+    this.rebuildViewBag();
     this.updateDisplay();
   }
 
+  /* ── Frame update ───────────────────────────────────────────── */
+
   override onPreUpdate(engine: ex.Engine): void {
     const kb = engine.input.keyboard;
+
+    // Filter typing mode captures all keyboard input
+    if (this.filterActive) {
+      this.handleFilterInput(kb);
+      return;
+    }
 
     if (wasActionPressed(kb, "back") || wasActionPressed(kb, "inventory")) {
       void engine.goToScene("game-world");
       return;
     }
 
-    // Panel navigation: Left/Right to switch focus
+    // Panel navigation: Left / Right to switch focus
     if (wasActionPressed(kb, "moveLeft")) {
       if (this.focus === "bag") {
         this.focus = "equipment";
@@ -402,11 +487,9 @@ export class InventoryScene extends ex.Scene {
         return;
       }
       if (this.focus === "crafting") {
-        if (this.inventory && this.inventory.bag.length > 0) {
-          this.focus = "bag";
-        } else {
-          this.focus = "equipment";
-        }
+        this.focus = "bag";
+        this.rebuildViewBag();
+        this.enterBagPanel();
         this.updateDisplay();
         return;
       }
@@ -414,11 +497,9 @@ export class InventoryScene extends ex.Scene {
 
     if (wasActionPressed(kb, "moveRight")) {
       if (this.focus === "equipment") {
-        if (this.inventory && this.inventory.bag.length > 0) {
-          this.focus = "bag";
-        } else if (RECIPES.length > 0) {
-          this.focus = "crafting";
-        }
+        this.focus = "bag";
+        this.rebuildViewBag();
+        this.enterBagPanel();
         this.updateDisplay();
         return;
       }
@@ -431,7 +512,7 @@ export class InventoryScene extends ex.Scene {
       }
     }
 
-    // Panel-specific input handling
+    // Panel-specific input
     if (this.focus === "equipment") {
       this.handleEquipmentInput(kb);
     } else if (this.focus === "bag") {
@@ -440,6 +521,8 @@ export class InventoryScene extends ex.Scene {
       this.handleCraftingInput(kb);
     }
   }
+
+  /* ── Input handlers ─────────────────────────────────────────── */
 
   private handleEquipmentInput(kb: ex.Keyboard): void {
     if (wasActionPressed(kb, "moveUp")) {
@@ -455,6 +538,7 @@ export class InventoryScene extends ex.Scene {
       if (this.inventory.equipment[slot]) {
         unequipItem(this.inventory, slot);
         this.player?.refreshSprite();
+        this.rebuildViewBag();
         this.updateDisplay();
       }
     }
@@ -462,8 +546,38 @@ export class InventoryScene extends ex.Scene {
 
   private handleBagInput(kb: ex.Keyboard, engine: ex.Engine): void {
     if (!this.inventory) return;
-    const bagLen = this.inventory.bag.length;
-    if (bagLen === 0) return;
+
+    // X cycles sort mode
+    if (kb.wasPressed(ex.Keys.KeyX)) {
+      this.cycleSortMode();
+      return;
+    }
+
+    // ── Filter bar ──
+    if (this.onFilterBar) {
+      if (wasActionPressed(kb, "confirm")) {
+        this.filterActive = true;
+        this.updateDisplay();
+        return;
+      }
+      if (wasActionPressed(kb, "moveDown") && this.viewBag.length > 0) {
+        this.onFilterBar = false;
+        this.bagIndex = 0;
+        this.bagScrollOffset = 0;
+        this.updateDisplay();
+      }
+      return;
+    }
+
+    // ── Item list ──
+    const viewLen = this.viewBag.length;
+    if (viewLen === 0) {
+      if (wasActionPressed(kb, "moveUp")) {
+        this.onFilterBar = true;
+        this.updateDisplay();
+      }
+      return;
+    }
 
     if (wasActionPressed(kb, "moveUp")) {
       if (this.bagIndex > 0) {
@@ -471,11 +585,14 @@ export class InventoryScene extends ex.Scene {
         if (this.bagIndex < this.bagScrollOffset) {
           this.bagScrollOffset = this.bagIndex;
         }
-        this.updateDisplay();
+      } else {
+        this.onFilterBar = true;
       }
+      this.updateDisplay();
     }
+
     if (wasActionPressed(kb, "moveDown")) {
-      if (this.bagIndex < bagLen - 1) {
+      if (this.bagIndex < viewLen - 1) {
         this.bagIndex++;
         if (this.bagIndex >= this.bagScrollOffset + MAX_VISIBLE_BAG) {
           this.bagScrollOffset = this.bagIndex - MAX_VISIBLE_BAG + 1;
@@ -483,31 +600,60 @@ export class InventoryScene extends ex.Scene {
         this.updateDisplay();
       }
     }
+
     if (wasActionPressed(kb, "confirm")) {
-      const selectedItem = this.inventory.bag[this.bagIndex];
-      if (selectedItem && isConsumable(selectedItem)) {
-        // Consume the item (eat it)
+      const entry = this.viewBag[this.bagIndex];
+      if (!entry) return;
+
+      if (isConsumable(entry.item)) {
         if (this.player) {
-          const newVitals = consumeItem(this.inventory, this.bagIndex, this.player.vitals);
+          const newVitals = consumeItem(this.inventory, entry.realIndex, this.player.vitals);
           if (newVitals) {
             this.player.vitals = newVitals;
           }
         }
       } else {
-        // Equip the item
-        equipItem(this.inventory, this.bagIndex);
+        equipItem(this.inventory, entry.realIndex);
         this.player?.refreshSprite();
       }
-      if (this.bagIndex >= this.inventory.bag.length) {
-        this.bagIndex = Math.max(0, this.inventory.bag.length - 1);
-      }
-      if (this.inventory.bag.length === 0) {
-        this.focus = "equipment";
-      }
+
+      this.afterBagMutation();
       this.updateDisplay();
     }
+
     if (wasActionPressed(kb, "drop")) {
       this.dropSelectedItem(engine);
+    }
+  }
+
+  private handleFilterInput(kb: ex.Keyboard): void {
+    if (kb.wasPressed(ex.Keys.Escape) || kb.wasPressed(ex.Keys.Enter)) {
+      this.filterActive = false;
+      if (this.viewBag.length > 0) {
+        this.onFilterBar = false;
+        this.bagIndex = 0;
+        this.bagScrollOffset = 0;
+      }
+      this.updateDisplay();
+      return;
+    }
+
+    if (kb.wasPressed(ex.Keys.Backspace)) {
+      this.filterText = this.filterText.slice(0, -1);
+      this.afterFilterChange();
+      return;
+    }
+
+    const pressed = kb.getKeys();
+    const shift = kb.isHeld(ex.Keys.ShiftLeft) || kb.isHeld(ex.Keys.ShiftRight);
+    for (const key of pressed) {
+      if (!kb.wasPressed(key)) continue;
+      const ch = this.keyToChar(key, shift);
+      if (ch && this.filterText.length < MAX_FILTER_LENGTH) {
+        this.filterText += ch;
+        this.afterFilterChange();
+        break;
+      }
     }
   }
 
@@ -537,32 +683,120 @@ export class InventoryScene extends ex.Scene {
     if (wasActionPressed(kb, "confirm")) {
       const recipe = RECIPES[this.craftIndex];
       if (recipe && craft(this.inventory, recipe)) {
+        this.rebuildViewBag();
         this.updateDisplay();
       }
     }
   }
 
+  /* ── Filter / sort helpers ──────────────────────────────────── */
+
+  private keyToChar(key: ex.Keys, shift: boolean): string | null {
+    const str = key as string;
+    if (str.startsWith("Key") && str.length === 4) {
+      const letter = str[3];
+      return shift ? letter : letter.toLowerCase();
+    }
+    if (str.startsWith("Digit") && str.length === 6) return str[5];
+    if (key === ex.Keys.Space) return " ";
+    if (key === ex.Keys.Minus) return shift ? "_" : "-";
+    return null;
+  }
+
+  private cycleSortMode(): void {
+    if (this.sortMode === "default") this.sortMode = "a-z";
+    else if (this.sortMode === "a-z") this.sortMode = "z-a";
+    else this.sortMode = "default";
+    this.rebuildViewBag();
+    this.clampBagIndex();
+    this.updateDisplay();
+  }
+
+  private rebuildViewBag(): void {
+    if (!this.inventory) {
+      this.viewBag = [];
+      return;
+    }
+
+    let entries: BagEntry[] = this.inventory.bag.map((item, i) => ({
+      item,
+      realIndex: i,
+    }));
+
+    // Filter by name
+    const query = this.filterText.trim().toLowerCase();
+    if (query) {
+      entries = entries.filter((e) => e.item.name.toLowerCase().includes(query));
+    }
+
+    // Sort
+    if (this.sortMode === "a-z") {
+      entries.sort((a, b) => a.item.name.localeCompare(b.item.name));
+    } else if (this.sortMode === "z-a") {
+      entries.sort((a, b) => b.item.name.localeCompare(a.item.name));
+    }
+
+    this.viewBag = entries;
+  }
+
+  private afterFilterChange(): void {
+    this.rebuildViewBag();
+    this.bagIndex = 0;
+    this.bagScrollOffset = 0;
+    this.updateDisplay();
+  }
+
+  private afterBagMutation(): void {
+    this.rebuildViewBag();
+    if (!this.inventory || this.inventory.bag.length === 0) {
+      this.focus = "equipment";
+      this.onFilterBar = false;
+    } else if (this.viewBag.length === 0) {
+      this.onFilterBar = true;
+    }
+    this.clampBagIndex();
+  }
+
+  private clampBagIndex(): void {
+    if (this.viewBag.length === 0) {
+      this.bagIndex = 0;
+      this.bagScrollOffset = 0;
+    } else if (this.bagIndex >= this.viewBag.length) {
+      this.bagIndex = this.viewBag.length - 1;
+    }
+    if (this.bagScrollOffset > this.bagIndex) {
+      this.bagScrollOffset = this.bagIndex;
+    }
+    if (this.bagIndex >= this.bagScrollOffset + MAX_VISIBLE_BAG) {
+      this.bagScrollOffset = this.bagIndex - MAX_VISIBLE_BAG + 1;
+    }
+  }
+
+  private enterBagPanel(): void {
+    if (this.viewBag.length > 0) {
+      this.onFilterBar = false;
+      this.bagIndex = Math.min(this.bagIndex, this.viewBag.length - 1);
+    } else {
+      this.onFilterBar = true;
+    }
+  }
+
+  /* ── Actions ────────────────────────────────────────────────── */
+
   private dropSelectedItem(engine: ex.Engine): void {
-    if (!this.inventory || !this.player) return;
-    const item = this.inventory.bag[this.bagIndex];
-    if (!item) return;
+    if (!this.inventory || !this.player || this.onFilterBar) return;
 
-    // Remove from bag
-    this.inventory.bag.splice(this.bagIndex, 1);
+    const entry = this.viewBag[this.bagIndex];
+    if (!entry) return;
 
-    // Drop onto the player's current tile
+    this.inventory.bag.splice(entry.realIndex, 1);
+
     const gameWorld = engine.scenes["game-world"] as GameWorld;
     const playerTileX = this.player.getTileX();
     const playerTileY = this.player.getTileY();
-    gameWorld.dropItemAt(playerTileX, playerTileY, item);
+    gameWorld.dropItemAt(playerTileX, playerTileY, entry.item);
 
-    // Adjust selection
-    if (this.bagIndex >= this.inventory.bag.length) {
-      this.bagIndex = Math.max(0, this.inventory.bag.length - 1);
-    }
-    if (this.inventory.bag.length === 0) {
-      this.focus = "equipment";
-    }
+    this.afterBagMutation();
     this.updateDisplay();
   }
 
@@ -572,16 +806,18 @@ export class InventoryScene extends ex.Scene {
       const slot = ALL_EQUIPMENT_SLOTS[this.equipmentIndex];
       return this.inventory.equipment[slot];
     }
-    if (this.focus === "bag") {
-      return this.inventory.bag[this.bagIndex] ?? null;
+    if (this.focus === "bag" && !this.onFilterBar) {
+      return this.viewBag[this.bagIndex]?.item ?? null;
     }
     return null;
   }
 
+  /* ── Display ────────────────────────────────────────────────── */
+
   private updateDisplay(): void {
     if (!this.inventory) return;
 
-    // Equipment slots
+    // ── Equipment slots ──
     for (let i = 0; i < SLOT_COUNT; i++) {
       const slot = ALL_EQUIPMENT_SLOTS[i] as EquipmentSlot;
       const item = this.inventory.equipment[slot];
@@ -599,17 +835,58 @@ export class InventoryScene extends ex.Scene {
       }
     }
 
-    // Bag items
-    const bag = this.inventory.bag;
-    this.bagEmptyLabel.text = bag.length === 0 ? "Empty" : "";
+    // ── Bag header (count + sort mode) ──
+    const totalItems = this.inventory.bag.length;
+    const filteredCount = this.viewBag.length;
+    const hasFilter = this.filterText.trim().length > 0;
+
+    let header = "Bag";
+    if (hasFilter) {
+      header += ` (${filteredCount}/${totalItems})`;
+    } else if (totalItems > 0) {
+      header += ` (${totalItems})`;
+    }
+    if (this.sortMode === "a-z") header += " A-Z";
+    else if (this.sortMode === "z-a") header += " Z-A";
+    this.bagHeaderLabel.text = header;
+
+    // ── Filter bar ──
+    if (this.filterActive) {
+      this.filterLabel.text = `/ ${this.filterText}_`;
+      this.filterLabel.font = FONT_FILTER_TYPING.clone();
+      this.filterLabel.color = ex.Color.fromHex("#66cc66");
+    } else if (this.focus === "bag" && this.onFilterBar) {
+      this.filterLabel.text = this.filterText ? `> / ${this.filterText}` : "> / ...";
+      this.filterLabel.font = FONT_FILTER_ACTIVE.clone();
+      this.filterLabel.color = ex.Color.fromHex("#f0c040");
+    } else if (this.filterText) {
+      this.filterLabel.text = `/ ${this.filterText}`;
+      this.filterLabel.font = FONT_FILTER.clone();
+      this.filterLabel.color = ex.Color.fromHex("#888888");
+    } else {
+      this.filterLabel.text = "/ ...";
+      this.filterLabel.font = FONT_FILTER.clone();
+      this.filterLabel.color = ex.Color.fromHex("#555555");
+    }
+
+    // ── Bag items ──
+    if (totalItems === 0) {
+      this.bagEmptyLabel.text = "Empty";
+      this.bagEmptyLabel.color = ex.Color.fromHex("#888888");
+    } else if (filteredCount === 0) {
+      this.bagEmptyLabel.text = "No matches";
+      this.bagEmptyLabel.color = ex.Color.fromHex("#666666");
+    } else {
+      this.bagEmptyLabel.text = "";
+    }
 
     for (let i = 0; i < MAX_VISIBLE_BAG; i++) {
-      const bagIdx = this.bagScrollOffset + i;
+      const viewIdx = this.bagScrollOffset + i;
       const label = this.bagLabels[i];
-      if (bagIdx < bag.length) {
-        const item = bag[bagIdx];
-        const selected = this.focus === "bag" && bagIdx === this.bagIndex;
-        label.text = selected ? `> ${item.name}` : item.name;
+      if (viewIdx < this.viewBag.length) {
+        const entry = this.viewBag[viewIdx];
+        const selected = this.focus === "bag" && !this.onFilterBar && viewIdx === this.bagIndex;
+        label.text = selected ? `> ${entry.item.name}` : entry.item.name;
         label.font = selected ? FONT_BAG_SELECTED.clone() : FONT_BAG_ITEM.clone();
         label.color = selected ? ex.Color.fromHex("#f0c040") : ex.Color.White;
       } else {
@@ -617,7 +894,7 @@ export class InventoryScene extends ex.Scene {
       }
     }
 
-    // Crafting recipes
+    // ── Crafting recipes ──
     for (let i = 0; i < MAX_VISIBLE_RECIPES; i++) {
       const recipeIdx = this.craftScrollOffset + i;
       const label = this.craftLabels[i];
@@ -642,13 +919,13 @@ export class InventoryScene extends ex.Scene {
       }
     }
 
-    // Weight
+    // ── Weight ──
     const current = totalWeight(this.inventory);
     this.weightLabel.text = `Weight: ${current} / ${this.inventory.maxWeight}`;
     this.weightLabel.color =
       current > this.inventory.maxWeight ? ex.Color.fromHex("#ff6060") : ex.Color.White;
 
-    // Detail panel
+    // ── Detail panel ──
     if (this.focus === "crafting") {
       this.updateCraftingDetail();
     } else {
@@ -672,6 +949,7 @@ export class InventoryScene extends ex.Scene {
       this.detailRarity.color = ex.Color.fromHex(RARITY_COLORS[item.rarity]);
 
       this.detailDesc.text = item.description;
+      this.detailDesc.color = ex.Color.fromHex("#cccccc");
 
       if (isConsumable(item)) {
         const effectParts: string[] = [];
@@ -706,6 +984,7 @@ export class InventoryScene extends ex.Scene {
       }
 
       this.detailWeight.text = `Weight: ${item.weight}`;
+      this.detailWeight.color = ex.Color.fromHex("#cccccc");
     } else {
       this.detailName.text = "";
       this.detailRarity.text = "";
@@ -714,10 +993,20 @@ export class InventoryScene extends ex.Scene {
       this.detailWeight.text = "";
     }
 
-    // Drop hint (only when focus is on bag and an item is selected)
-    if (this.focus === "bag" && item) {
-      this.dropHintLabel.text = "[Q] Drop";
-      this.dropHintLabel.color = ex.Color.fromHex("#aaaaaa");
+    // ── Context hints ──
+    if (this.focus === "bag") {
+      if (this.filterActive) {
+        this.dropHintLabel.text = "Type to search \u00b7 [Esc] Done";
+        this.dropHintLabel.color = ex.Color.fromHex("#66cc66");
+      } else if (this.onFilterBar) {
+        this.dropHintLabel.text = "[Enter] Search  [X] Sort";
+        this.dropHintLabel.color = ex.Color.fromHex("#aaaaaa");
+      } else if (item) {
+        this.dropHintLabel.text = "[Q] Drop  [X] Sort";
+        this.dropHintLabel.color = ex.Color.fromHex("#aaaaaa");
+      } else {
+        this.dropHintLabel.text = "";
+      }
     } else {
       this.dropHintLabel.text = "";
     }

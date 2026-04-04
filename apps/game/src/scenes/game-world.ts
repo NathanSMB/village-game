@@ -1,7 +1,7 @@
 import * as ex from "excalibur";
 import type { CharacterAppearance } from "../types/character.ts";
 import type { InventoryState } from "../types/inventory.ts";
-import type { Item } from "../types/item.ts";
+import { EquipmentSlot, type Item } from "../types/item.ts";
 import { isAlive } from "../types/vitals.ts";
 import { Player } from "../actors/player.ts";
 import { BerryBush } from "../actors/berry-bush.ts";
@@ -15,6 +15,7 @@ import { wasActionPressed } from "../systems/keybinds.ts";
 import { ITEMS } from "../data/items.ts";
 import type {
   BerryBushSaveState,
+  BigRockSaveState,
   GroundItemSaveState,
   TreeSaveState,
   SaveData,
@@ -54,6 +55,7 @@ export class GameWorld extends ex.Scene<GameWorldData> {
   private trees: Tree[] = [];
   private treeByTile = new Map<number, Tree>();
   private rocks: BigRock[] = [];
+  private rockByTile = new Map<number, BigRock>();
   private blockedTiles = new Set<number>();
   private waterTiles = new Set<number>(); // Track water tile positions
   private groundItems = new Map<number, GroundItemStack>();
@@ -165,6 +167,7 @@ export class GameWorld extends ex.Scene<GameWorldData> {
 
       const rock = new BigRock(rx, ry);
       this.rocks.push(rock);
+      this.rockByTile.set(key, rock);
       this.blockedTiles.add(key);
       this.add(rock);
       rocksPlaced++;
@@ -417,6 +420,11 @@ export class GameWorld extends ex.Scene<GameWorldData> {
         this.restoreTreeStates(context.data.save.trees);
       }
 
+      // Restore rock states from save
+      if (context.data.type === "load" && context.data.save.rocks) {
+        this.restoreRockStates(context.data.save.rocks);
+      }
+
       // Restore ground item states from save
       if (context.data.type === "load" && context.data.save.groundItems) {
         this.restoreGroundItemStates(context.data.save.groundItems);
@@ -481,6 +489,44 @@ export class GameWorld extends ex.Scene<GameWorldData> {
           const effectX = this.player.pos.x + (targetX - this.player.pos.x) * blend;
           const effectY = this.player.pos.y + (targetY - this.player.pos.y) * blend;
           this.add(new AttackEffect(effectX, effectY, style, this.player.getFacing()));
+
+          // Apply damage to resources on the facing tile
+          const weapon = this.player.inventory.equipment[EquipmentSlot.MainHand];
+          if (weapon) {
+            // Always look up the canonical item definition for stats and multipliers
+            // so that old saves with stale item copies still work correctly.
+            const canonical = ITEMS[weapon.id] ?? weapon;
+            const baseDamage = canonical.stats.attack ?? 0;
+            const facingKey = tileKey(facing.x, facing.y);
+
+            // Rock mining
+            const rock = this.rockByTile.get(facingKey);
+            if (rock) {
+              const mult = canonical.toolMultipliers?.mineable ?? 1;
+              const damage = baseDamage * mult;
+              const drops = rock.takeDamage(damage);
+              for (const drop of drops) {
+                this.dropResourceNear(rock.tileX, rock.tileY, drop);
+              }
+              if (damage > 0) {
+                this.spawnPickupText(`-${damage}`, targetX, targetY);
+              }
+            }
+
+            // Tree chopping
+            const tree = this.treeByTile.get(facingKey);
+            if (tree && !tree.isChoppedDown()) {
+              const mult = canonical.toolMultipliers?.tree ?? 1;
+              const damage = baseDamage * mult;
+              const result = tree.takeDamage(damage);
+              for (const drop of result.drops) {
+                this.dropResourceNear(tree.tileX, tree.tileY, drop);
+              }
+              if (damage > 0) {
+                this.spawnPickupText(`-${damage}`, targetX, targetY);
+              }
+            }
+          }
         }
       }
     }
@@ -619,9 +665,25 @@ export class GameWorld extends ex.Scene<GameWorldData> {
     }
   }
 
+  getRockStates(): BigRockSaveState[] {
+    return this.rocks.map((rock) => rock.getState());
+  }
+
+  private restoreRockStates(states: BigRockSaveState[]): void {
+    for (const saved of states) {
+      const key = tileKey(saved.tileX, saved.tileY);
+      const rock = this.rockByTile.get(key);
+      if (rock) {
+        rock.restoreState(saved);
+      }
+    }
+  }
+
   /** Update branch counts and process pending drops for all trees. */
   private updateTreeBranchDrops(): void {
     for (const tree of this.trees) {
+      if (tree.isChoppedDown()) continue; // Stumps don't drop branches
+
       // Recount branches around this tree (handles picked-up branches)
       tree.branchCount = this.countBranchesAroundTree(tree);
 
@@ -692,6 +754,33 @@ export class GameWorld extends ex.Scene<GameWorldData> {
   }
 
   // ==================== Ground Item System ====================
+
+  /**
+   * Drop a resource item on a random walkable adjacent tile around (cx, cy).
+   * Falls back to the center tile if no walkable neighbor exists.
+   */
+  private dropResourceNear(cx: number, cy: number, item: Item): void {
+    const candidates: { tx: number; ty: number }[] = [];
+    for (let dy = -1; dy <= 1; dy++) {
+      for (let dx = -1; dx <= 1; dx++) {
+        if (dx === 0 && dy === 0) continue;
+        const tx = cx + dx;
+        const ty = cy + dy;
+        if (tx < 0 || tx >= MAP_COLS || ty < 0 || ty >= MAP_ROWS) continue;
+        const key = tileKey(tx, ty);
+        if (this.blockedTiles.has(key)) continue;
+        if (this.waterTiles.has(key)) continue;
+        candidates.push({ tx, ty });
+      }
+    }
+    if (candidates.length > 0) {
+      const chosen = candidates[Math.floor(Math.random() * candidates.length)];
+      this.dropItemAt(chosen.tx, chosen.ty, item);
+    } else {
+      // Fallback: drop on the entity tile itself
+      this.dropItemAt(cx, cy, item);
+    }
+  }
 
   /** Drop an item onto a tile. Creates a GroundItemStack if none exists. */
   dropItemAt(tx: number, ty: number, item: Item): void {

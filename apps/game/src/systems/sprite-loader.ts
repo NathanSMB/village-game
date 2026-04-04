@@ -96,7 +96,7 @@ function getTreeSheet(): ex.SpriteSheet {
       image: treeImage,
       grid: {
         rows: 1,
-        columns: 4,
+        columns: 8,
         spriteWidth: 32,
         spriteHeight: 32,
       },
@@ -108,6 +108,11 @@ function getTreeSheet(): ex.SpriteSheet {
 export function getTreeAnimation(): ex.Animation {
   const sheet = getTreeSheet();
   return ex.Animation.fromSpriteSheet(sheet, [0, 1, 2, 3], 500, ex.AnimationStrategy.Loop);
+}
+
+export function getTreeStumpAnimation(): ex.Animation {
+  const sheet = getTreeSheet();
+  return ex.Animation.fromSpriteSheet(sheet, [4, 5, 6, 7], 500, ex.AnimationStrategy.Loop);
 }
 
 // Water tile types — 13 types × 4 animation frames = 52 total frames
@@ -219,6 +224,9 @@ const ITEM_SPRITE_MAP: Record<string, number> = {
   hatchet: 7,
   pickaxe: 8,
   spear: 9,
+  "large-stone": 10,
+  flint: 11,
+  log: 12,
 };
 
 function getItemsSheet(): ex.SpriteSheet {
@@ -227,7 +235,7 @@ function getItemsSheet(): ex.SpriteSheet {
       image: itemsImage,
       grid: {
         rows: 1,
-        columns: 10,
+        columns: 13,
         spriteWidth: 16,
         spriteHeight: 16,
       },

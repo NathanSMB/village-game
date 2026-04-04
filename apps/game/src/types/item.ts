@@ -72,6 +72,8 @@ export interface Item {
   consumable?: ConsumableEffect;
   /** Sprite identifier for the 16×16 ground/inventory icon (e.g. "small-rock", "berry") */
   itemSprite?: string;
+  /** Tool effectiveness multipliers against entity categories (e.g. "mineable", "tree"). */
+  toolMultipliers?: Partial<Record<string, number>>;
 }
 
 export function isConsumable(item: Item): boolean {

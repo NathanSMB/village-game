@@ -3,7 +3,7 @@
 
 local W = 32
 local H = 32
-local TOTAL_FRAMES = 4
+local TOTAL_FRAMES = 8
 
 local scriptPath = app.params["script-path"] or "."
 local outputDir = app.fs.joinPath(app.fs.filePath(scriptPath), "..", "assets", "ground")
@@ -191,7 +191,26 @@ local function drawFrame(img, frame)
   drawSwayLeaves(img, frame)
 end
 
--- Generate frames 1–4
+-- Draw a stump frame (trunk + shadow only, no canopy)
+local function drawStumpFrame(img)
+  clearImg(img)
+  drawShadow(img)
+  drawTrunk(img)
+  -- Add cut surface at top of trunk
+  local CUT = Color{ r = 150, g = 115, b = 75, a = 255 }
+  local CUT_L = Color{ r = 170, g = 135, b = 90, a = 255 }
+  local CUT_D = Color{ r = 100, g = 70, b = 40, a = 255 }
+  -- Flat cut top
+  rect(img, 13, 21, 6, 1, CUT)
+  px(img, 13, 21, CUT_L)
+  px(img, 14, 21, CUT_L)
+  px(img, 17, 21, CUT_D)
+  px(img, 18, 21, CUT_D)
+  -- Ring detail
+  px(img, 15, 21, CUT_D)
+end
+
+-- Generate frames 1–4 (full tree)
 for f = 0, 3 do
   local idx = 1 + f
   app.activeFrame = spr.frames[idx]
@@ -200,11 +219,25 @@ for f = 0, 3 do
   spr.frames[idx].duration = 0.5
 end
 
--- Tag
-local tag = spr:newTag("idle")
-tag.fromFrame = spr.frames[1]
-tag.toFrame = spr.frames[4]
-tag.aniDir = AniDir.FORWARD
+-- Generate frames 5–8 (stump)
+for f = 0, 3 do
+  local idx = 5 + f
+  app.activeFrame = spr.frames[idx]
+  local cel = spr:newCel(spr.layers[1], idx)
+  drawStumpFrame(cel.image)
+  spr.frames[idx].duration = 0.5
+end
+
+-- Tags
+local idleTag = spr:newTag("idle")
+idleTag.fromFrame = spr.frames[1]
+idleTag.toFrame = spr.frames[4]
+idleTag.aniDir = AniDir.FORWARD
+
+local stumpTag = spr:newTag("stump")
+stumpTag.fromFrame = spr.frames[5]
+stumpTag.toFrame = spr.frames[8]
+stumpTag.aniDir = AniDir.FORWARD
 
 spr:saveAs(app.fs.joinPath(outputDir, "tree.aseprite"))
 print("Created tree.aseprite with " .. TOTAL_FRAMES .. " frames")

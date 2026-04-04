@@ -256,13 +256,11 @@ export class Player extends ex.Actor {
 
   /**
    * Start an attack animation. Auto-detects swing vs thrust from equipped MainHand weapon.
-   * Returns the attack style used, or null if no weapon equipped.
+   * When no weapon is equipped, performs an unarmed swing attack.
    */
-  startAttack(): AttackStyle | null {
+  startAttack(): AttackStyle {
     const mainHand = this.inventory.equipment[EquipmentSlot.MainHand];
-    if (!mainHand) return null;
-
-    const style: AttackStyle = THRUST_ITEM_IDS.has(mainHand.id) ? "thrust" : "swing";
+    const style: AttackStyle = mainHand && THRUST_ITEM_IDS.has(mainHand.id) ? "thrust" : "swing";
     this.stopMovement();
     this.attacking = true;
     this.attackStyle = style;

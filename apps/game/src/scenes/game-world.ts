@@ -564,144 +564,142 @@ export class GameWorld extends ex.Scene<GameWorldData> {
     if (this.player && !this.player.isBusy() && !this.player.isMoving()) {
       if (wasActionPressed(kb, "attack")) {
         const style = this.player.startAttack();
-        if (style) {
-          const facing = this.player.getFacingTile();
-          const targetX = facing.x * TILE_SIZE + TILE_SIZE / 2;
-          const targetY = facing.y * TILE_SIZE + TILE_SIZE / 2;
-          // Position between player and facing tile center
-          const blend = style === "swing" ? 0.55 : 0.7;
-          const effectX = this.player.pos.x + (targetX - this.player.pos.x) * blend;
-          const effectY = this.player.pos.y + (targetY - this.player.pos.y) * blend;
-          this.add(new AttackEffect(effectX, effectY, style, this.player.getFacing()));
+        const facing = this.player.getFacingTile();
+        const targetX = facing.x * TILE_SIZE + TILE_SIZE / 2;
+        const targetY = facing.y * TILE_SIZE + TILE_SIZE / 2;
+        // Position between player and facing tile center
+        const blend = style === "swing" ? 0.55 : 0.7;
+        const effectX = this.player.pos.x + (targetX - this.player.pos.x) * blend;
+        const effectY = this.player.pos.y + (targetY - this.player.pos.y) * blend;
+        this.add(new AttackEffect(effectX, effectY, style, this.player.getFacing()));
 
-          // Apply damage to resources on the facing tile
-          const weapon = this.player.inventory.equipment[EquipmentSlot.MainHand];
-          if (weapon) {
-            // Always look up the canonical item definition for stats and multipliers
-            // so that old saves with stale item copies still work correctly.
-            const canonical = ITEMS[weapon.id] ?? weapon;
-            const baseDamage = canonical.stats.attack ?? 0;
-            const facingKey = tileKey(facing.x, facing.y);
+        // Apply damage to resources on the facing tile
+        // Unarmed attacks deal 1 damage with no tool multipliers
+        const UNARMED_DAMAGE = 1;
+        const weapon = this.player.inventory.equipment[EquipmentSlot.MainHand];
+        // Always look up the canonical item definition for stats and multipliers
+        // so that old saves with stale item copies still work correctly.
+        const canonical = weapon ? (ITEMS[weapon.id] ?? weapon) : null;
+        const baseDamage = canonical ? (canonical.stats.attack ?? 0) : UNARMED_DAMAGE;
+        const facingKey = tileKey(facing.x, facing.y);
 
-            // Rock mining
-            const rock = this.rockByTile.get(facingKey);
-            if (rock) {
-              const mult = canonical.toolMultipliers?.mineable ?? 1;
-              const damage = baseDamage * mult;
-              const drops = rock.takeDamage(damage);
-              for (const drop of drops) {
-                this.dropResourceNear(rock.tileX, rock.tileY, drop);
+        // Rock mining
+        const rock = this.rockByTile.get(facingKey);
+        if (rock) {
+          const mult = canonical?.toolMultipliers?.mineable ?? 1;
+          const damage = baseDamage * mult;
+          const drops = rock.takeDamage(damage);
+          for (const drop of drops) {
+            this.dropResourceNear(rock.tileX, rock.tileY, drop);
+          }
+          if (damage > 0) {
+            this.spawnPickupText(`-${damage}`, targetX, targetY);
+          }
+        }
+
+        // Tree chopping
+        const tree = this.treeByTile.get(facingKey);
+        if (tree && !tree.isChoppedDown()) {
+          const mult = canonical?.toolMultipliers?.tree ?? 1;
+          const damage = baseDamage * mult;
+          const result = tree.takeDamage(damage);
+          for (const drop of result.drops) {
+            this.dropResourceNear(tree.tileX, tree.tileY, drop);
+          }
+          if (damage > 0) {
+            this.spawnPickupText(`-${damage}`, targetX, targetY);
+          }
+        }
+
+        // Tile-based building construction / repair / damage (floors)
+        const building = this.buildingByTile.get(facingKey);
+        if (building) {
+          if (building.state === "hologram") {
+            if (weapon?.id === "hammer") {
+              const delivered = building.deliverMaterial(this.player!.inventory);
+              if (delivered) {
+                const itemName = ITEMS[delivered]?.name ?? delivered;
+                this.spawnPickupText(`+[${itemName}]`, targetX, targetY);
+                if ((building.state as string) === "complete") {
+                  this.spawnPickupText("Built!", targetX, targetY - 16);
+                  if (building.isSolid()) {
+                    this.blockedTiles.add(facingKey);
+                  }
+                  this.recalculateIndoorLighting();
+                }
+              } else {
+                const nextReq = building.getNextRequired();
+                if (nextReq) {
+                  const reqName = ITEMS[nextReq]?.name ?? nextReq;
+                  this.spawnPickupText(`Need [${reqName}]!`, targetX, targetY);
+                }
               }
+            }
+          } else {
+            if (weapon?.id === "hammer") {
+              const mult = canonical?.toolMultipliers?.building ?? 1;
+              const repairAmount = baseDamage * mult;
+              const repaired = building.repair(repairAmount);
+              if (repaired > 0) {
+                this.spawnPickupText(`+${repaired}`, targetX, targetY);
+              }
+            } else {
+              const damage = baseDamage;
+              const destroyed = building.takeBuildingDamage(damage);
               if (damage > 0) {
                 this.spawnPickupText(`-${damage}`, targetX, targetY);
               }
-            }
-
-            // Tree chopping
-            const tree = this.treeByTile.get(facingKey);
-            if (tree && !tree.isChoppedDown()) {
-              const mult = canonical.toolMultipliers?.tree ?? 1;
-              const damage = baseDamage * mult;
-              const result = tree.takeDamage(damage);
-              for (const drop of result.drops) {
-                this.dropResourceNear(tree.tileX, tree.tileY, drop);
+              if (destroyed) {
+                this.removeBuilding(building, facingKey);
               }
+            }
+          }
+        }
+
+        // Edge-based building construction / repair / damage (walls, fences)
+        const playerTX = this.player!.getTileX();
+        const playerTY = this.player!.getTileY();
+        const facingEdgeKey = edgeKeyBetween(playerTX, playerTY, facing.x, facing.y);
+        const edgeBuilding =
+          facingEdgeKey != null ? this.edgeBuildings.get(facingEdgeKey) : undefined;
+        if (edgeBuilding) {
+          if (edgeBuilding.state === "hologram") {
+            if (weapon?.id === "hammer") {
+              const delivered = edgeBuilding.deliverMaterial(this.player!.inventory);
+              if (delivered) {
+                const itemName = ITEMS[delivered]?.name ?? delivered;
+                this.spawnPickupText(`+[${itemName}]`, targetX, targetY);
+                if ((edgeBuilding.state as string) === "complete") {
+                  this.spawnPickupText("Built!", targetX, targetY - 16);
+                  if (edgeBuilding.isSolid()) {
+                    this.blockedEdges.add(facingEdgeKey!);
+                  }
+                  this.recalculateIndoorLighting();
+                }
+              } else {
+                const nextReq = edgeBuilding.getNextRequired();
+                if (nextReq) {
+                  const reqName = ITEMS[nextReq]?.name ?? nextReq;
+                  this.spawnPickupText(`Need [${reqName}]!`, targetX, targetY);
+                }
+              }
+            }
+          } else {
+            if (weapon?.id === "hammer") {
+              const mult = canonical?.toolMultipliers?.building ?? 1;
+              const repairAmount = baseDamage * mult;
+              const repaired = edgeBuilding.repair(repairAmount);
+              if (repaired > 0) {
+                this.spawnPickupText(`+${repaired}`, targetX, targetY);
+              }
+            } else {
+              const damage = baseDamage;
+              const destroyed = edgeBuilding.takeBuildingDamage(damage);
               if (damage > 0) {
                 this.spawnPickupText(`-${damage}`, targetX, targetY);
               }
-            }
-
-            // Tile-based building construction / repair / damage (floors)
-            const building = this.buildingByTile.get(facingKey);
-            if (building) {
-              if (building.state === "hologram") {
-                if (weapon.id === "hammer") {
-                  const delivered = building.deliverMaterial(this.player!.inventory);
-                  if (delivered) {
-                    const itemName = ITEMS[delivered]?.name ?? delivered;
-                    this.spawnPickupText(`+[${itemName}]`, targetX, targetY);
-                    if ((building.state as string) === "complete") {
-                      this.spawnPickupText("Built!", targetX, targetY - 16);
-                      if (building.isSolid()) {
-                        this.blockedTiles.add(facingKey);
-                      }
-                      this.recalculateIndoorLighting();
-                    }
-                  } else {
-                    const nextReq = building.getNextRequired();
-                    if (nextReq) {
-                      const reqName = ITEMS[nextReq]?.name ?? nextReq;
-                      this.spawnPickupText(`Need [${reqName}]!`, targetX, targetY);
-                    }
-                  }
-                }
-              } else {
-                if (weapon.id === "hammer") {
-                  const mult = canonical.toolMultipliers?.building ?? 1;
-                  const repairAmount = baseDamage * mult;
-                  const repaired = building.repair(repairAmount);
-                  if (repaired > 0) {
-                    this.spawnPickupText(`+${repaired}`, targetX, targetY);
-                  }
-                } else {
-                  const damage = baseDamage;
-                  const destroyed = building.takeBuildingDamage(damage);
-                  if (damage > 0) {
-                    this.spawnPickupText(`-${damage}`, targetX, targetY);
-                  }
-                  if (destroyed) {
-                    this.removeBuilding(building, facingKey);
-                  }
-                }
-              }
-            }
-
-            // Edge-based building construction / repair / damage (walls, fences)
-            const playerTX = this.player!.getTileX();
-            const playerTY = this.player!.getTileY();
-            const facingEdgeKey = edgeKeyBetween(playerTX, playerTY, facing.x, facing.y);
-            const edgeBuilding =
-              facingEdgeKey != null ? this.edgeBuildings.get(facingEdgeKey) : undefined;
-            if (edgeBuilding) {
-              if (edgeBuilding.state === "hologram") {
-                if (weapon.id === "hammer") {
-                  const delivered = edgeBuilding.deliverMaterial(this.player!.inventory);
-                  if (delivered) {
-                    const itemName = ITEMS[delivered]?.name ?? delivered;
-                    this.spawnPickupText(`+[${itemName}]`, targetX, targetY);
-                    if ((edgeBuilding.state as string) === "complete") {
-                      this.spawnPickupText("Built!", targetX, targetY - 16);
-                      if (edgeBuilding.isSolid()) {
-                        this.blockedEdges.add(facingEdgeKey!);
-                      }
-                      this.recalculateIndoorLighting();
-                    }
-                  } else {
-                    const nextReq = edgeBuilding.getNextRequired();
-                    if (nextReq) {
-                      const reqName = ITEMS[nextReq]?.name ?? nextReq;
-                      this.spawnPickupText(`Need [${reqName}]!`, targetX, targetY);
-                    }
-                  }
-                }
-              } else {
-                if (weapon.id === "hammer") {
-                  const mult = canonical.toolMultipliers?.building ?? 1;
-                  const repairAmount = baseDamage * mult;
-                  const repaired = edgeBuilding.repair(repairAmount);
-                  if (repaired > 0) {
-                    this.spawnPickupText(`+${repaired}`, targetX, targetY);
-                  }
-                } else {
-                  const damage = baseDamage;
-                  const destroyed = edgeBuilding.takeBuildingDamage(damage);
-                  if (damage > 0) {
-                    this.spawnPickupText(`-${damage}`, targetX, targetY);
-                  }
-                  if (destroyed) {
-                    this.removeEdgeBuilding(edgeBuilding, facingEdgeKey!);
-                  }
-                }
+              if (destroyed) {
+                this.removeEdgeBuilding(edgeBuilding, facingEdgeKey!);
               }
             }
           }

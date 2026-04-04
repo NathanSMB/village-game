@@ -1,6 +1,8 @@
 import * as ex from "excalibur";
+import type { EdgeAxis, FenceConnections } from "./edge-key.ts";
 
 const TILE = 32;
+const WALL_THICKNESS = 8;
 
 // Wood color palette
 const BROWN_DARK = "#4a2800";
@@ -28,121 +30,23 @@ function applyMode(ctx: CanvasRenderingContext2D, mode: SpriteMode): void {
   }
 }
 
-function applyHologramTint(ctx: CanvasRenderingContext2D, mode: SpriteMode): void {
+function applyHologramTint(
+  ctx: CanvasRenderingContext2D,
+  mode: SpriteMode,
+  w: number,
+  h: number,
+): void {
   if (mode === "hologram" || mode === "ghost") {
     ctx.globalCompositeOperation = "source-atop";
     ctx.fillStyle = HOLO_CYAN;
     ctx.globalAlpha = mode === "hologram" ? 0.35 : 0.4;
-    ctx.fillRect(0, 0, TILE, TILE);
+    ctx.fillRect(0, 0, w, h);
     ctx.globalCompositeOperation = "source-over";
     ctx.globalAlpha = 1;
   }
 }
 
-// ========== Wall ==========
-
-function drawWallBase(ctx: CanvasRenderingContext2D): void {
-  // Fill with medium brown
-  ctx.fillStyle = BROWN_MED;
-  ctx.fillRect(1, 1, TILE - 2, TILE - 2);
-
-  // Horizontal log lines
-  ctx.fillStyle = BROWN_DARK;
-  for (let i = 0; i < 4; i++) {
-    const y = 4 + i * 7;
-    ctx.fillRect(1, y, TILE - 2, 1);
-  }
-
-  // Lighter log highlights
-  ctx.fillStyle = BROWN_LIGHT;
-  for (let i = 0; i < 4; i++) {
-    const y = 6 + i * 7;
-    ctx.fillRect(2, y, TILE - 4, 1);
-  }
-
-  // Outline
-  ctx.strokeStyle = OUTLINE;
-  ctx.lineWidth = 1;
-  ctx.strokeRect(0.5, 0.5, TILE - 1, TILE - 1);
-}
-
-export function drawWall(ctx: CanvasRenderingContext2D, mode: SpriteMode): void {
-  applyMode(ctx, mode);
-  drawWallBase(ctx);
-  applyHologramTint(ctx, mode);
-}
-
-// ========== Wall with Window ==========
-
-export function drawWallWindow(ctx: CanvasRenderingContext2D, mode: SpriteMode): void {
-  applyMode(ctx, mode);
-  drawWallBase(ctx);
-
-  // Window opening
-  const wx = 11;
-  const wy = 8;
-  const ww = 10;
-  const wh = 10;
-  ctx.fillStyle = WINDOW_BG;
-  ctx.fillRect(wx, wy, ww, wh);
-
-  // Window frame
-  ctx.strokeStyle = BROWN_PLANK;
-  ctx.lineWidth = 1;
-  ctx.strokeRect(wx + 0.5, wy + 0.5, ww - 1, wh - 1);
-
-  // Cross mullion
-  ctx.fillStyle = BROWN_PLANK;
-  ctx.fillRect(wx + 4, wy, 2, wh);
-  ctx.fillRect(wx, wy + 4, ww, 2);
-
-  applyHologramTint(ctx, mode);
-}
-
-// ========== Wall with Door ==========
-
-export function drawWallDoor(
-  ctx: CanvasRenderingContext2D,
-  mode: SpriteMode,
-  isOpen: boolean,
-): void {
-  applyMode(ctx, mode);
-  drawWallBase(ctx);
-
-  const dx = 10;
-  const dy = 8;
-  const dw = 12;
-  const dh = 23;
-
-  if (isOpen) {
-    // Open door: show empty space
-    ctx.fillStyle = WINDOW_BG;
-    ctx.fillRect(dx, dy, dw, dh);
-    // Door frame
-    ctx.strokeStyle = BROWN_DARK;
-    ctx.lineWidth = 1;
-    ctx.strokeRect(dx + 0.5, dy + 0.5, dw - 1, dh - 1);
-  } else {
-    // Closed door panel
-    ctx.fillStyle = BROWN_PLANK;
-    ctx.fillRect(dx, dy, dw, dh);
-    // Door planks
-    ctx.fillStyle = BROWN_HIGHLIGHT;
-    ctx.fillRect(dx + 3, dy + 1, 1, dh - 2);
-    ctx.fillRect(dx + 8, dy + 1, 1, dh - 2);
-    // Knob
-    ctx.fillStyle = DOOR_KNOB;
-    ctx.fillRect(dx + dw - 4, dy + dh / 2, 2, 2);
-    // Door frame
-    ctx.strokeStyle = BROWN_DARK;
-    ctx.lineWidth = 1;
-    ctx.strokeRect(dx + 0.5, dy + 0.5, dw - 1, dh - 1);
-  }
-
-  applyHologramTint(ctx, mode);
-}
-
-// ========== Floor ==========
+// ========== Floor (tile-based, unchanged) ==========
 
 export function drawFloor(ctx: CanvasRenderingContext2D, mode: SpriteMode): void {
   applyMode(ctx, mode);
@@ -173,124 +77,317 @@ export function drawFloor(ctx: CanvasRenderingContext2D, mode: SpriteMode): void
     ctx.fillRect(xOff, y, 1, plankHeight + 1);
   }
 
-  applyHologramTint(ctx, mode);
+  applyHologramTint(ctx, mode, TILE, TILE);
 }
 
-// ========== Fence ==========
+// ========== Edge-based wall drawing helpers ==========
 
-function drawFenceBase(ctx: CanvasRenderingContext2D): void {
-  // Two vertical posts
-  const postW = 4;
-  const postH = 28;
-  const postY = 2;
+/**
+ * Draw a horizontal wall strip (TILE wide × WALL_THICKNESS tall).
+ * For vertical walls, the caller rotates the canvas.
+ */
+function drawHWallStrip(ctx: CanvasRenderingContext2D): void {
+  const w = TILE;
+  const h = WALL_THICKNESS;
 
-  ctx.fillStyle = FENCE_POST;
-  ctx.fillRect(6, postY, postW, postH);
-  ctx.fillRect(22, postY, postW, postH);
+  // Base fill
+  ctx.fillStyle = BROWN_MED;
+  ctx.fillRect(0, 0, w, h);
 
-  // Post highlights
-  ctx.fillStyle = BROWN_LIGHT;
-  ctx.fillRect(7, postY + 1, 1, postH - 2);
-  ctx.fillRect(23, postY + 1, 1, postH - 2);
-
-  // Two horizontal rails
-  ctx.fillStyle = FENCE_RAIL;
-  ctx.fillRect(6, 9, 20, 3);
-  ctx.fillRect(6, 20, 20, 3);
-
-  // Rail highlights
-  ctx.fillStyle = BROWN_HIGHLIGHT;
-  ctx.fillRect(7, 9, 18, 1);
-  ctx.fillRect(7, 20, 18, 1);
-
-  // Post caps (slightly wider)
+  // Horizontal log lines
   ctx.fillStyle = BROWN_DARK;
-  ctx.fillRect(5, postY, postW + 2, 2);
-  ctx.fillRect(21, postY, postW + 2, 2);
+  ctx.fillRect(0, 1, w, 1);
+  ctx.fillRect(0, 4, w, 1);
+
+  // Lighter highlights
+  ctx.fillStyle = BROWN_LIGHT;
+  ctx.fillRect(1, 2, w - 2, 1);
+  ctx.fillRect(1, 6, w - 2, 1);
+
+  // Outline
+  ctx.strokeStyle = OUTLINE;
+  ctx.lineWidth = 1;
+  ctx.strokeRect(0.5, 0.5, w - 1, h - 1);
 }
 
-export function drawFence(ctx: CanvasRenderingContext2D, mode: SpriteMode): void {
-  applyMode(ctx, mode);
-  drawFenceBase(ctx);
-  applyHologramTint(ctx, mode);
-}
+// ========== Edge Wall ==========
 
-// ========== Fence Gate ==========
-
-export function drawFenceGate(
+export function drawEdgeWall(
   ctx: CanvasRenderingContext2D,
   mode: SpriteMode,
+  axis: EdgeAxis,
+): void {
+  applyMode(ctx, mode);
+  if (axis === "h") {
+    drawHWallStrip(ctx);
+    applyHologramTint(ctx, mode, TILE, WALL_THICKNESS);
+  } else {
+    // Rotate to draw vertical: swap coordinates
+    ctx.save();
+    ctx.translate(WALL_THICKNESS, 0);
+    ctx.rotate(Math.PI / 2);
+    drawHWallStrip(ctx);
+    ctx.restore();
+    applyHologramTint(ctx, mode, WALL_THICKNESS, TILE);
+  }
+}
+
+// ========== Edge Wall with Window ==========
+
+function drawHWallWindowOverlay(ctx: CanvasRenderingContext2D): void {
+  // Small window cutout in the center of the strip
+  const winW = 6;
+  const winH = 4;
+  const winX = (TILE - winW) / 2;
+  const winY = (WALL_THICKNESS - winH) / 2;
+
+  ctx.fillStyle = WINDOW_BG;
+  ctx.fillRect(winX, winY, winW, winH);
+
+  // Frame
+  ctx.strokeStyle = BROWN_PLANK;
+  ctx.lineWidth = 1;
+  ctx.strokeRect(winX + 0.5, winY + 0.5, winW - 1, winH - 1);
+
+  // Cross mullion
+  ctx.fillStyle = BROWN_PLANK;
+  ctx.fillRect(winX + Math.floor(winW / 2) - 0.5, winY, 1, winH);
+  ctx.fillRect(winX, winY + Math.floor(winH / 2) - 0.5, winW, 1);
+}
+
+export function drawEdgeWallWindow(
+  ctx: CanvasRenderingContext2D,
+  mode: SpriteMode,
+  axis: EdgeAxis,
+): void {
+  applyMode(ctx, mode);
+  if (axis === "h") {
+    drawHWallStrip(ctx);
+    drawHWallWindowOverlay(ctx);
+    applyHologramTint(ctx, mode, TILE, WALL_THICKNESS);
+  } else {
+    ctx.save();
+    ctx.translate(WALL_THICKNESS, 0);
+    ctx.rotate(Math.PI / 2);
+    drawHWallStrip(ctx);
+    drawHWallWindowOverlay(ctx);
+    ctx.restore();
+    applyHologramTint(ctx, mode, WALL_THICKNESS, TILE);
+  }
+}
+
+// ========== Edge Wall with Door ==========
+
+function drawHWallDoorOverlay(ctx: CanvasRenderingContext2D, isOpen: boolean): void {
+  const doorW = 12;
+  const doorH = WALL_THICKNESS;
+  const doorX = (TILE - doorW) / 2;
+  const doorY = 0;
+
+  if (isOpen) {
+    // Open: transparent gap
+    ctx.clearRect(doorX, doorY, doorW, doorH);
+    // Thin frame on left and right edges of gap
+    ctx.fillStyle = BROWN_DARK;
+    ctx.fillRect(doorX, doorY, 1, doorH);
+    ctx.fillRect(doorX + doorW - 1, doorY, 1, doorH);
+  } else {
+    // Closed: door planks
+    ctx.fillStyle = BROWN_PLANK;
+    ctx.fillRect(doorX, doorY, doorW, doorH);
+    // Plank dividers
+    ctx.fillStyle = BROWN_HIGHLIGHT;
+    ctx.fillRect(doorX + 3, doorY + 1, 1, doorH - 2);
+    ctx.fillRect(doorX + 8, doorY + 1, 1, doorH - 2);
+    // Knob
+    ctx.fillStyle = DOOR_KNOB;
+    ctx.fillRect(doorX + doorW - 3, Math.floor(doorH / 2) - 1, 2, 2);
+    // Frame
+    ctx.strokeStyle = BROWN_DARK;
+    ctx.lineWidth = 1;
+    ctx.strokeRect(doorX + 0.5, doorY + 0.5, doorW - 1, doorH - 1);
+  }
+}
+
+export function drawEdgeWallDoor(
+  ctx: CanvasRenderingContext2D,
+  mode: SpriteMode,
+  axis: EdgeAxis,
   isOpen: boolean,
 ): void {
   applyMode(ctx, mode);
+  if (axis === "h") {
+    drawHWallStrip(ctx);
+    drawHWallDoorOverlay(ctx, isOpen);
+    applyHologramTint(ctx, mode, TILE, WALL_THICKNESS);
+  } else {
+    ctx.save();
+    ctx.translate(WALL_THICKNESS, 0);
+    ctx.rotate(Math.PI / 2);
+    drawHWallStrip(ctx);
+    drawHWallDoorOverlay(ctx, isOpen);
+    ctx.restore();
+    applyHologramTint(ctx, mode, WALL_THICKNESS, TILE);
+  }
+}
 
+// ========== Edge Fence ==========
+
+/**
+ * Draw a horizontal fence strip. Posts appear at unconnected endpoints.
+ * For vertical, caller rotates the canvas.
+ */
+function drawHFenceStrip(ctx: CanvasRenderingContext2D, connections: FenceConnections): void {
+  const w = TILE;
+  const h = WALL_THICKNESS;
   const postW = 4;
-  const postH = 28;
-  const postY = 2;
+  const railY1 = 1;
+  const railY2 = 5;
+  const railH = 2;
 
-  // Two posts
+  // Two horizontal rails spanning the full width
+  ctx.fillStyle = FENCE_RAIL;
+  ctx.fillRect(0, railY1, w, railH);
+  ctx.fillRect(0, railY2, w, railH);
+
+  // Rail highlights
+  ctx.fillStyle = BROWN_HIGHLIGHT;
+  ctx.fillRect(1, railY1, w - 2, 1);
+  ctx.fillRect(1, railY2, w - 2, 1);
+
+  // Start (left) post — only if NOT connected
+  if (!connections.startConnected) {
+    ctx.fillStyle = FENCE_POST;
+    ctx.fillRect(0, 0, postW, h);
+    ctx.fillStyle = BROWN_LIGHT;
+    ctx.fillRect(1, 1, 1, h - 2);
+    // Post cap
+    ctx.fillStyle = BROWN_DARK;
+    ctx.fillRect(0, 0, postW, 1);
+  }
+
+  // End (right) post — only if NOT connected
+  if (!connections.endConnected) {
+    ctx.fillStyle = FENCE_POST;
+    ctx.fillRect(w - postW, 0, postW, h);
+    ctx.fillStyle = BROWN_LIGHT;
+    ctx.fillRect(w - postW + 1, 1, 1, h - 2);
+    // Post cap
+    ctx.fillStyle = BROWN_DARK;
+    ctx.fillRect(w - postW, 0, postW, 1);
+  }
+}
+
+export function drawEdgeFence(
+  ctx: CanvasRenderingContext2D,
+  mode: SpriteMode,
+  axis: EdgeAxis,
+  connections: FenceConnections,
+): void {
+  applyMode(ctx, mode);
+  if (axis === "h") {
+    drawHFenceStrip(ctx, connections);
+    applyHologramTint(ctx, mode, TILE, WALL_THICKNESS);
+  } else {
+    ctx.save();
+    ctx.translate(WALL_THICKNESS, 0);
+    ctx.rotate(Math.PI / 2);
+    drawHFenceStrip(ctx, connections);
+    ctx.restore();
+    applyHologramTint(ctx, mode, WALL_THICKNESS, TILE);
+  }
+}
+
+// ========== Edge Fence Gate ==========
+
+function drawHFenceGateStrip(ctx: CanvasRenderingContext2D, isOpen: boolean): void {
+  const w = TILE;
+  const h = WALL_THICKNESS;
+  const postW = 4;
+  const railY1 = 1;
+  const railY2 = 5;
+  const railH = 2;
+
+  // Two posts always present (gate hinges)
   ctx.fillStyle = FENCE_POST;
-  ctx.fillRect(4, postY, postW, postH);
-  ctx.fillRect(24, postY, postW, postH);
+  ctx.fillRect(0, 0, postW, h);
+  ctx.fillRect(w - postW, 0, postW, h);
 
   // Post highlights
   ctx.fillStyle = BROWN_LIGHT;
-  ctx.fillRect(5, postY + 1, 1, postH - 2);
-  ctx.fillRect(25, postY + 1, 1, postH - 2);
+  ctx.fillRect(1, 1, 1, h - 2);
+  ctx.fillRect(w - postW + 1, 1, 1, h - 2);
 
   // Post caps
   ctx.fillStyle = BROWN_DARK;
-  ctx.fillRect(3, postY, postW + 2, 2);
-  ctx.fillRect(23, postY, postW + 2, 2);
+  ctx.fillRect(0, 0, postW, 1);
+  ctx.fillRect(w - postW, 0, postW, 1);
 
   if (isOpen) {
-    // Open: short stubs on left hinge side only
+    // Open: short stubs from left hinge
     ctx.fillStyle = FENCE_RAIL;
-    ctx.fillRect(4, 9, 6, 3);
-    ctx.fillRect(4, 20, 6, 3);
+    ctx.fillRect(postW, railY1, 6, railH);
+    ctx.fillRect(postW, railY2, 6, railH);
     // Hinge dots
     ctx.fillStyle = LATCH_COLOR;
-    ctx.fillRect(8, 10, 2, 1);
-    ctx.fillRect(8, 21, 2, 1);
+    ctx.fillRect(postW + 1, railY1, 1, 1);
+    ctx.fillRect(postW + 1, railY2, 1, 1);
   } else {
-    // Closed: full rails with latch
+    // Closed: full rails between posts
+    const railStart = postW;
+    const railLen = w - postW * 2;
     ctx.fillStyle = FENCE_RAIL;
-    ctx.fillRect(4, 9, 24, 3);
-    ctx.fillRect(4, 20, 24, 3);
+    ctx.fillRect(railStart, railY1, railLen, railH);
+    ctx.fillRect(railStart, railY2, railLen, railH);
 
     // Rail highlights
     ctx.fillStyle = BROWN_HIGHLIGHT;
-    ctx.fillRect(5, 9, 22, 1);
-    ctx.fillRect(5, 20, 22, 1);
+    ctx.fillRect(railStart + 1, railY1, railLen - 2, 1);
+    ctx.fillRect(railStart + 1, railY2, railLen - 2, 1);
 
     // Hinge on left
     ctx.fillStyle = LATCH_COLOR;
-    ctx.fillRect(8, 10, 2, 1);
-    ctx.fillRect(8, 21, 2, 1);
+    ctx.fillRect(postW + 1, railY1, 1, 1);
+    ctx.fillRect(postW + 1, railY2, 1, 1);
 
-    // Latch on right
+    // Latch in center
     ctx.fillStyle = LATCH_COLOR;
-    ctx.fillRect(22, 14, 3, 2);
+    ctx.fillRect(Math.floor(w / 2) - 1, 3, 2, 2);
   }
+}
 
-  applyHologramTint(ctx, mode);
+export function drawEdgeFenceGate(
+  ctx: CanvasRenderingContext2D,
+  mode: SpriteMode,
+  axis: EdgeAxis,
+  isOpen: boolean,
+): void {
+  applyMode(ctx, mode);
+  if (axis === "h") {
+    drawHFenceGateStrip(ctx, isOpen);
+    applyHologramTint(ctx, mode, TILE, WALL_THICKNESS);
+  } else {
+    ctx.save();
+    ctx.translate(WALL_THICKNESS, 0);
+    ctx.rotate(Math.PI / 2);
+    drawHFenceGateStrip(ctx, isOpen);
+    ctx.restore();
+    applyHologramTint(ctx, mode, WALL_THICKNESS, TILE);
+  }
 }
 
 // ========== Graphic builders ==========
 
-type DrawFn = (ctx: CanvasRenderingContext2D, mode: SpriteMode, isOpen: boolean) => void;
+// --- Tile-based (floor only) ---
 
-const DRAW_MAP: Record<string, DrawFn> = {
-  wall: (ctx, mode) => drawWall(ctx, mode),
-  wall_window: (ctx, mode) => drawWallWindow(ctx, mode),
-  wall_door: (ctx, mode, isOpen) => drawWallDoor(ctx, mode, isOpen),
+type TileDrawFn = (ctx: CanvasRenderingContext2D, mode: SpriteMode, isOpen: boolean) => void;
+
+const TILE_DRAW_MAP: Record<string, TileDrawFn> = {
   floor: (ctx, mode) => drawFloor(ctx, mode),
-  fence: (ctx, mode) => drawFence(ctx, mode),
-  fence_gate: (ctx, mode, isOpen) => drawFenceGate(ctx, mode, isOpen),
 };
 
 /**
- * Create an Excalibur Canvas graphic for a building type.
+ * Create an Excalibur Canvas graphic for a tile-based building type (floor).
  */
 export function buildingGraphic(typeId: string, mode: SpriteMode, isOpen = false): ex.Canvas {
   const canvas = new ex.Canvas({
@@ -300,9 +397,55 @@ export function buildingGraphic(typeId: string, mode: SpriteMode, isOpen = false
     draw: (ctx) => {
       ctx.imageSmoothingEnabled = false;
       ctx.clearRect(0, 0, TILE, TILE);
-      const fn = DRAW_MAP[typeId];
+      const fn = TILE_DRAW_MAP[typeId];
       if (fn) fn(ctx, mode, isOpen);
     },
   });
   return canvas;
 }
+
+// --- Edge-based (walls, fences) ---
+
+type EdgeDrawFn = (
+  ctx: CanvasRenderingContext2D,
+  mode: SpriteMode,
+  axis: EdgeAxis,
+  isOpen: boolean,
+  connections: FenceConnections,
+) => void;
+
+const EDGE_DRAW_MAP: Record<string, EdgeDrawFn> = {
+  wall: (ctx, mode, axis) => drawEdgeWall(ctx, mode, axis),
+  wall_window: (ctx, mode, axis) => drawEdgeWallWindow(ctx, mode, axis),
+  wall_door: (ctx, mode, axis, isOpen) => drawEdgeWallDoor(ctx, mode, axis, isOpen),
+  fence: (ctx, mode, axis, _isOpen, conn) => drawEdgeFence(ctx, mode, axis, conn),
+  fence_gate: (ctx, mode, axis, isOpen) => drawEdgeFenceGate(ctx, mode, axis, isOpen),
+};
+
+/**
+ * Create an Excalibur Canvas graphic for an edge-based building type.
+ */
+export function edgeBuildingGraphic(
+  typeId: string,
+  mode: SpriteMode,
+  axis: EdgeAxis,
+  isOpen = false,
+  connections: FenceConnections = { startConnected: false, endConnected: false },
+): ex.Canvas {
+  const isH = axis === "h";
+  const w = isH ? TILE : WALL_THICKNESS;
+  const h = isH ? WALL_THICKNESS : TILE;
+  return new ex.Canvas({
+    width: w,
+    height: h,
+    cache: true,
+    draw: (ctx) => {
+      ctx.imageSmoothingEnabled = false;
+      ctx.clearRect(0, 0, w, h);
+      const fn = EDGE_DRAW_MAP[typeId];
+      if (fn) fn(ctx, mode, axis, isOpen, connections);
+    },
+  });
+}
+
+export { WALL_THICKNESS };

@@ -14,6 +14,8 @@ export interface BuildingType {
   interactable: boolean;
   /** For doors/gates: blocks movement when closed. Ignored if interactable is false. */
   solidWhenClosed: boolean;
+  /** How this building is placed: "tile" occupies a full tile, "edge" sits on the boundary between two tiles. */
+  placement: "tile" | "edge";
 }
 
 export const BUILDING_TYPES: BuildingType[] = [
@@ -25,6 +27,7 @@ export const BUILDING_TYPES: BuildingType[] = [
     solid: true,
     interactable: false,
     solidWhenClosed: false,
+    placement: "edge",
   },
   {
     id: "wall_window",
@@ -34,6 +37,7 @@ export const BUILDING_TYPES: BuildingType[] = [
     solid: true,
     interactable: false,
     solidWhenClosed: false,
+    placement: "edge",
   },
   {
     id: "wall_door",
@@ -43,6 +47,7 @@ export const BUILDING_TYPES: BuildingType[] = [
     solid: false,
     interactable: true,
     solidWhenClosed: true,
+    placement: "edge",
   },
   {
     id: "floor",
@@ -52,6 +57,7 @@ export const BUILDING_TYPES: BuildingType[] = [
     solid: false,
     interactable: false,
     solidWhenClosed: false,
+    placement: "tile",
   },
   {
     id: "fence",
@@ -61,6 +67,7 @@ export const BUILDING_TYPES: BuildingType[] = [
     solid: true,
     interactable: false,
     solidWhenClosed: false,
+    placement: "edge",
   },
   {
     id: "fence_gate",
@@ -70,6 +77,7 @@ export const BUILDING_TYPES: BuildingType[] = [
     solid: false,
     interactable: true,
     solidWhenClosed: true,
+    placement: "edge",
   },
 ];
 

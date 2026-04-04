@@ -15,12 +15,24 @@ import { wasActionPressed } from "../systems/keybinds.ts";
 import { ITEMS } from "../data/items.ts";
 import { BUILDING_TYPES, BUILDING_TYPE_MAP, type BuildingType } from "../data/buildings.ts";
 import { Building } from "../actors/building.ts";
+import { EdgeBuilding } from "../actors/edge-building.ts";
 import { PlanCursor } from "../actors/plan-cursor.ts";
-import { buildingGraphic } from "../systems/building-sprites.ts";
+import { buildingGraphic, edgeBuildingGraphic } from "../systems/building-sprites.ts";
+import {
+  type EdgeAxis,
+  type EdgeOrientation,
+  type FenceConnections,
+  edgeKeyBetween,
+  edgeKeyFromTileAndDir,
+  decodeEdgeKey,
+  edgeToWorldPos,
+  getEdgeNeighbors,
+} from "../systems/edge-key.ts";
 import type {
   BerryBushSaveState,
   BigRockSaveState,
   BuildingSaveState,
+  EdgeBuildingSaveState,
   GroundItemSaveState,
   TreeSaveState,
   SaveData,
@@ -74,9 +86,14 @@ export class GameWorld extends ex.Scene<GameWorldData> {
   private itemPickerLabels: ex.Label[] = [];
   private itemPickerBg: ex.Actor | null = null;
 
-  // Building system
+  // Building system (tile-based: floors only)
   private buildings: Building[] = [];
   private buildingByTile = new Map<number, Building>();
+
+  // Edge building system (walls, fences, doors, gates)
+  private edgeBuildingsList: EdgeBuilding[] = [];
+  private edgeBuildings = new Map<number, EdgeBuilding>();
+  private blockedEdges = new Set<number>();
 
   // Planning mode state
   private planningMode = false;
@@ -90,6 +107,11 @@ export class GameWorld extends ex.Scene<GameWorldData> {
     number,
     { type: BuildingType; x: number; y: number; actor: ex.Actor }
   >();
+  private plannedEdges = new Map<
+    number,
+    { type: BuildingType; edgeKey: number; axis: EdgeAxis; x: number; y: number; actor: ex.Actor }
+  >();
+  private planEdgeOrientation: EdgeOrientation = "N";
   private planRadiusOverlay: ex.Actor | null = null;
   private planMenuPanel: ex.ScreenElement | null = null;
   private planPlayerTileX = 0;
@@ -430,7 +452,11 @@ export class GameWorld extends ex.Scene<GameWorldData> {
 
       const vitals = context.data.type === "load" ? context.data.save.player.vitals : undefined;
       this.player = new Player(appearance, ex.vec(startX, startY), inventory, vitals);
-      this.player.setBlockedCheck((tx, ty) => this.blockedTiles.has(tileKey(tx, ty)));
+      this.player.setBlockedCheck((fromX, fromY, toX, toY) => {
+        if (this.blockedTiles.has(tileKey(toX, toY))) return true;
+        const ek = edgeKeyBetween(fromX, fromY, toX, toY);
+        return ek !== null && this.blockedEdges.has(ek);
+      });
       this.add(this.player);
 
       this.hud = new VitalsHud(() => this.player!.vitals);
@@ -459,6 +485,11 @@ export class GameWorld extends ex.Scene<GameWorldData> {
       // Restore building states from save
       if (context.data.type === "load" && context.data.save.buildings) {
         this.restoreBuildingStates(context.data.save.buildings);
+      }
+
+      // Restore edge building states from save
+      if (context.data.type === "load" && context.data.save.edgeBuildings) {
+        this.restoreEdgeBuildingStates(context.data.save.edgeBuildings);
       }
     }
 
@@ -569,17 +600,15 @@ export class GameWorld extends ex.Scene<GameWorldData> {
               }
             }
 
-            // Building construction / repair / damage
+            // Tile-based building construction / repair / damage (floors)
             const building = this.buildingByTile.get(facingKey);
             if (building) {
               if (building.state === "hologram") {
-                // Under construction — only hammer can deliver materials
                 if (weapon.id === "hammer") {
                   const delivered = building.deliverMaterial(this.player!.inventory);
                   if (delivered) {
                     const itemName = ITEMS[delivered]?.name ?? delivered;
                     this.spawnPickupText(`+[${itemName}]`, targetX, targetY);
-                    // deliverMaterial() may have called completeConstruction() internally
                     if ((building.state as string) === "complete") {
                       this.spawnPickupText("Built!", targetX, targetY - 16);
                       if (building.isSolid()) {
@@ -594,9 +623,7 @@ export class GameWorld extends ex.Scene<GameWorldData> {
                     }
                   }
                 }
-                // Non-hammer weapons do nothing to holograms
               } else {
-                // Complete building
                 if (weapon.id === "hammer") {
                   const mult = canonical.toolMultipliers?.building ?? 1;
                   const repairAmount = baseDamage * mult;
@@ -612,6 +639,54 @@ export class GameWorld extends ex.Scene<GameWorldData> {
                   }
                   if (destroyed) {
                     this.removeBuilding(building, facingKey);
+                  }
+                }
+              }
+            }
+
+            // Edge-based building construction / repair / damage (walls, fences)
+            const playerTX = this.player!.getTileX();
+            const playerTY = this.player!.getTileY();
+            const facingEdgeKey = edgeKeyBetween(playerTX, playerTY, facing.x, facing.y);
+            const edgeBuilding =
+              facingEdgeKey != null ? this.edgeBuildings.get(facingEdgeKey) : undefined;
+            if (edgeBuilding) {
+              if (edgeBuilding.state === "hologram") {
+                if (weapon.id === "hammer") {
+                  const delivered = edgeBuilding.deliverMaterial(this.player!.inventory);
+                  if (delivered) {
+                    const itemName = ITEMS[delivered]?.name ?? delivered;
+                    this.spawnPickupText(`+[${itemName}]`, targetX, targetY);
+                    if ((edgeBuilding.state as string) === "complete") {
+                      this.spawnPickupText("Built!", targetX, targetY - 16);
+                      if (edgeBuilding.isSolid()) {
+                        this.blockedEdges.add(facingEdgeKey!);
+                      }
+                    }
+                  } else {
+                    const nextReq = edgeBuilding.getNextRequired();
+                    if (nextReq) {
+                      const reqName = ITEMS[nextReq]?.name ?? nextReq;
+                      this.spawnPickupText(`Need [${reqName}]!`, targetX, targetY);
+                    }
+                  }
+                }
+              } else {
+                if (weapon.id === "hammer") {
+                  const mult = canonical.toolMultipliers?.building ?? 1;
+                  const repairAmount = baseDamage * mult;
+                  const repaired = edgeBuilding.repair(repairAmount);
+                  if (repaired > 0) {
+                    this.spawnPickupText(`+${repaired}`, targetX, targetY);
+                  }
+                } else {
+                  const damage = baseDamage;
+                  const destroyed = edgeBuilding.takeBuildingDamage(damage);
+                  if (damage > 0) {
+                    this.spawnPickupText(`-${damage}`, targetX, targetY);
+                  }
+                  if (destroyed) {
+                    this.removeEdgeBuilding(edgeBuilding, facingEdgeKey!);
                   }
                 }
               }
@@ -693,16 +768,15 @@ export class GameWorld extends ex.Scene<GameWorldData> {
           }
         }
       } else {
-        // Building interaction (doors/gates)
-        const facingBuilding = this.buildingByTile.get(facingKey);
-        if (
-          facingBuilding &&
-          facingBuilding.type.interactable &&
-          facingBuilding.state === "complete"
-        ) {
+        // Edge building interaction (doors/gates on edges)
+        const pTX = this.player.getTileX();
+        const pTY = this.player.getTileY();
+        const fEdgeKey = edgeKeyBetween(pTX, pTY, facing.x, facing.y);
+        const facingEdge = fEdgeKey != null ? this.edgeBuildings.get(fEdgeKey) : undefined;
+        if (facingEdge && facingEdge.type.interactable && facingEdge.state === "complete") {
           const worldX = facing.x * TILE_SIZE + TILE_SIZE / 2;
           const worldY = facing.y * TILE_SIZE + TILE_SIZE / 2;
-          const promptText = facingBuilding.isOpen ? "[E] Close" : "[E] Open";
+          const promptText = facingEdge.isOpen ? "[E] Close" : "[E] Open";
 
           if (this.actionPrompt) {
             this.actionPrompt.text = promptText;
@@ -711,16 +785,42 @@ export class GameWorld extends ex.Scene<GameWorldData> {
           }
 
           if (wasActionPressed(kb, "action")) {
-            facingBuilding.toggle();
-            // Update blockedTiles based on new state
-            if (facingBuilding.isSolid()) {
-              this.blockedTiles.add(facingKey);
+            facingEdge.toggle();
+            if (facingEdge.isSolid()) {
+              this.blockedEdges.add(fEdgeKey!);
             } else {
-              this.blockedTiles.delete(facingKey);
+              this.blockedEdges.delete(fEdgeKey!);
             }
           }
-        } else if (this.actionPrompt) {
-          this.actionPrompt.graphics.visible = false;
+        } else {
+          // Tile-based building interaction (floors don't have doors, but keep for extensibility)
+          const facingBuilding = this.buildingByTile.get(facingKey);
+          if (
+            facingBuilding &&
+            facingBuilding.type.interactable &&
+            facingBuilding.state === "complete"
+          ) {
+            const worldX = facing.x * TILE_SIZE + TILE_SIZE / 2;
+            const worldY = facing.y * TILE_SIZE + TILE_SIZE / 2;
+            const promptText = facingBuilding.isOpen ? "[E] Close" : "[E] Open";
+
+            if (this.actionPrompt) {
+              this.actionPrompt.text = promptText;
+              this.actionPrompt.pos = ex.vec(worldX, worldY - TILE_SIZE / 2 - 4);
+              this.actionPrompt.graphics.visible = true;
+            }
+
+            if (wasActionPressed(kb, "action")) {
+              facingBuilding.toggle();
+              if (facingBuilding.isSolid()) {
+                this.blockedTiles.add(facingKey);
+              } else {
+                this.blockedTiles.delete(facingKey);
+              }
+            }
+          } else if (this.actionPrompt) {
+            this.actionPrompt.graphics.visible = false;
+          }
         }
       }
     } else if (this.actionPrompt) {
@@ -1119,6 +1219,7 @@ export class GameWorld extends ex.Scene<GameWorldData> {
     this.planMenuIndex = 0;
     this.planMenuOpen = true;
     this.selectedBuildType = null;
+    this.planEdgeOrientation = "N";
 
     // Create radius overlay
     this.createPlanRadiusOverlay();
@@ -1135,8 +1236,8 @@ export class GameWorld extends ex.Scene<GameWorldData> {
   private exitPlanningMode(confirm: boolean): void {
     if (!this.player) return;
 
-    if (confirm && this.plannedBuildings.size > 0) {
-      // Spawn buildings as holograms
+    if (confirm) {
+      // Spawn tile-based buildings (floors) as holograms
       for (const planned of this.plannedBuildings.values()) {
         const building = new Building(planned.type, planned.x, planned.y, "hologram");
         building.onDestroy = () => this.removeBuilding(building, tileKey(planned.x, planned.y));
@@ -1144,13 +1245,32 @@ export class GameWorld extends ex.Scene<GameWorldData> {
         this.buildingByTile.set(tileKey(planned.x, planned.y), building);
         this.add(building);
       }
+
+      // Spawn edge-based buildings (walls, fences) as holograms
+      for (const planned of this.plannedEdges.values()) {
+        const edgeBuilding = new EdgeBuilding(planned.type, planned.edgeKey, "hologram");
+        edgeBuilding.onDestroy = () => this.removeEdgeBuilding(edgeBuilding, planned.edgeKey);
+        this.edgeBuildingsList.push(edgeBuilding);
+        this.edgeBuildings.set(planned.edgeKey, edgeBuilding);
+        this.add(edgeBuilding);
+        // Refresh fence autotile connections for neighbors
+        if (edgeBuilding.isFenceType()) {
+          this.refreshFenceNeighbors(planned.edgeKey);
+        }
+      }
     }
 
-    // Clean up ghost actors from planned buildings
+    // Clean up ghost actors from planned tile buildings
     for (const planned of this.plannedBuildings.values()) {
       this.remove(planned.actor);
     }
     this.plannedBuildings.clear();
+
+    // Clean up ghost actors from planned edge buildings
+    for (const planned of this.plannedEdges.values()) {
+      this.remove(planned.actor);
+    }
+    this.plannedEdges.clear();
 
     // Clean up UI
     if (this.planCursor) {
@@ -1189,6 +1309,12 @@ export class GameWorld extends ex.Scene<GameWorldData> {
       if (wasActionPressed(kb, "action") || wasActionPressed(kb, "confirm")) {
         this.selectedBuildType = BUILDING_TYPES[this.planMenuIndex];
         this.planMenuOpen = false;
+        // Switch cursor mode based on placement type
+        const isEdge = this.selectedBuildType.placement === "edge";
+        this.planCursor?.setEdgeMode(isEdge);
+        if (isEdge) {
+          this.planCursor?.setOrientation(this.planEdgeOrientation);
+        }
         this.updatePlanMenu();
         this.updateCursorValidity();
       }
@@ -1220,11 +1346,20 @@ export class GameWorld extends ex.Scene<GameWorldData> {
         }
       }
 
+      // Rotate edge orientation
+      if (wasActionPressed(kb, "rotate") && this.selectedBuildType?.placement === "edge") {
+        const cycle: EdgeOrientation[] = ["N", "E", "S", "W"];
+        const idx = cycle.indexOf(this.planEdgeOrientation);
+        this.planEdgeOrientation = cycle[(idx + 1) % 4];
+        this.planCursor?.setOrientation(this.planEdgeOrientation);
+        this.updateCursorValidity();
+      }
+
       // Place a building at cursor
       if (wasActionPressed(kb, "action") || wasActionPressed(kb, "confirm")) {
         if (this.selectedBuildType) {
           this.placePlannedBuilding();
-        } else if (this.plannedBuildings.size > 0) {
+        } else if (this.plannedBuildings.size > 0 || this.plannedEdges.size > 0) {
           // No type selected + confirm = finalize
           this.exitPlanningMode(true);
           return;
@@ -1240,13 +1375,14 @@ export class GameWorld extends ex.Scene<GameWorldData> {
       if (wasActionPressed(kb, "inventory")) {
         this.selectedBuildType = null;
         this.planMenuOpen = true;
+        this.planCursor?.setEdgeMode(false);
         this.updatePlanMenu();
         this.updateCursorValidity();
       }
 
       // Confirm all planned builds with build key
       if (wasActionPressed(kb, "build")) {
-        if (this.plannedBuildings.size > 0) {
+        if (this.plannedBuildings.size > 0 || this.plannedEdges.size > 0) {
           this.exitPlanningMode(true);
           return;
         }
@@ -1255,6 +1391,16 @@ export class GameWorld extends ex.Scene<GameWorldData> {
   }
 
   private placePlannedBuilding(): void {
+    if (!this.selectedBuildType) return;
+
+    if (this.selectedBuildType.placement === "edge") {
+      this.placePlannedEdgeBuilding();
+    } else {
+      this.placePlannedTileBuilding();
+    }
+  }
+
+  private placePlannedTileBuilding(): void {
     if (!this.selectedBuildType) return;
     const key = tileKey(this.planCursorX, this.planCursorY);
 
@@ -1285,7 +1431,66 @@ export class GameWorld extends ex.Scene<GameWorldData> {
     this.updateCursorValidity();
   }
 
+  private placePlannedEdgeBuilding(): void {
+    if (!this.selectedBuildType) return;
+
+    const edgeKey = edgeKeyFromTileAndDir(
+      this.planCursorX,
+      this.planCursorY,
+      this.planEdgeOrientation,
+    );
+    if (edgeKey == null) return;
+
+    // Validate placement
+    if (!this.isEdgeValidForBuilding(edgeKey)) return;
+
+    const decoded = decodeEdgeKey(edgeKey);
+    const { wx, wy } = edgeToWorldPos(decoded.x, decoded.y, decoded.axis);
+    const isH = decoded.axis === "h";
+
+    const ghost = new ex.Actor({
+      pos: ex.vec(wx, wy),
+      width: isH ? TILE_SIZE : 8,
+      height: isH ? 8 : TILE_SIZE,
+      anchor: ex.vec(0.5, 0.5),
+      z: 6,
+    });
+    ghost.graphics.use(edgeBuildingGraphic(this.selectedBuildType.id, "ghost", decoded.axis));
+    ghost.graphics.opacity = 0.4;
+    this.add(ghost);
+
+    this.plannedEdges.set(edgeKey, {
+      type: this.selectedBuildType,
+      edgeKey,
+      axis: decoded.axis,
+      x: decoded.x,
+      y: decoded.y,
+      actor: ghost,
+    });
+
+    this.updateCursorValidity();
+  }
+
   private removePlannedBuilding(): void {
+    if (this.selectedBuildType?.placement === "edge") {
+      // Remove planned edge at current cursor orientation
+      const edgeKey = edgeKeyFromTileAndDir(
+        this.planCursorX,
+        this.planCursorY,
+        this.planEdgeOrientation,
+      );
+      if (edgeKey != null) {
+        const planned = this.plannedEdges.get(edgeKey);
+        if (planned) {
+          this.remove(planned.actor);
+          this.plannedEdges.delete(edgeKey);
+          this.updateCursorValidity();
+          return;
+        }
+      }
+    }
+
+    // Remove planned tile building at cursor
     const key = tileKey(this.planCursorX, this.planCursorY);
     const planned = this.plannedBuildings.get(key);
     if (planned) {
@@ -1309,10 +1514,29 @@ export class GameWorld extends ex.Scene<GameWorldData> {
     return true;
   }
 
+  private isEdgeValidForBuilding(edgeKey: number): boolean {
+    // Already has a real building on this edge
+    if (this.edgeBuildings.has(edgeKey)) return false;
+    // Already planned on this edge
+    if (this.plannedEdges.has(edgeKey)) return false;
+    return true;
+  }
+
   private updateCursorValidity(): void {
     if (!this.planCursor) return;
-    const valid = this.isTileValidForBuilding(this.planCursorX, this.planCursorY);
-    this.planCursor.setValid(valid);
+
+    if (this.selectedBuildType?.placement === "edge") {
+      const edgeKey = edgeKeyFromTileAndDir(
+        this.planCursorX,
+        this.planCursorY,
+        this.planEdgeOrientation,
+      );
+      const valid = edgeKey != null && this.isEdgeValidForBuilding(edgeKey);
+      this.planCursor.setValid(valid);
+    } else {
+      const valid = this.isTileValidForBuilding(this.planCursorX, this.planCursorY);
+      this.planCursor.setValid(valid);
+    }
   }
 
   // ==================== Planning Mode UI ====================
@@ -1355,7 +1579,7 @@ export class GameWorld extends ex.Scene<GameWorldData> {
     this.add(this.planRadiusOverlay);
   }
 
-  private readonly PLAN_PANEL_WIDTH = 190;
+  private readonly PLAN_PANEL_WIDTH = 220;
   private readonly PLAN_LINE_HEIGHT = 22;
 
   private createPlanMenu(): void {
@@ -1458,7 +1682,7 @@ export class GameWorld extends ex.Scene<GameWorldData> {
           ctx.fillText("[E] Select  [Esc] Cancel", w / 2, hintY);
         } else {
           ctx.fillText("[E] Place  [Q] Remove  [I] Menu", w / 2, hintY);
-          ctx.fillText("[B] Confirm  [Esc] Cancel", w / 2, hintY + 12);
+          ctx.fillText("[R] Rotate  [B] Confirm  [Esc] Cancel", w / 2, hintY + 12);
         }
       },
     });
@@ -1473,7 +1697,7 @@ export class GameWorld extends ex.Scene<GameWorldData> {
     }
   }
 
-  // ==================== Building Management ====================
+  // ==================== Building Management (tile-based) ====================
 
   private removeBuilding(building: Building, key: number): void {
     this.blockedTiles.delete(key);
@@ -1482,7 +1706,54 @@ export class GameWorld extends ex.Scene<GameWorldData> {
     if (idx !== -1) this.buildings.splice(idx, 1);
   }
 
-  // ==================== Building Save/Load ====================
+  // ==================== Edge Building Management ====================
+
+  private removeEdgeBuilding(edgeBuilding: EdgeBuilding, edgeKey: number): void {
+    this.blockedEdges.delete(edgeKey);
+    this.edgeBuildings.delete(edgeKey);
+    const idx = this.edgeBuildingsList.indexOf(edgeBuilding);
+    if (idx !== -1) this.edgeBuildingsList.splice(idx, 1);
+    // Refresh fence neighbors after removal
+    if (edgeBuilding.isFenceType()) {
+      this.refreshFenceNeighbors(edgeKey);
+    }
+  }
+
+  // ==================== Fence Autotile ====================
+
+  private computeFenceConnections(edgeKey: number): FenceConnections {
+    const decoded = decodeEdgeKey(edgeKey);
+    const neighbors = getEdgeNeighbors(decoded.x, decoded.y, decoded.axis);
+
+    const hasFenceAt = (k: number): boolean => {
+      const eb = this.edgeBuildings.get(k);
+      return eb != null && eb.isFenceType();
+    };
+
+    return {
+      startConnected: neighbors.start.some(hasFenceAt),
+      endConnected: neighbors.end.some(hasFenceAt),
+    };
+  }
+
+  private refreshFenceNeighbors(edgeKey: number): void {
+    const decoded = decodeEdgeKey(edgeKey);
+    const neighbors = getEdgeNeighbors(decoded.x, decoded.y, decoded.axis);
+    const allNeighborKeys = [...neighbors.start, ...neighbors.end];
+    for (const nk of allNeighborKeys) {
+      const nb = this.edgeBuildings.get(nk);
+      if (nb && nb.isFenceType()) {
+        nb.updateGraphic(this.computeFenceConnections(nk));
+      }
+    }
+    // Also refresh the edge itself if it still exists
+    const self = this.edgeBuildings.get(edgeKey);
+    if (self && self.isFenceType()) {
+      self.updateGraphic(this.computeFenceConnections(edgeKey));
+    }
+  }
+
+  // ==================== Building Save/Load (tile-based) ====================
 
   getBuildingStates(): BuildingSaveState[] {
     return this.buildings.map((b) => b.getState());
@@ -1499,6 +1770,8 @@ export class GameWorld extends ex.Scene<GameWorldData> {
     for (const saved of states) {
       const type = BUILDING_TYPE_MAP[saved.typeId];
       if (!type) continue;
+      // Only restore tile-based buildings (floors); skip old wall/fence entries
+      if (type.placement !== "tile") continue;
 
       const building = new Building(type, saved.tileX, saved.tileY, saved.state);
       building.restoreState(saved);
@@ -1512,6 +1785,46 @@ export class GameWorld extends ex.Scene<GameWorldData> {
       // Restore blocked state
       if (building.isSolid()) {
         this.blockedTiles.add(key);
+      }
+    }
+  }
+
+  // ==================== Edge Building Save/Load ====================
+
+  getEdgeBuildingStates(): EdgeBuildingSaveState[] {
+    return this.edgeBuildingsList.map((b) => b.getState());
+  }
+
+  private restoreEdgeBuildingStates(states: EdgeBuildingSaveState[]): void {
+    // Clear any existing edge buildings
+    for (const eb of this.edgeBuildingsList) {
+      this.remove(eb);
+    }
+    this.edgeBuildingsList = [];
+    this.edgeBuildings.clear();
+    this.blockedEdges.clear();
+
+    for (const saved of states) {
+      const type = BUILDING_TYPE_MAP[saved.typeId];
+      if (!type) continue;
+
+      const edgeBuilding = new EdgeBuilding(type, saved.edgeKey, saved.state);
+      edgeBuilding.restoreState(saved);
+      edgeBuilding.onDestroy = () => this.removeEdgeBuilding(edgeBuilding, saved.edgeKey);
+
+      this.edgeBuildingsList.push(edgeBuilding);
+      this.edgeBuildings.set(saved.edgeKey, edgeBuilding);
+      this.add(edgeBuilding);
+
+      if (edgeBuilding.isSolid()) {
+        this.blockedEdges.add(saved.edgeKey);
+      }
+    }
+
+    // Compute all fence connections after all are placed
+    for (const eb of this.edgeBuildingsList) {
+      if (eb.isFenceType()) {
+        eb.updateGraphic(this.computeFenceConnections(eb.edgeKey));
       }
     }
   }

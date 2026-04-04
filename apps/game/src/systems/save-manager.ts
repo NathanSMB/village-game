@@ -43,6 +43,18 @@ export interface BuildingSaveState {
   isOpen: boolean;
 }
 
+export interface EdgeBuildingSaveState {
+  typeId: string;
+  edgeKey: number;
+  axis: "h" | "v";
+  x: number;
+  y: number;
+  state: "hologram" | "complete";
+  materialsDelivered: number;
+  hp: number;
+  isOpen: boolean;
+}
+
 export interface SaveData {
   name: string;
   timestamp: number;
@@ -60,6 +72,7 @@ export interface SaveData {
   rocks?: BigRockSaveState[];
   groundItems?: GroundItemSaveState[];
   buildings?: BuildingSaveState[];
+  edgeBuildings?: EdgeBuildingSaveState[];
 }
 
 const DB_NAME = "village-game";

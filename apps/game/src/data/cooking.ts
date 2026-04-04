@@ -5,7 +5,10 @@ export interface CookingRecipe {
   outputId: string;
 }
 
-export const COOKING_RECIPES: CookingRecipe[] = [{ inputId: "mutton", outputId: "cooked_mutton" }];
+export const COOKING_RECIPES: CookingRecipe[] = [
+  { inputId: "mutton", outputId: "cooked_mutton" },
+  { inputId: "raw_beef", outputId: "cooked_beef" },
+];
 
 /** Lookup: inputId → recipe (for quick checks during cooking menu). */
 export const COOKING_RECIPE_MAP: Record<string, CookingRecipe> = Object.fromEntries(

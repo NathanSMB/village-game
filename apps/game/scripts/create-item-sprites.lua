@@ -4,7 +4,7 @@
 
 local W = 16
 local H = 16
-local TOTAL_FRAMES = 16
+local TOTAL_FRAMES = 19
 
 local scriptPath = app.params["script-path"] or "."
 local outputDir = app.fs.joinPath(app.fs.filePath(scriptPath), "..", "assets", "ground")
@@ -726,10 +726,172 @@ local function drawCookedMutton(img)
   px(img, 11, 1, BONE_D)
 end
 
+-- ============================================================
+-- Frame 16: Cow Hide (flat leather piece)
+-- ============================================================
+local function drawCowHide(img)
+  clearImg(img)
+  local HIDE = Color{ r = 140, g = 85, b = 50, a = 255 }
+  local HIDE_D = Color{ r = 105, g = 60, b = 35, a = 255 }
+  local HIDE_L = Color{ r = 175, g = 115, b = 72, a = 255 }
+  local HIDE_H = Color{ r = 195, g = 140, b = 95, a = 255 }
+  local PATCH_COW = Color{ r = 235, g = 228, b = 215, a = 255 }
+  local PATCH_D = Color{ r = 200, g = 192, b = 178, a = 255 }
+  local SHADOW_H = Color{ r = 60, g = 35, b = 20, a = 80 }
+
+  -- Shadow
+  rect(img, 3, 13, 10, 1, SHADOW_H)
+
+  -- Main hide shape (irregular, flat)
+  rect(img, 4, 5, 8, 7, HIDE)
+  rect(img, 3, 6, 10, 5, HIDE)
+  rect(img, 5, 4, 6, 1, HIDE)
+  rect(img, 5, 12, 6, 1, HIDE)
+
+  -- Dark edge (bottom/right)
+  rect(img, 3, 10, 10, 1, HIDE_D)
+  rect(img, 4, 11, 8, 1, HIDE_D)
+  rect(img, 5, 12, 6, 1, HIDE_D)
+  px(img, 12, 7, HIDE_D)
+  px(img, 12, 8, HIDE_D)
+
+  -- Light highlights (upper-left)
+  px(img, 5, 4, HIDE_L)
+  px(img, 6, 4, HIDE_L)
+  px(img, 4, 5, HIDE_L)
+  px(img, 5, 5, HIDE_H)
+  px(img, 3, 6, HIDE_L)
+
+  -- White cow patches on hide
+  rect(img, 6, 6, 3, 3, PATCH_COW)
+  px(img, 8, 8, PATCH_D)
+  px(img, 9, 9, PATCH_COW)
+  px(img, 10, 8, PATCH_COW)
+
+  -- Leather texture
+  px(img, 5, 8, HIDE_D)
+  px(img, 8, 10, HIDE_D)
+  px(img, 4, 7, HIDE_H)
+  px(img, 10, 6, HIDE_H)
+
+  -- Ragged edges (irregular shape)
+  px(img, 3, 6, HIDE_L)
+  px(img, 12, 9, HIDE_D)
+  px(img, 4, 12, CLEAR)
+  px(img, 11, 12, CLEAR)
+end
+
+-- ============================================================
+-- Frame 17: Raw Beef (thick steak cut, no bone)
+-- ============================================================
+local function drawRawBeef(img)
+  clearImg(img)
+  local MEAT = Color{ r = 190, g = 55, b = 55, a = 255 }
+  local MEAT_D = Color{ r = 145, g = 35, b = 35, a = 255 }
+  local MEAT_L = Color{ r = 220, g = 85, b = 80, a = 255 }
+  local FAT = Color{ r = 240, g = 220, b = 195, a = 255 }
+  local FAT_D = Color{ r = 205, g = 185, b = 160, a = 255 }
+  local MARB = Color{ r = 225, g = 180, b = 175, a = 255 }
+  local SHADOW_B = Color{ r = 85, g = 25, b = 25, a = 80 }
+
+  -- Shadow
+  rect(img, 3, 13, 10, 1, SHADOW_B)
+
+  -- Meat body (thick steak shape — wider and no bone)
+  rect(img, 3, 5, 10, 7, MEAT)
+  rect(img, 4, 4, 8, 1, MEAT)
+  rect(img, 4, 12, 8, 1, MEAT)
+  rect(img, 2, 7, 1, 3, MEAT)
+
+  -- Dark edge (bottom/right)
+  rect(img, 3, 11, 10, 1, MEAT_D)
+  rect(img, 4, 12, 8, 1, MEAT_D)
+  px(img, 12, 7, MEAT_D)
+  px(img, 12, 8, MEAT_D)
+  px(img, 12, 9, MEAT_D)
+
+  -- Light highlights (upper-left)
+  px(img, 4, 4, MEAT_L)
+  px(img, 5, 4, MEAT_L)
+  px(img, 6, 4, MEAT_L)
+  px(img, 3, 5, MEAT_L)
+  px(img, 4, 5, MEAT_L)
+  px(img, 2, 7, MEAT_L)
+
+  -- Fat cap (top edge)
+  rect(img, 5, 3, 6, 1, FAT)
+  rect(img, 4, 4, 1, 1, FAT)
+  px(img, 10, 3, FAT_D)
+  px(img, 11, 4, FAT_D)
+
+  -- Marbling
+  px(img, 6, 7, MARB)
+  px(img, 7, 6, MARB)
+  px(img, 9, 8, MARB)
+  px(img, 5, 9, MARB)
+  px(img, 8, 10, MARB)
+  px(img, 10, 7, MARB)
+  px(img, 7, 9, FAT_D)
+end
+
+-- ============================================================
+-- Frame 18: Cooked Beef (browned steak)
+-- ============================================================
+local function drawCookedBeef(img)
+  clearImg(img)
+  local MEAT = Color{ r = 125, g = 65, b = 30, a = 255 }     -- cooked brown
+  local MEAT_D = Color{ r = 90, g = 42, b = 18, a = 255 }    -- dark brown edge
+  local MEAT_L = Color{ r = 160, g = 90, b = 48, a = 255 }   -- highlight
+  local CHAR = Color{ r = 55, g = 28, b = 8, a = 255 }       -- char marks
+  local CRUST = Color{ r = 100, g = 55, b = 25, a = 255 }    -- golden crust
+  local SHADOW_C = Color{ r = 45, g = 22, b = 10, a = 60 }
+
+  -- Shadow
+  rect(img, 3, 13, 10, 1, SHADOW_C)
+
+  -- Meat body (same shape as raw beef)
+  rect(img, 3, 5, 10, 7, MEAT)
+  rect(img, 4, 4, 8, 1, MEAT)
+  rect(img, 4, 12, 8, 1, MEAT)
+  rect(img, 2, 7, 1, 3, MEAT)
+
+  -- Dark edge (bottom/right)
+  rect(img, 3, 11, 10, 1, MEAT_D)
+  rect(img, 4, 12, 8, 1, MEAT_D)
+  px(img, 12, 7, MEAT_D)
+  px(img, 12, 8, MEAT_D)
+  px(img, 12, 9, MEAT_D)
+
+  -- Light highlights (upper-left)
+  px(img, 4, 4, MEAT_L)
+  px(img, 5, 4, MEAT_L)
+  px(img, 6, 4, MEAT_L)
+  px(img, 3, 5, MEAT_L)
+  px(img, 4, 5, MEAT_L)
+  px(img, 2, 7, MEAT_L)
+
+  -- Golden crust top
+  rect(img, 5, 3, 6, 1, CRUST)
+  px(img, 4, 4, CRUST)
+  px(img, 10, 3, MEAT_D)
+
+  -- Char/grill marks
+  px(img, 5, 6, CHAR)
+  px(img, 6, 7, CHAR)
+  px(img, 7, 6, CHAR)
+  px(img, 8, 8, CHAR)
+  px(img, 9, 7, CHAR)
+  px(img, 10, 9, CHAR)
+  px(img, 5, 9, CHAR)
+  px(img, 7, 10, CHAR)
+  px(img, 11, 8, CHAR)
+end
+
 -- Generate frames
 local drawFuncs = { drawSmallRock, drawBerry, drawTunic, drawPants, drawBoots, drawBranch,
                     drawHammer, drawHatchet, drawPickaxe, drawSpear,
-                    drawLargeStone, drawFlint, drawLog, drawMutton, drawWool, drawCookedMutton }
+                    drawLargeStone, drawFlint, drawLog, drawMutton, drawWool, drawCookedMutton,
+                    drawCowHide, drawRawBeef, drawCookedBeef }
 
 for i, drawFunc in ipairs(drawFuncs) do
   app.activeFrame = spr.frames[i]
@@ -739,4 +901,4 @@ for i, drawFunc in ipairs(drawFuncs) do
 end
 
 spr:saveAs(app.fs.joinPath(outputDir, "items.aseprite"))
-print("Created items.aseprite with " .. TOTAL_FRAMES .. " frames (16x16)")
+print("Created items.aseprite with " .. TOTAL_FRAMES .. " frames (16x16, including cow hide, raw beef, cooked beef)")

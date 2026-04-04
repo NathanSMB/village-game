@@ -143,6 +143,16 @@ export const ITEMS: Record<string, Item> = {
     weight: 2,
     itemSprite: "mutton",
   },
+  cooked_mutton: {
+    id: "cooked_mutton",
+    name: "Cooked Mutton",
+    description: "Tender cooked meat. Restores a good amount of hunger.",
+    rarity: Rarity.Common,
+    stats: {},
+    weight: 2,
+    consumable: { hungerRestore: 25 },
+    itemSprite: "cooked-mutton",
+  },
   wool: {
     id: "wool",
     name: "Wool",

@@ -43,6 +43,10 @@ export interface BuildingSaveState {
   isOpen: boolean;
   /** 0-3 clockwise quarter-turns (0 = default). Absent in old saves → 0. */
   rotation?: number;
+  /** Whether a fire-type building is currently burning. */
+  isBurning?: boolean;
+  /** Remaining burn time in ms (0 when not burning). */
+  burnTimer?: number;
 }
 
 export interface EdgeBuildingSaveState {

@@ -3,6 +3,17 @@ export interface BuildingIngredient {
   count: number;
 }
 
+export interface FireConfig {
+  /** Duration in ms the fire burns once ignited. */
+  burnDurationMs: number;
+  /** If true, fire starts automatically when construction completes. */
+  autoIgnite: boolean;
+  /** If true, the building is removed entirely when the fire expires. */
+  removeOnBurnout: boolean;
+  /** Items consumed from player inventory to ignite (empty array for autoIgnite buildings). */
+  fuelCost: BuildingIngredient[];
+}
+
 export interface BuildingType {
   id: string;
   name: string;
@@ -18,6 +29,8 @@ export interface BuildingType {
   placement: "tile" | "edge";
   /** If true, this building can only be placed on a completed indoor floor tile (which it replaces). */
   requiresIndoor?: boolean;
+  /** If set, this building supports fire behavior (burn timer, ignition, cooking). */
+  fire?: FireConfig;
 }
 
 export const BUILDING_TYPES: BuildingType[] = [
@@ -94,6 +107,64 @@ export const BUILDING_TYPES: BuildingType[] = [
     solidWhenClosed: false,
     placement: "tile",
     requiresIndoor: true,
+  },
+  {
+    id: "camp_fire",
+    name: "Camp Fire",
+    ingredients: [
+      { itemId: "branch", count: 5 },
+      { itemId: "flint", count: 1 },
+    ],
+    maxHp: 30,
+    solid: true,
+    interactable: false,
+    solidWhenClosed: false,
+    placement: "tile",
+    fire: {
+      burnDurationMs: 60_000,
+      autoIgnite: true,
+      removeOnBurnout: true,
+      fuelCost: [],
+    },
+  },
+  {
+    id: "fire_pit",
+    name: "Fire Pit",
+    ingredients: [{ itemId: "small_rock", count: 5 }],
+    maxHp: 60,
+    solid: true,
+    interactable: false,
+    solidWhenClosed: false,
+    placement: "tile",
+    fire: {
+      burnDurationMs: 180_000,
+      autoIgnite: false,
+      removeOnBurnout: false,
+      fuelCost: [
+        { itemId: "log", count: 1 },
+        { itemId: "flint", count: 1 },
+      ],
+    },
+  },
+  {
+    id: "hearth",
+    name: "Hearth",
+    ingredients: [{ itemId: "large_stone", count: 5 }],
+    maxHp: 100,
+    solid: true,
+    interactable: false,
+    solidWhenClosed: false,
+    placement: "tile",
+    requiresIndoor: true,
+    fire: {
+      burnDurationMs: 300_000,
+      autoIgnite: false,
+      removeOnBurnout: false,
+      fuelCost: [
+        { itemId: "log", count: 1 },
+        { itemId: "flint", count: 1 },
+      ],
+    },
   },
 ];
 

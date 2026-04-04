@@ -16,6 +16,14 @@ const FENCE_POST = "#5c3a10";
 const FENCE_RAIL = "#7a5020";
 const LATCH_COLOR = "#888888";
 
+// Stone color palette (fire pit, hearth)
+const STONE_DARK = "#4a4a4a";
+const STONE_MED = "#6b6b6b";
+const STONE_LIGHT = "#8b8b8b";
+const STONE_HIGHLIGHT = "#a0a0a0";
+const CHARCOAL = "#2a2a2a";
+const ASH_GRAY = "#555555";
+
 // Hologram tint
 const HOLO_CYAN = "#00ccff";
 
@@ -493,6 +501,184 @@ export function drawBed(
   applyHologramTint(ctx, mode, S, S);
 }
 
+// ========== Camp Fire (tile-based) ==========
+
+export function drawCampFire(ctx: CanvasRenderingContext2D, mode: SpriteMode): void {
+  applyMode(ctx, mode);
+  const S = TILE;
+  const cx = S / 2;
+  const cy = S / 2 + 2;
+
+  // Ash circle at base
+  ctx.fillStyle = ASH_GRAY;
+  ctx.beginPath();
+  ctx.ellipse(cx, cy + 2, 7, 4, 0, 0, Math.PI * 2);
+  ctx.fill();
+  ctx.fillStyle = CHARCOAL;
+  ctx.beginPath();
+  ctx.ellipse(cx, cy + 2, 5, 3, 0, 0, Math.PI * 2);
+  ctx.fill();
+
+  // Branches in tepee arrangement (5 sticks converging at center-top)
+  const stickEnds = [
+    { x: cx - 8, y: cy + 6 },
+    { x: cx + 8, y: cy + 6 },
+    { x: cx - 6, y: cy + 7 },
+    { x: cx + 6, y: cy + 7 },
+    { x: cx, y: cy + 8 },
+  ];
+  const tipY = cy - 5;
+
+  ctx.strokeStyle = BROWN_DARK;
+  ctx.lineWidth = 1.5;
+  for (const end of stickEnds) {
+    ctx.beginPath();
+    ctx.moveTo(end.x, end.y);
+    ctx.lineTo(cx + (end.x - cx) * 0.15, tipY);
+    ctx.stroke();
+  }
+
+  // Lighter stick highlights
+  ctx.strokeStyle = BROWN_LIGHT;
+  ctx.lineWidth = 0.5;
+  ctx.beginPath();
+  ctx.moveTo(cx - 7, cy + 6);
+  ctx.lineTo(cx - 1, tipY);
+  ctx.stroke();
+  ctx.beginPath();
+  ctx.moveTo(cx + 7, cy + 6);
+  ctx.lineTo(cx + 1, tipY);
+  ctx.stroke();
+
+  applyHologramTint(ctx, mode, S, S);
+}
+
+// ========== Fire Pit (tile-based) ==========
+
+export function drawFirePit(ctx: CanvasRenderingContext2D, mode: SpriteMode): void {
+  applyMode(ctx, mode);
+  const S = TILE;
+  const cx = S / 2;
+  const cy = S / 2;
+
+  // Dark charcoal interior
+  ctx.fillStyle = CHARCOAL;
+  ctx.beginPath();
+  ctx.ellipse(cx, cy, 8, 7, 0, 0, Math.PI * 2);
+  ctx.fill();
+
+  // Ash layer
+  ctx.fillStyle = ASH_GRAY;
+  ctx.beginPath();
+  ctx.ellipse(cx, cy, 6, 5, 0, 0, Math.PI * 2);
+  ctx.fill();
+
+  // Ring of 5 stones around the pit
+  const stonePositions = [
+    { x: cx, y: cy - 9 },
+    { x: cx + 8, y: cy - 3 },
+    { x: cx + 5, y: cy + 7 },
+    { x: cx - 5, y: cy + 7 },
+    { x: cx - 8, y: cy - 3 },
+  ];
+
+  for (let i = 0; i < stonePositions.length; i++) {
+    const sp = stonePositions[i];
+    const w = 4 + (i % 2);
+    const h = 3 + ((i + 1) % 2);
+
+    // Stone body
+    ctx.fillStyle = STONE_MED;
+    ctx.fillRect(sp.x - w / 2, sp.y - h / 2, w, h);
+
+    // Stone highlight (top-left pixel)
+    ctx.fillStyle = STONE_HIGHLIGHT;
+    ctx.fillRect(sp.x - w / 2, sp.y - h / 2, 1, 1);
+
+    // Stone shadow (bottom-right pixel)
+    ctx.fillStyle = STONE_DARK;
+    ctx.fillRect(sp.x + w / 2 - 1, sp.y + h / 2 - 1, 1, 1);
+  }
+
+  applyHologramTint(ctx, mode, S, S);
+}
+
+// ========== Hearth (tile-based) ==========
+
+export function drawHearth(ctx: CanvasRenderingContext2D, mode: SpriteMode): void {
+  applyMode(ctx, mode);
+  const S = TILE;
+  const wallW = 7; // side wall thickness
+  const backH = 9; // back wall height
+
+  // Outer outline (fills entire tile)
+  ctx.fillStyle = STONE_DARK;
+  ctx.fillRect(0, 0, S, S);
+
+  // Back wall (top stones) — full width
+  ctx.fillStyle = STONE_MED;
+  ctx.fillRect(1, 1, S - 2, backH);
+  // Back wall highlight
+  ctx.fillStyle = STONE_LIGHT;
+  ctx.fillRect(2, 2, S - 4, 2);
+  // Back wall dark top/bottom lines
+  ctx.fillStyle = STONE_DARK;
+  ctx.fillRect(0, 0, S, 1);
+  ctx.fillRect(0, backH, S, 1);
+
+  // Stone block lines on back wall
+  ctx.fillStyle = STONE_DARK;
+  ctx.fillRect(8, 1, 1, backH);
+  ctx.fillRect(16, 1, 1, backH);
+  ctx.fillRect(24, 1, 1, backH);
+
+  // Left wall — full height
+  ctx.fillStyle = STONE_MED;
+  ctx.fillRect(0, 0, wallW, S);
+  ctx.fillStyle = STONE_LIGHT;
+  ctx.fillRect(1, 1, 2, S - 2);
+  ctx.fillStyle = STONE_DARK;
+  ctx.fillRect(0, 0, 1, S);
+  ctx.fillRect(wallW, 0, 1, S);
+
+  // Left wall block lines
+  ctx.fillStyle = STONE_DARK;
+  ctx.fillRect(0, 11, wallW, 1);
+  ctx.fillRect(0, 21, wallW, 1);
+
+  // Right wall — full height
+  ctx.fillStyle = STONE_MED;
+  ctx.fillRect(S - wallW, 0, wallW, S);
+  ctx.fillStyle = STONE_LIGHT;
+  ctx.fillRect(S - wallW + 1, 1, 2, S - 2);
+  ctx.fillStyle = STONE_DARK;
+  ctx.fillRect(S - wallW - 1, 0, 1, S);
+  ctx.fillRect(S - 1, 0, 1, S);
+
+  // Right wall block lines
+  ctx.fillStyle = STONE_DARK;
+  ctx.fillRect(S - wallW, 11, wallW, 1);
+  ctx.fillRect(S - wallW, 21, wallW, 1);
+
+  // Interior (charcoal fill)
+  ctx.fillStyle = CHARCOAL;
+  ctx.fillRect(wallW + 1, backH + 1, S - wallW * 2 - 2, S - backH - 1);
+
+  // Ash layer inside
+  ctx.fillStyle = ASH_GRAY;
+  ctx.fillRect(wallW + 3, backH + 4, S - wallW * 2 - 6, S - backH - 6);
+
+  // Front lip (bottom stone edge — full width)
+  ctx.fillStyle = STONE_MED;
+  ctx.fillRect(wallW + 1, S - 3, S - wallW * 2 - 2, 3);
+  ctx.fillStyle = STONE_HIGHLIGHT;
+  ctx.fillRect(wallW + 2, S - 3, S - wallW * 2 - 4, 1);
+  ctx.fillStyle = STONE_DARK;
+  ctx.fillRect(wallW + 1, S - 1, S - wallW * 2 - 2, 1);
+
+  applyHologramTint(ctx, mode, S, S);
+}
+
 // ========== Graphic builders ==========
 
 // --- Tile-based (floor only) ---
@@ -502,6 +688,9 @@ type TileDrawFn = (ctx: CanvasRenderingContext2D, mode: SpriteMode, isOpen: bool
 const TILE_DRAW_MAP: Record<string, TileDrawFn> = {
   floor: (ctx, mode) => drawFloor(ctx, mode),
   bed: (ctx, mode, isOpen) => drawBed(ctx, mode, isOpen),
+  camp_fire: (ctx, mode) => drawCampFire(ctx, mode),
+  fire_pit: (ctx, mode) => drawFirePit(ctx, mode),
+  hearth: (ctx, mode) => drawHearth(ctx, mode),
 };
 
 /**

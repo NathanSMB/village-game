@@ -4,6 +4,7 @@ import { flattenIngredients, totalMaterials } from "../data/buildings.ts";
 import type { InventoryState } from "../types/inventory.ts";
 import { buildingGraphic } from "../systems/building-sprites.ts";
 import { DamageFlash } from "./damage-flash.ts";
+import { FireEffect } from "./fire-effect.ts";
 import type { BuildingSaveState } from "../systems/save-manager.ts";
 
 const TILE_SIZE = 32;
@@ -25,6 +26,11 @@ export class Building extends ex.Actor {
   readonly tileX: number;
   readonly tileY: number;
 
+  // Fire state
+  isBurning = false;
+  burnTimer = 0;
+  private fireEffect: FireEffect | null = null;
+
   private damageFlash: DamageFlash;
   private shakeTimer = 0;
   private baseX: number;
@@ -34,6 +40,8 @@ export class Building extends ex.Actor {
 
   /** Callback set by GameWorld to handle destruction cleanup. */
   onDestroy: (() => void) | null = null;
+  /** Callback set by GameWorld to handle fire state changes (for indoor lighting recalc). */
+  onFireStateChange: (() => void) | null = null;
 
   constructor(
     type: BuildingType,
@@ -95,6 +103,14 @@ export class Building extends ex.Actor {
     } else {
       this.graphics.opacity = 1;
     }
+
+    // Burn timer countdown
+    if (this.isBurning && this.burnTimer > 0) {
+      this.burnTimer -= delta;
+      if (this.burnTimer <= 0) {
+        this.extinguish();
+      }
+    }
   }
 
   /**
@@ -140,6 +156,11 @@ export class Building extends ex.Actor {
     this.hp = this.type.maxHp;
     this.isOpen = false;
     this.updateGraphic();
+
+    // Auto-ignite fire buildings (e.g. camp fire)
+    if (this.type.fire?.autoIgnite) {
+      this.ignite();
+    }
   }
 
   /** Whether this building should currently block movement. */
@@ -181,6 +202,32 @@ export class Building extends ex.Actor {
     this.updateGraphic();
   }
 
+  /** Ignite a fire-type building. Starts the burn timer and shows fire animation. */
+  ignite(): void {
+    if (!this.type.fire || this.isBurning) return;
+    this.isBurning = true;
+    this.burnTimer = this.type.fire.burnDurationMs;
+    this.fireEffect = new FireEffect();
+    this.addChild(this.fireEffect);
+    this.onFireStateChange?.();
+  }
+
+  /** Extinguish the fire. Removes building if removeOnBurnout, otherwise just stops the fire. */
+  extinguish(): void {
+    this.isBurning = false;
+    this.burnTimer = 0;
+    if (this.fireEffect) {
+      this.fireEffect.kill();
+      this.fireEffect = null;
+    }
+    if (this.type.fire?.removeOnBurnout) {
+      this.onDestroy?.();
+      this.kill();
+    } else {
+      this.onFireStateChange?.();
+    }
+  }
+
   /** Serialize for save. */
   getState(): BuildingSaveState {
     return {
@@ -192,6 +239,8 @@ export class Building extends ex.Actor {
       hp: this.hp,
       isOpen: this.isOpen,
       rotation: this.tileRotation,
+      isBurning: this.isBurning,
+      burnTimer: this.burnTimer,
     };
   }
 
@@ -203,5 +252,13 @@ export class Building extends ex.Actor {
     this.isOpen = saved.isOpen;
     this.tileRotation = saved.rotation ?? 0;
     this.updateGraphic();
+
+    // Restore fire state
+    this.isBurning = saved.isBurning ?? false;
+    this.burnTimer = saved.burnTimer ?? 0;
+    if (this.isBurning && this.type.fire) {
+      this.fireEffect = new FireEffect();
+      this.addChild(this.fireEffect);
+    }
   }
 }

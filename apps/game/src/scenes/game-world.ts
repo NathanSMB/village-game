@@ -14,6 +14,7 @@ import { VitalsHud } from "../actors/vitals-hud.ts";
 import { wasActionPressed } from "../systems/keybinds.ts";
 import { ITEMS } from "../data/items.ts";
 import { BUILDING_TYPES, BUILDING_TYPE_MAP, type BuildingType } from "../data/buildings.ts";
+import { COOKING_RECIPES, COOKING_RECIPE_MAP } from "../data/cooking.ts";
 import { Building } from "../actors/building.ts";
 import { EdgeBuilding } from "../actors/edge-building.ts";
 import { PlanCursor } from "../actors/plan-cursor.ts";
@@ -123,6 +124,12 @@ export class GameWorld extends ex.Scene<GameWorldData> {
   private sleepingBed: Building | null = null;
   private preSleepPos: ex.Vector | null = null;
   private blanketOverlay: ex.Actor | null = null;
+
+  // Cooking menu state
+  private cookingMenuOpen = false;
+  private cookingMenuIndex = 0;
+  private cookingBuilding: Building | null = null;
+  private cookingMenuPanel: ex.ScreenElement | null = null;
 
   // Indoor tile cache (computed when entering planning mode for bed validation)
   private indoorTilesCache: Set<number> | null = null;
@@ -593,6 +600,12 @@ export class GameWorld extends ex.Scene<GameWorldData> {
       return; // Block all other input while picker is open
     }
 
+    // Cooking menu input handling
+    if (this.cookingMenuOpen) {
+      this.handleCookingMenuInput(kb);
+      return; // Block all other input while cooking menu is open
+    }
+
     // Tree branch dropping
     this.updateTreeBranchDrops();
 
@@ -925,6 +938,67 @@ export class GameWorld extends ex.Scene<GameWorldData> {
               // Multiple items: open item picker
               this.openItemPicker(groundStack, facingKey, worldX, worldY);
             }
+          }
+        } else if (
+          facingBuilding &&
+          facingBuilding.type.fire &&
+          facingBuilding.state === "complete"
+        ) {
+          // Fire building interaction (light / cook)
+          const worldX = facing.x * TILE_SIZE + TILE_SIZE / 2;
+          const worldY = facing.y * TILE_SIZE + TILE_SIZE / 2;
+
+          if (facingBuilding.isBurning) {
+            // Fire is burning — offer cooking
+            if (this.actionPrompt) {
+              this.actionPrompt.text = "[E] Cook";
+              this.actionPrompt.pos = ex.vec(worldX, worldY - TILE_SIZE / 2 - 4);
+              this.actionPrompt.graphics.visible = true;
+            }
+
+            if (wasActionPressed(kb, "action")) {
+              this.openCookingMenu(facingBuilding);
+            }
+          } else if (!facingBuilding.type.fire.autoIgnite) {
+            // Unlit fire pit/hearth — offer to light
+            const fireCfg = facingBuilding.type.fire;
+            const inventory = this.player.inventory;
+            const canLight = fireCfg.fuelCost.every(
+              (req) => inventory.bag.filter((item) => item.id === req.itemId).length >= req.count,
+            );
+
+            if (canLight) {
+              if (this.actionPrompt) {
+                this.actionPrompt.text = "[E] Light";
+                this.actionPrompt.pos = ex.vec(worldX, worldY - TILE_SIZE / 2 - 4);
+                this.actionPrompt.graphics.visible = true;
+              }
+
+              if (wasActionPressed(kb, "action")) {
+                // Consume fuel items
+                for (const req of fireCfg.fuelCost) {
+                  for (let i = 0; i < req.count; i++) {
+                    const idx = inventory.bag.findIndex((item) => item.id === req.itemId);
+                    if (idx !== -1) inventory.bag.splice(idx, 1);
+                  }
+                }
+                facingBuilding.ignite();
+                this.spawnPickupText("Lit!", worldX, worldY);
+              }
+            } else {
+              // Show what's needed
+              const costStr = fireCfg.fuelCost
+                .map((req) => `${req.count}x ${ITEMS[req.itemId]?.name ?? req.itemId}`)
+                .join(" + ");
+              if (this.actionPrompt) {
+                this.actionPrompt.text = `Need ${costStr}`;
+                this.actionPrompt.pos = ex.vec(worldX, worldY - TILE_SIZE / 2 - 4);
+                this.actionPrompt.graphics.visible = true;
+              }
+            }
+          } else if (this.actionPrompt) {
+            // Auto-ignite building that already burned out (shouldn't happen — it gets removed)
+            this.actionPrompt.graphics.visible = false;
           }
         } else {
           // Edge building interaction (doors/gates on edges)
@@ -1567,6 +1641,7 @@ export class GameWorld extends ex.Scene<GameWorldData> {
           planned.rotation,
         );
         building.onDestroy = () => this.removeBuilding(building, key);
+        building.onFireStateChange = () => this.recalculateIndoorLighting();
         this.buildings.push(building);
         this.buildingByTile.set(key, building);
         this.add(building);
@@ -2044,6 +2119,198 @@ export class GameWorld extends ex.Scene<GameWorldData> {
     }
   }
 
+  // ==================== Cooking Menu ====================
+
+  private openCookingMenu(building: Building): void {
+    if (!this.player) return;
+    this.cookingMenuOpen = true;
+    this.cookingMenuIndex = 0;
+    this.cookingBuilding = building;
+    this.player.lockInput();
+
+    this.cookingMenuPanel = new ex.ScreenElement({
+      x: 8,
+      y: 40,
+      z: 200,
+    });
+    this.add(this.cookingMenuPanel);
+    this.updateCookingMenu();
+  }
+
+  private closeCookingMenu(): void {
+    this.cookingMenuOpen = false;
+    this.cookingBuilding = null;
+    if (this.cookingMenuPanel) {
+      this.remove(this.cookingMenuPanel);
+      this.cookingMenuPanel = null;
+    }
+    this.player?.unlockInput();
+  }
+
+  /** Get cookable items from the player's inventory. */
+  private getCookableItems(): {
+    item: Item;
+    bagIndex: number;
+    recipe: (typeof COOKING_RECIPES)[0];
+  }[] {
+    if (!this.player) return [];
+    const results: { item: Item; bagIndex: number; recipe: (typeof COOKING_RECIPES)[0] }[] = [];
+    for (let i = 0; i < this.player.inventory.bag.length; i++) {
+      const item = this.player.inventory.bag[i];
+      const recipe = COOKING_RECIPE_MAP[item.id];
+      if (recipe) {
+        results.push({ item, bagIndex: i, recipe });
+      }
+    }
+    return results;
+  }
+
+  private handleCookingMenuInput(kb: ex.Keyboard): void {
+    if (wasActionPressed(kb, "back")) {
+      this.closeCookingMenu();
+      return;
+    }
+
+    const cookable = this.getCookableItems();
+
+    if (cookable.length > 0) {
+      if (wasActionPressed(kb, "moveUp")) {
+        this.cookingMenuIndex = Math.max(0, this.cookingMenuIndex - 1);
+        this.updateCookingMenu();
+      }
+      if (wasActionPressed(kb, "moveDown")) {
+        this.cookingMenuIndex = Math.min(cookable.length - 1, this.cookingMenuIndex + 1);
+        this.updateCookingMenu();
+      }
+      if (wasActionPressed(kb, "action") || wasActionPressed(kb, "confirm")) {
+        const entry = cookable[this.cookingMenuIndex];
+        if (entry && this.player && this.cookingBuilding?.isBurning) {
+          // Consume the raw item
+          this.player.inventory.bag.splice(entry.bagIndex, 1);
+
+          // Add the cooked item
+          const cookedItem = ITEMS[entry.recipe.outputId];
+          if (cookedItem) {
+            this.player.inventory.bag.push({ ...cookedItem });
+            const worldX = this.cookingBuilding.pos.x;
+            const worldY = this.cookingBuilding.pos.y;
+            this.spawnPickupText(`+[${cookedItem.name}]`, worldX, worldY);
+          }
+
+          // Close menu after cooking
+          this.closeCookingMenu();
+        }
+      }
+    }
+  }
+
+  private readonly COOK_PANEL_WIDTH = 240;
+  private readonly COOK_LINE_HEIGHT = 22;
+
+  private updateCookingMenu(): void {
+    if (!this.cookingMenuPanel) return;
+
+    const cookable = this.getCookableItems();
+    const w = this.COOK_PANEL_WIDTH;
+    const lh = this.COOK_LINE_HEIGHT;
+    const headerH = 28;
+    const hintH = 28;
+    const contentH = Math.max(1, cookable.length) * lh;
+    const h = headerH + contentH + hintH + 16;
+    const menuIdx = this.cookingMenuIndex;
+
+    const canvas = new ex.Canvas({
+      width: w,
+      height: h,
+      cache: false,
+      draw: (ctx) => {
+        ctx.imageSmoothingEnabled = false;
+
+        // Background
+        ctx.fillStyle = "rgba(10, 10, 20, 0.88)";
+        const r = 4;
+        ctx.beginPath();
+        ctx.moveTo(r, 0);
+        ctx.lineTo(w - r, 0);
+        ctx.arcTo(w, 0, w, r, r);
+        ctx.lineTo(w, h - r);
+        ctx.arcTo(w, h, w - r, h, r);
+        ctx.lineTo(r, h);
+        ctx.arcTo(0, h, 0, h - r, r);
+        ctx.lineTo(0, r);
+        ctx.arcTo(0, 0, r, 0, r);
+        ctx.closePath();
+        ctx.fill();
+
+        // Border
+        ctx.strokeStyle = "rgba(255, 140, 40, 0.35)";
+        ctx.lineWidth = 1;
+        ctx.stroke();
+
+        // Header
+        ctx.fillStyle = "#ffffff";
+        ctx.font = "bold 14px monospace";
+        ctx.textAlign = "center";
+        ctx.fillText("COOK", w / 2, 18);
+
+        // Divider
+        ctx.strokeStyle = "rgba(255, 140, 40, 0.25)";
+        ctx.beginPath();
+        ctx.moveTo(8, headerH);
+        ctx.lineTo(w - 8, headerH);
+        ctx.stroke();
+
+        if (cookable.length === 0) {
+          // Nothing to cook
+          ctx.textAlign = "center";
+          ctx.font = "11px monospace";
+          ctx.fillStyle = "#666666";
+          ctx.fillText("Nothing to cook", w / 2, headerH + lh / 2 + 6);
+        } else {
+          // List cookable items
+          for (let i = 0; i < cookable.length; i++) {
+            const entry = cookable[i];
+            const y = headerH + 6 + i * lh + lh / 2;
+            const selected = i === menuIdx;
+
+            // Selection highlight
+            if (selected) {
+              ctx.fillStyle = "rgba(255, 140, 40, 0.12)";
+              ctx.fillRect(4, headerH + 4 + i * lh, w - 8, lh);
+            }
+
+            const inputName = entry.item.name;
+            const outputName = ITEMS[entry.recipe.outputId]?.name ?? entry.recipe.outputId;
+            const prefix = selected ? "> " : "  ";
+
+            ctx.textAlign = "left";
+            ctx.font = selected ? "bold 11px monospace" : "11px monospace";
+            ctx.fillStyle = selected ? "#ff9944" : "#cccccc";
+            ctx.fillText(`${prefix}${inputName}`, 8, y + 1);
+
+            ctx.fillStyle = selected ? "#ff9944" : "#888888";
+            ctx.font = "10px monospace";
+            ctx.textAlign = "right";
+            ctx.fillText(`→ ${outputName}`, w - 8, y + 1);
+          }
+        }
+
+        // Hint text
+        ctx.textAlign = "center";
+        ctx.font = "9px monospace";
+        ctx.fillStyle = "#666666";
+        const hintY = headerH + contentH + 14;
+        if (cookable.length > 0) {
+          ctx.fillText("[E] Cook  [Esc] Cancel", w / 2, hintY);
+        } else {
+          ctx.fillText("[Esc] Cancel", w / 2, hintY);
+        }
+      },
+    });
+
+    this.cookingMenuPanel.graphics.use(canvas);
+  }
+
   // ==================== Building Management (tile-based) ====================
 
   private removeBuilding(building: Building, key: number): void {
@@ -2135,6 +2402,7 @@ export class GameWorld extends ex.Scene<GameWorldData> {
       const building = new Building(type, saved.tileX, saved.tileY, saved.state, saved.rotation);
       building.restoreState(saved);
       building.onDestroy = () => this.removeBuilding(building, tileKey(saved.tileX, saved.tileY));
+      building.onFireStateChange = () => this.recalculateIndoorLighting();
 
       const key = tileKey(saved.tileX, saved.tileY);
       this.buildings.push(building);

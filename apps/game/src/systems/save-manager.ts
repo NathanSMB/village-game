@@ -70,6 +70,13 @@ export interface SheepSaveState {
   following: boolean;
 }
 
+export interface CowSaveState {
+  tileX: number;
+  tileY: number;
+  hp: number;
+  following: boolean;
+}
+
 export interface SleepSaveState {
   /** Tile the player was standing on before entering the bed. */
   preSleepTileX: number;
@@ -100,6 +107,7 @@ export interface SaveData {
   buildings?: BuildingSaveState[];
   edgeBuildings?: EdgeBuildingSaveState[];
   sheep?: SheepSaveState[];
+  cows?: CowSaveState[];
 }
 
 const DB_NAME = "village-game";

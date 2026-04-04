@@ -56,6 +56,11 @@ echo "Exporting ground/sheep..."
   --sheet "$SPRITES_DIR/ground/sheep.png" \
   --sheet-type horizontal
 
+echo "Exporting ground/cow..."
+"$ASEPRITE" -b "$ASSETS_DIR/ground/cow.aseprite" \
+  --sheet "$SPRITES_DIR/ground/cow.png" \
+  --sheet-type horizontal
+
 # Character layers
 for file in "$ASSETS_DIR"/characters/**/*.aseprite; do
   relative="${file#"$ASSETS_DIR"/}"

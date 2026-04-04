@@ -21,6 +21,16 @@ export interface TreeSaveState {
   tileY: number;
   dropTimer: number;
   branchCount: number;
+  hp: number;
+  isStump: boolean;
+  regrowTimer: number;
+  damageAccum: number;
+}
+
+export interface BigRockSaveState {
+  tileX: number;
+  tileY: number;
+  damageAccum: number;
 }
 
 export interface SaveData {
@@ -37,6 +47,7 @@ export interface SaveData {
   };
   bushes?: BerryBushSaveState[];
   trees?: TreeSaveState[];
+  rocks?: BigRockSaveState[];
   groundItems?: GroundItemSaveState[];
 }
 

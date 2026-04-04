@@ -685,10 +685,21 @@ export class InventoryScene extends ex.Scene {
         this.detailStats.color =
           effectParts.length > 0 ? ex.Color.fromHex("#66cc66") : ex.Color.fromHex("#888888");
       } else {
+        // Use canonical ITEMS definition so old saves still show correct stats
+        const canonical = ITEMS[item.id] ?? item;
         const statParts: string[] = [];
-        if (item.stats.attack) statParts.push(`ATK +${item.stats.attack}`);
-        if (item.stats.defense) statParts.push(`DEF +${item.stats.defense}`);
-        if (item.stats.speed) statParts.push(`SPD +${item.stats.speed}`);
+        if (canonical.stats.attack) statParts.push(`ATK +${canonical.stats.attack}`);
+        if (canonical.stats.defense) statParts.push(`DEF +${canonical.stats.defense}`);
+        if (canonical.stats.speed) statParts.push(`SPD +${canonical.stats.speed}`);
+        // Show tool multiplier bonuses
+        if (canonical.toolMultipliers) {
+          const labels: Record<string, string> = { tree: "Trees", mineable: "Rocks" };
+          for (const [category, mult] of Object.entries(canonical.toolMultipliers)) {
+            if (mult && mult > 1) {
+              statParts.push(`${mult}x vs ${labels[category] ?? category}`);
+            }
+          }
+        }
         this.detailStats.text = statParts.length > 0 ? statParts.join("  ") : "No bonuses";
         this.detailStats.color =
           statParts.length > 0 ? ex.Color.fromHex("#66cc66") : ex.Color.fromHex("#888888");

@@ -4,7 +4,7 @@
 
 local W = 16
 local H = 16
-local TOTAL_FRAMES = 10
+local TOTAL_FRAMES = 13
 
 local scriptPath = app.params["script-path"] or "."
 local outputDir = app.fs.joinPath(app.fs.filePath(scriptPath), "..", "assets", "ground")
@@ -397,9 +397,167 @@ local function drawSpear(img)
   rect(img, 6, 5, 4, 1, WOOD_D)
 end
 
+-- ============================================================
+-- Frame 10: Large Stone (bigger, chunkier rock)
+-- ============================================================
+local function drawLargeStone(img)
+  clearImg(img)
+  local ROCK = Color{ r = 130, g = 125, b = 115, a = 255 }
+  local ROCK_D = Color{ r = 95, g = 90, b = 82, a = 255 }
+  local ROCK_L = Color{ r = 165, g = 160, b = 150, a = 255 }
+  local ROCK_H = Color{ r = 190, g = 185, b = 175, a = 255 }
+  local SHADOW = Color{ r = 50, g = 50, b = 45, a = 100 }
+
+  -- Shadow
+  rect(img, 2, 12, 12, 1, SHADOW)
+  rect(img, 3, 13, 10, 1, SHADOW)
+
+  -- Main stone shape (larger irregular block)
+  rect(img, 3, 4, 10, 8, ROCK)
+  rect(img, 2, 5, 12, 6, ROCK)
+  rect(img, 4, 3, 8, 1, ROCK)
+  rect(img, 4, 12, 8, 1, ROCK)
+
+  -- Dark bottom/right edges
+  rect(img, 2, 10, 12, 1, ROCK_D)
+  rect(img, 3, 11, 10, 1, ROCK_D)
+  rect(img, 4, 12, 8, 1, ROCK_D)
+  rect(img, 13, 5, 1, 6, ROCK_D)
+  rect(img, 12, 6, 1, 5, ROCK_D)
+
+  -- Highlight upper-left
+  px(img, 4, 3, ROCK_L)
+  px(img, 5, 3, ROCK_L)
+  px(img, 6, 3, ROCK_H)
+  px(img, 3, 4, ROCK_L)
+  px(img, 4, 4, ROCK_H)
+  px(img, 5, 4, ROCK_L)
+  px(img, 2, 5, ROCK_L)
+  px(img, 3, 5, ROCK_L)
+  px(img, 2, 6, ROCK_L)
+
+  -- Surface detail
+  px(img, 7, 6, ROCK_D)
+  px(img, 9, 8, ROCK_L)
+  px(img, 5, 9, ROCK_D)
+end
+
+-- ============================================================
+-- Frame 11: Flint (angular shard)
+-- ============================================================
+local function drawFlint(img)
+  clearImg(img)
+  local FLINT = Color{ r = 70, g = 65, b = 60, a = 255 }
+  local FLINT_D = Color{ r = 45, g = 42, b = 38, a = 255 }
+  local FLINT_L = Color{ r = 100, g = 95, b = 88, a = 255 }
+  local FLINT_H = Color{ r = 140, g = 135, b = 125, a = 255 }
+  local EDGE = Color{ r = 170, g = 165, b = 155, a = 255 }
+  local SHADOW = Color{ r = 35, g = 33, b = 30, a = 80 }
+
+  -- Shadow
+  rect(img, 5, 13, 7, 1, SHADOW)
+
+  -- Main shard shape (angular, pointed)
+  -- Triangular body pointing up-right
+  px(img, 9, 3, FLINT_L)
+  px(img, 8, 4, FLINT_L)
+  px(img, 9, 4, FLINT)
+  px(img, 10, 4, FLINT)
+  px(img, 7, 5, FLINT_L)
+  px(img, 8, 5, FLINT)
+  px(img, 9, 5, FLINT)
+  px(img, 10, 5, FLINT_D)
+  px(img, 6, 6, FLINT_L)
+  px(img, 7, 6, FLINT)
+  px(img, 8, 6, FLINT)
+  px(img, 9, 6, FLINT)
+  px(img, 10, 6, FLINT_D)
+  px(img, 11, 6, FLINT_D)
+  px(img, 5, 7, FLINT_L)
+  px(img, 6, 7, FLINT)
+  px(img, 7, 7, FLINT)
+  px(img, 8, 7, FLINT)
+  px(img, 9, 7, FLINT_D)
+  px(img, 10, 7, FLINT_D)
+  px(img, 5, 8, FLINT)
+  px(img, 6, 8, FLINT)
+  px(img, 7, 8, FLINT)
+  px(img, 8, 8, FLINT_D)
+  px(img, 9, 8, FLINT_D)
+  px(img, 5, 9, FLINT)
+  px(img, 6, 9, FLINT)
+  px(img, 7, 9, FLINT_D)
+  px(img, 8, 9, FLINT_D)
+  px(img, 5, 10, FLINT_D)
+  px(img, 6, 10, FLINT_D)
+  px(img, 7, 10, FLINT_D)
+  px(img, 6, 11, FLINT_D)
+  px(img, 6, 12, FLINT_D)
+
+  -- Sharp edge highlight (left edge of the shard)
+  px(img, 9, 3, EDGE)
+  px(img, 8, 4, FLINT_H)
+  px(img, 7, 5, FLINT_H)
+  px(img, 6, 6, EDGE)
+  px(img, 5, 7, FLINT_H)
+  px(img, 5, 8, EDGE)
+end
+
+-- ============================================================
+-- Frame 12: Log (horizontal wood cylinder)
+-- ============================================================
+local function drawLog(img)
+  clearImg(img)
+  local WOOD = Color{ r = 110, g = 75, b = 42, a = 255 }
+  local WOOD_D = Color{ r = 80, g = 52, b = 28, a = 255 }
+  local WOOD_L = Color{ r = 140, g = 100, b = 60, a = 255 }
+  local BARK = Color{ r = 70, g = 48, b = 28, a = 255 }
+  local BARK_L = Color{ r = 95, g = 65, b = 38, a = 255 }
+  local RING = Color{ r = 150, g = 115, b = 75, a = 255 }
+  local RING_D = Color{ r = 100, g = 70, b = 40, a = 255 }
+  local CENTER = Color{ r = 130, g = 90, b = 52, a = 255 }
+  local SHADOW = Color{ r = 45, g = 35, b = 25, a = 80 }
+
+  -- Shadow
+  rect(img, 1, 12, 14, 1, SHADOW)
+
+  -- Bark (main cylinder body, horizontal)
+  rect(img, 3, 5, 10, 6, BARK)
+  rect(img, 4, 4, 8, 1, BARK_L)
+  rect(img, 4, 11, 8, 1, BARK)
+  -- Bark highlight top
+  rect(img, 4, 5, 9, 1, BARK_L)
+  -- Bark shadow bottom
+  rect(img, 3, 10, 10, 1, WOOD_D)
+
+  -- End grain (right side - circular cross-section)
+  rect(img, 11, 5, 3, 6, WOOD)
+  rect(img, 12, 4, 2, 1, WOOD_L)
+  rect(img, 12, 11, 2, 1, WOOD_D)
+  px(img, 14, 6, WOOD_D)
+  px(img, 14, 7, WOOD_D)
+  px(img, 14, 8, WOOD_D)
+  px(img, 14, 9, WOOD_D)
+  -- Rings
+  px(img, 12, 6, RING)
+  px(img, 13, 7, RING)
+  px(img, 12, 8, RING_D)
+  px(img, 13, 9, RING_D)
+  -- Center dot
+  px(img, 12, 7, CENTER)
+  px(img, 12, 8, CENTER)
+
+  -- Left end cap
+  rect(img, 1, 6, 2, 4, BARK)
+  px(img, 2, 5, BARK)
+  px(img, 2, 10, BARK)
+  px(img, 1, 6, BARK_L)
+end
+
 -- Generate frames
 local drawFuncs = { drawSmallRock, drawBerry, drawTunic, drawPants, drawBoots, drawBranch,
-                    drawHammer, drawHatchet, drawPickaxe, drawSpear }
+                    drawHammer, drawHatchet, drawPickaxe, drawSpear,
+                    drawLargeStone, drawFlint, drawLog }
 
 for i, drawFunc in ipairs(drawFuncs) do
   app.activeFrame = spr.frames[i]

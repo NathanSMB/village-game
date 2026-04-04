@@ -1,13 +1,15 @@
--- Create male and female body sprites with 52 frames each
+-- Create male and female body sprites with 76 frames each
 -- Frames 1-12:  Down(idle,walk1,walk2), Up(...), Left(...), Right(...)
 -- Frames 13-20: Down(reach,grab), Up(reach,grab), Left(reach,grab), Right(reach,grab)
 -- Frames 21-36: Drink animation: 4 dirs x 4 poses (begin kneel, kneel, reach, drink)
 -- Frames 37-52: Pickup-item animation: 4 dirs x 4 poses (begin bend, crouch, reach ground, grab)
+-- Frames 53-64: Swing attack: 4 dirs x 3 poses (wind-up, swing, follow-through)
+-- Frames 65-76: Thrust attack: 4 dirs x 3 poses (draw-back, thrust, recover)
 -- Uses magenta reference colors for palette swapping
 
 local W = 32
 local H = 32
-local FRAMES = 52
+local FRAMES = 76
 
 local scriptPath = app.params["script-path"] or "."
 local outputDir = app.fs.joinPath(app.fs.filePath(scriptPath), "..", "assets", "characters", "body")
@@ -599,6 +601,199 @@ local function drawPickupItemBody(img, dir, pickupPose, isFemale)
   drawPickupItemArms(img, dir, pickupPose, dropY)
 end
 
+-- Draw swing attack arms
+-- swingPose: 0=wind-up (arm raised), 1=mid-swing (arm extended), 2=follow-through (arm low)
+local function drawSwingArms(img, dir, swingPose)
+  if dir == 0 then
+    -- Down-facing swing
+    if swingPose == 0 then
+      -- Wind-up: right arm raised above shoulder
+      rect(img, bodyX - armW, 14, armW, 8, SKIN)
+      px(img, bodyX - armW, 14, SKIN_SHADOW)
+      rect(img, bodyX + bodyW, 7, armW, 7, SKIN)
+      px(img, bodyX + bodyW + armW - 1, 7, SKIN_SHADOW)
+      px(img, bodyX + bodyW, 7, SKIN_HIGHLIGHT)
+      px(img, bodyX + bodyW + 1, 7, SKIN_HIGHLIGHT)
+    elseif swingPose == 1 then
+      -- Mid-swing: right arm extended right horizontally
+      rect(img, bodyX - armW, 14, armW, 8, SKIN)
+      px(img, bodyX - armW, 14, SKIN_SHADOW)
+      rect(img, bodyX + bodyW, 16, 7, armW, SKIN)
+      px(img, bodyX + bodyW + 6, 16, SKIN_HIGHLIGHT)
+      px(img, bodyX + bodyW + 6, 17, SKIN_HIGHLIGHT)
+    elseif swingPose == 2 then
+      -- Follow-through: right arm low-left
+      rect(img, bodyX - armW, 14, armW, 8, SKIN)
+      px(img, bodyX - armW, 14, SKIN_SHADOW)
+      rect(img, bodyX + bodyW, 14, armW, 10, SKIN)
+      px(img, bodyX + bodyW + armW - 1, 14, SKIN_SHADOW)
+      px(img, bodyX + bodyW, 23, SKIN_HIGHLIGHT)
+      px(img, bodyX + bodyW + 1, 23, SKIN_HIGHLIGHT)
+    end
+
+  elseif dir == 1 then
+    -- Up-facing swing (from behind)
+    if swingPose == 0 then
+      rect(img, bodyX - armW, 14, armW, 8, SKIN)
+      px(img, bodyX - armW, 14, SKIN_SHADOW)
+      rect(img, bodyX + bodyW, 7, armW, 7, SKIN)
+      px(img, bodyX + bodyW + armW - 1, 7, SKIN_SHADOW)
+    elseif swingPose == 1 then
+      rect(img, bodyX - armW, 14, armW, 8, SKIN)
+      px(img, bodyX - armW, 14, SKIN_SHADOW)
+      rect(img, bodyX + bodyW, 16, 7, armW, SKIN)
+      px(img, bodyX + bodyW + 6, 16, SKIN_SHADOW)
+    elseif swingPose == 2 then
+      rect(img, bodyX - armW, 14, armW, 8, SKIN)
+      px(img, bodyX - armW, 14, SKIN_SHADOW)
+      rect(img, bodyX + bodyW, 14, armW, 10, SKIN)
+      px(img, bodyX + bodyW + armW - 1, 14, SKIN_SHADOW)
+    end
+
+  elseif dir == 2 then
+    -- Left-facing swing (swing with left arm)
+    if swingPose == 0 then
+      -- Wind-up: left arm raised
+      rect(img, bodyX - armW, 7, armW, 7, SKIN)
+      px(img, bodyX - armW, 7, SKIN_SHADOW)
+      px(img, bodyX - armW, 7, SKIN_HIGHLIGHT)
+      px(img, bodyX - 1, 7, SKIN_HIGHLIGHT)
+      rect(img, bodyX + bodyW, 14, armW, 8, SKIN)
+      px(img, bodyX + bodyW + armW - 1, 14, SKIN_SHADOW)
+    elseif swingPose == 1 then
+      -- Mid-swing: left arm extended left
+      rect(img, bodyX - 7, 16, 7, armW, SKIN)
+      px(img, bodyX - 7, 16, SKIN_HIGHLIGHT)
+      px(img, bodyX - 7, 17, SKIN_HIGHLIGHT)
+      rect(img, bodyX + bodyW, 14, armW, 8, SKIN)
+      px(img, bodyX + bodyW + armW - 1, 14, SKIN_SHADOW)
+    elseif swingPose == 2 then
+      -- Follow-through: left arm low
+      rect(img, bodyX - armW, 14, armW, 10, SKIN)
+      px(img, bodyX - armW, 14, SKIN_SHADOW)
+      px(img, bodyX - armW, 23, SKIN_HIGHLIGHT)
+      rect(img, bodyX + bodyW, 14, armW, 8, SKIN)
+      px(img, bodyX + bodyW + armW - 1, 14, SKIN_SHADOW)
+    end
+
+  elseif dir == 3 then
+    -- Right-facing swing (swing with right arm)
+    if swingPose == 0 then
+      rect(img, bodyX - armW, 14, armW, 8, SKIN)
+      px(img, bodyX - armW, 14, SKIN_SHADOW)
+      rect(img, bodyX + bodyW, 7, armW, 7, SKIN)
+      px(img, bodyX + bodyW + armW - 1, 7, SKIN_SHADOW)
+      px(img, bodyX + bodyW, 7, SKIN_HIGHLIGHT)
+      px(img, bodyX + bodyW + 1, 7, SKIN_HIGHLIGHT)
+    elseif swingPose == 1 then
+      rect(img, bodyX - armW, 14, armW, 8, SKIN)
+      px(img, bodyX - armW, 14, SKIN_SHADOW)
+      rect(img, bodyX + bodyW, 16, 7, armW, SKIN)
+      px(img, bodyX + bodyW + 6, 16, SKIN_HIGHLIGHT)
+      px(img, bodyX + bodyW + 6, 17, SKIN_HIGHLIGHT)
+    elseif swingPose == 2 then
+      rect(img, bodyX - armW, 14, armW, 8, SKIN)
+      px(img, bodyX - armW, 14, SKIN_SHADOW)
+      rect(img, bodyX + bodyW, 14, armW, 10, SKIN)
+      px(img, bodyX + bodyW + armW - 1, 14, SKIN_SHADOW)
+      px(img, bodyX + bodyW, 23, SKIN_HIGHLIGHT)
+      px(img, bodyX + bodyW + 1, 23, SKIN_HIGHLIGHT)
+    end
+  end
+end
+
+-- Draw thrust attack arms
+-- thrustPose: 0=draw-back (arm close), 1=thrust (arm extended far), 2=recover
+local function drawThrustArms(img, dir, thrustPose)
+  if dir == 0 then
+    -- Down-facing thrust
+    if thrustPose == 0 then
+      -- Draw-back: both arms close to body
+      rect(img, bodyX - armW, 14, armW, 6, SKIN)
+      px(img, bodyX - armW, 14, SKIN_SHADOW)
+      rect(img, bodyX + bodyW, 14, armW, 6, SKIN)
+      px(img, bodyX + bodyW + armW - 1, 14, SKIN_SHADOW)
+    elseif thrustPose == 1 then
+      -- Thrust: right arm fully extended downward
+      rect(img, bodyX - armW, 14, armW, 8, SKIN)
+      px(img, bodyX - armW, 14, SKIN_SHADOW)
+      rect(img, bodyX + bodyW, 14, armW, 14, SKIN)
+      px(img, bodyX + bodyW + armW - 1, 14, SKIN_SHADOW)
+      px(img, bodyX + bodyW, 27, SKIN_HIGHLIGHT)
+      px(img, bodyX + bodyW + 1, 27, SKIN_HIGHLIGHT)
+    elseif thrustPose == 2 then
+      -- Recover: arm partly extended
+      rect(img, bodyX - armW, 14, armW, 8, SKIN)
+      px(img, bodyX - armW, 14, SKIN_SHADOW)
+      rect(img, bodyX + bodyW, 14, armW, 10, SKIN)
+      px(img, bodyX + bodyW + armW - 1, 14, SKIN_SHADOW)
+    end
+
+  elseif dir == 1 then
+    -- Up-facing thrust (from behind)
+    if thrustPose == 0 then
+      rect(img, bodyX - armW, 14, armW, 6, SKIN)
+      px(img, bodyX - armW, 14, SKIN_SHADOW)
+      rect(img, bodyX + bodyW, 14, armW, 6, SKIN)
+      px(img, bodyX + bodyW + armW - 1, 14, SKIN_SHADOW)
+    elseif thrustPose == 1 then
+      -- Arm thrusts upward
+      rect(img, bodyX - armW, 14, armW, 8, SKIN)
+      px(img, bodyX - armW, 14, SKIN_SHADOW)
+      rect(img, bodyX + bodyW, 4, armW, 10, SKIN)
+      px(img, bodyX + bodyW + armW - 1, 4, SKIN_SHADOW)
+      px(img, bodyX + bodyW, 4, SKIN_HIGHLIGHT)
+      px(img, bodyX + bodyW + 1, 4, SKIN_HIGHLIGHT)
+    elseif thrustPose == 2 then
+      rect(img, bodyX - armW, 14, armW, 8, SKIN)
+      px(img, bodyX - armW, 14, SKIN_SHADOW)
+      rect(img, bodyX + bodyW, 10, armW, 8, SKIN)
+      px(img, bodyX + bodyW + armW - 1, 10, SKIN_SHADOW)
+    end
+
+  elseif dir == 2 then
+    -- Left-facing thrust (left arm thrusts left)
+    if thrustPose == 0 then
+      rect(img, bodyX - 2, 16, 2, armW, SKIN)
+      px(img, bodyX - 2, 16, SKIN_SHADOW)
+      rect(img, bodyX + bodyW, 14, armW, 8, SKIN)
+      px(img, bodyX + bodyW + armW - 1, 14, SKIN_SHADOW)
+    elseif thrustPose == 1 then
+      -- Fully extended left
+      rect(img, bodyX - 10, 16, 10, armW, SKIN)
+      px(img, bodyX - 10, 16, SKIN_HIGHLIGHT)
+      px(img, bodyX - 10, 17, SKIN_HIGHLIGHT)
+      rect(img, bodyX + bodyW, 14, armW, 8, SKIN)
+      px(img, bodyX + bodyW + armW - 1, 14, SKIN_SHADOW)
+    elseif thrustPose == 2 then
+      rect(img, bodyX - 5, 16, 5, armW, SKIN)
+      px(img, bodyX - 5, 16, SKIN_SHADOW)
+      rect(img, bodyX + bodyW, 14, armW, 8, SKIN)
+      px(img, bodyX + bodyW + armW - 1, 14, SKIN_SHADOW)
+    end
+
+  elseif dir == 3 then
+    -- Right-facing thrust (right arm thrusts right)
+    if thrustPose == 0 then
+      rect(img, bodyX - armW, 14, armW, 8, SKIN)
+      px(img, bodyX - armW, 14, SKIN_SHADOW)
+      rect(img, bodyX + bodyW, 16, 2, armW, SKIN)
+      px(img, bodyX + bodyW + 1, 16, SKIN_SHADOW)
+    elseif thrustPose == 1 then
+      rect(img, bodyX - armW, 14, armW, 8, SKIN)
+      px(img, bodyX - armW, 14, SKIN_SHADOW)
+      rect(img, bodyX + bodyW, 16, 10, armW, SKIN)
+      px(img, bodyX + bodyW + 9, 16, SKIN_HIGHLIGHT)
+      px(img, bodyX + bodyW + 9, 17, SKIN_HIGHLIGHT)
+    elseif thrustPose == 2 then
+      rect(img, bodyX - armW, 14, armW, 8, SKIN)
+      px(img, bodyX - armW, 14, SKIN_SHADOW)
+      rect(img, bodyX + bodyW, 16, 5, armW, SKIN)
+      px(img, bodyX + bodyW + 4, 16, SKIN_SHADOW)
+    end
+  end
+end
+
 local function createBodySprite(filename, isFemale)
   local spr = Sprite{ width = W, height = H, colorMode = ColorMode.RGB }
   for i = 2, FRAMES do
@@ -646,6 +841,30 @@ local function createBodySprite(filename, isFemale)
       app.activeFrame = spr.frames[frameIdx]
       local cel = spr:newCel(spr.layers[1], frameIdx)
       drawPickupItemBody(cel.image, dir, pickupPose, isFemale)
+      spr.frames[frameIdx].duration = 0.2
+    end
+  end
+
+  -- Swing attack frames (12): 4 directions x 3 swing poses
+  for dir = 0, 3 do
+    for swingPose = 0, 2 do
+      local frameIdx = 53 + dir * 3 + swingPose
+      app.activeFrame = spr.frames[frameIdx]
+      local cel = spr:newCel(spr.layers[1], frameIdx)
+      drawBody(cel.image, dir, 0, isFemale, true) -- idle body, skip arms
+      drawSwingArms(cel.image, dir, swingPose)
+      spr.frames[frameIdx].duration = 0.2
+    end
+  end
+
+  -- Thrust attack frames (12): 4 directions x 3 thrust poses
+  for dir = 0, 3 do
+    for thrustPose = 0, 2 do
+      local frameIdx = 65 + dir * 3 + thrustPose
+      app.activeFrame = spr.frames[frameIdx]
+      local cel = spr:newCel(spr.layers[1], frameIdx)
+      drawBody(cel.image, dir, 0, isFemale, true) -- idle body, skip arms
+      drawThrustArms(cel.image, dir, thrustPose)
       spr.frames[frameIdx].duration = 0.2
     end
   end

@@ -9,6 +9,7 @@ import { BigRock } from "../actors/big-rock.ts";
 import { Tree } from "../actors/tree.ts";
 import { GroundItemStack } from "../actors/ground-item-stack.ts";
 import { FloatingText } from "../actors/floating-text.ts";
+import { AttackEffect } from "../actors/attack-effect.ts";
 import { VitalsHud } from "../actors/vitals-hud.ts";
 import { wasActionPressed } from "../systems/keybinds.ts";
 import { ITEMS } from "../data/items.ts";
@@ -465,6 +466,23 @@ export class GameWorld extends ex.Scene<GameWorldData> {
     if (this.player && !isAlive(this.player.vitals)) {
       const cause = this.getDeathCause();
       void engine.goToScene("game-over", { sceneActivationData: { cause } });
+    }
+
+    // Attack handling
+    if (this.player && !this.player.isBusy() && !this.player.isMoving()) {
+      if (wasActionPressed(kb, "attack")) {
+        const style = this.player.startAttack();
+        if (style) {
+          const facing = this.player.getFacingTile();
+          const targetX = facing.x * TILE_SIZE + TILE_SIZE / 2;
+          const targetY = facing.y * TILE_SIZE + TILE_SIZE / 2;
+          // Position between player and facing tile center
+          const blend = style === "swing" ? 0.55 : 0.7;
+          const effectX = this.player.pos.x + (targetX - this.player.pos.x) * blend;
+          const effectY = this.player.pos.y + (targetY - this.player.pos.y) * blend;
+          this.add(new AttackEffect(effectX, effectY, style, this.player.getFacing()));
+        }
+      }
     }
 
     // Action prompt + interaction

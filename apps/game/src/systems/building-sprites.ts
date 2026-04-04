@@ -24,6 +24,10 @@ const STONE_HIGHLIGHT = "#a0a0a0";
 const CHARCOAL = "#2a2a2a";
 const ASH_GRAY = "#555555";
 
+// Metal accent (brackets, hasps)
+const METAL_DARK = "#5a5a6a";
+const METAL_LIGHT = "#8a8a9a";
+
 // Hologram tint
 const HOLO_CYAN = "#00ccff";
 
@@ -679,6 +683,185 @@ export function drawHearth(ctx: CanvasRenderingContext2D, mode: SpriteMode): voi
   applyHologramTint(ctx, mode, S, S);
 }
 
+// ========== Short Box (tile-based) ==========
+
+export function drawBoxShort(ctx: CanvasRenderingContext2D, mode: SpriteMode): void {
+  applyMode(ctx, mode);
+  const S = TILE;
+  const bw = 24;
+  const bh = 20;
+  const bx = (S - bw) / 2;
+  const by = (S - bh) / 2 + 2; // slightly lower for grounded look
+
+  // Shadow
+  ctx.fillStyle = "rgba(0,0,0,0.25)";
+  ctx.fillRect(bx + 1, by + bh, bw, 1);
+  ctx.fillRect(bx + bw, by + 1, 1, bh);
+
+  // Crate body
+  ctx.fillStyle = BROWN_PLANK;
+  ctx.fillRect(bx, by, bw, bh);
+
+  // Horizontal board lines
+  ctx.fillStyle = BROWN_MED;
+  const plankGap = Math.floor(bh / 3);
+  ctx.fillRect(bx, by + plankGap, bw, 1);
+  ctx.fillRect(bx, by + plankGap * 2, bw, 1);
+
+  // Plank highlights
+  ctx.fillStyle = BROWN_HIGHLIGHT;
+  ctx.fillRect(bx + 1, by + 1, bw - 2, 1);
+  ctx.fillRect(bx + 1, by + plankGap + 1, bw - 2, 1);
+
+  // Outline
+  ctx.strokeStyle = OUTLINE;
+  ctx.lineWidth = 1;
+  ctx.strokeRect(bx + 0.5, by + 0.5, bw - 1, bh - 1);
+
+  applyHologramTint(ctx, mode, S, S);
+}
+
+// ========== Medium Box (tile-based) ==========
+
+export function drawBoxMedium(ctx: CanvasRenderingContext2D, mode: SpriteMode): void {
+  applyMode(ctx, mode);
+  const S = TILE;
+  const bw = 26;
+  const bh = 24;
+  const bx = (S - bw) / 2;
+  const by = (S - bh) / 2 + 1;
+
+  // Shadow
+  ctx.fillStyle = "rgba(0,0,0,0.25)";
+  ctx.fillRect(bx + 1, by + bh, bw, 1);
+  ctx.fillRect(bx + bw, by + 1, 1, bh);
+
+  // Crate body
+  ctx.fillStyle = BROWN_PLANK;
+  ctx.fillRect(bx, by, bw, bh);
+
+  // Horizontal board lines (3)
+  ctx.fillStyle = BROWN_MED;
+  const plankGap = Math.floor(bh / 4);
+  for (let i = 1; i <= 3; i++) {
+    ctx.fillRect(bx, by + plankGap * i, bw, 1);
+  }
+
+  // Plank highlights
+  ctx.fillStyle = BROWN_HIGHLIGHT;
+  ctx.fillRect(bx + 1, by + 1, bw - 2, 1);
+  for (let i = 1; i <= 3; i++) {
+    ctx.fillRect(bx + 1, by + plankGap * i + 1, bw - 2, 1);
+  }
+
+  // Outline
+  ctx.strokeStyle = OUTLINE;
+  ctx.lineWidth = 1;
+  ctx.strokeRect(bx + 0.5, by + 0.5, bw - 1, bh - 1);
+
+  // Metal corner brackets (L-shapes)
+  const bracketLen = 4;
+  ctx.fillStyle = METAL_DARK;
+  // Top-left
+  ctx.fillRect(bx, by, bracketLen, 2);
+  ctx.fillRect(bx, by, 2, bracketLen);
+  // Top-right
+  ctx.fillRect(bx + bw - bracketLen, by, bracketLen, 2);
+  ctx.fillRect(bx + bw - 2, by, 2, bracketLen);
+  // Bottom-left
+  ctx.fillRect(bx, by + bh - 2, bracketLen, 2);
+  ctx.fillRect(bx, by + bh - bracketLen, 2, bracketLen);
+  // Bottom-right
+  ctx.fillRect(bx + bw - bracketLen, by + bh - 2, bracketLen, 2);
+  ctx.fillRect(bx + bw - 2, by + bh - bracketLen, 2, bracketLen);
+
+  // Bracket highlights
+  ctx.fillStyle = METAL_LIGHT;
+  ctx.fillRect(bx + 1, by + 1, 1, 1);
+  ctx.fillRect(bx + bw - bracketLen + 1, by + 1, 1, 1);
+
+  applyHologramTint(ctx, mode, S, S);
+}
+
+// ========== Tall Box (tile-based) ==========
+
+export function drawBoxTall(ctx: CanvasRenderingContext2D, mode: SpriteMode): void {
+  applyMode(ctx, mode);
+  const S = TILE;
+  const bw = 28;
+  const bh = 28;
+  const bx = (S - bw) / 2;
+  const by = (S - bh) / 2;
+
+  // Shadow (2px for depth)
+  ctx.fillStyle = "rgba(0,0,0,0.2)";
+  ctx.fillRect(bx + 1, by + bh, bw + 1, 2);
+  ctx.fillRect(bx + bw, by + 1, 2, bh + 1);
+
+  // Crate body
+  ctx.fillStyle = BROWN_PLANK;
+  ctx.fillRect(bx, by, bw, bh);
+
+  // Horizontal board lines (4)
+  ctx.fillStyle = BROWN_MED;
+  const plankGap = Math.floor(bh / 5);
+  for (let i = 1; i <= 4; i++) {
+    ctx.fillRect(bx, by + plankGap * i, bw, 1);
+  }
+
+  // Plank highlights
+  ctx.fillStyle = BROWN_HIGHLIGHT;
+  ctx.fillRect(bx + 1, by + 1, bw - 2, 1);
+  for (let i = 1; i <= 4; i++) {
+    ctx.fillRect(bx + 1, by + plankGap * i + 1, bw - 2, 1);
+  }
+
+  // Vertical plank joint (center)
+  ctx.fillStyle = BROWN_MED;
+  ctx.fillRect(bx + Math.floor(bw / 2), by, 1, bh);
+
+  // Outline
+  ctx.strokeStyle = OUTLINE;
+  ctx.lineWidth = 1;
+  ctx.strokeRect(bx + 0.5, by + 0.5, bw - 1, bh - 1);
+
+  // Metal corner brackets (L-shapes)
+  const bracketLen = 5;
+  ctx.fillStyle = METAL_DARK;
+  // Top-left
+  ctx.fillRect(bx, by, bracketLen, 2);
+  ctx.fillRect(bx, by, 2, bracketLen);
+  // Top-right
+  ctx.fillRect(bx + bw - bracketLen, by, bracketLen, 2);
+  ctx.fillRect(bx + bw - 2, by, 2, bracketLen);
+  // Bottom-left
+  ctx.fillRect(bx, by + bh - 2, bracketLen, 2);
+  ctx.fillRect(bx, by + bh - bracketLen, 2, bracketLen);
+  // Bottom-right
+  ctx.fillRect(bx + bw - bracketLen, by + bh - 2, bracketLen, 2);
+  ctx.fillRect(bx + bw - 2, by + bh - bracketLen, 2, bracketLen);
+
+  // Bracket highlights
+  ctx.fillStyle = METAL_LIGHT;
+  ctx.fillRect(bx + 1, by + 1, 1, 1);
+  ctx.fillRect(bx + bw - bracketLen + 1, by + 1, 1, 1);
+
+  // Center metal hasp/latch
+  const haspW = 6;
+  const haspH = 4;
+  const haspX = bx + Math.floor((bw - haspW) / 2);
+  const haspY = by + Math.floor((bh - haspH) / 2);
+  ctx.fillStyle = METAL_DARK;
+  ctx.fillRect(haspX, haspY, haspW, haspH);
+  ctx.fillStyle = METAL_LIGHT;
+  ctx.fillRect(haspX + 1, haspY + 1, haspW - 2, 1);
+  // Keyhole dot
+  ctx.fillStyle = BROWN_DARK;
+  ctx.fillRect(haspX + Math.floor(haspW / 2), haspY + 2, 1, 1);
+
+  applyHologramTint(ctx, mode, S, S);
+}
+
 // ========== Graphic builders ==========
 
 // --- Tile-based (floor only) ---
@@ -691,6 +874,9 @@ const TILE_DRAW_MAP: Record<string, TileDrawFn> = {
   camp_fire: (ctx, mode) => drawCampFire(ctx, mode),
   fire_pit: (ctx, mode) => drawFirePit(ctx, mode),
   hearth: (ctx, mode) => drawHearth(ctx, mode),
+  box_short: (ctx, mode) => drawBoxShort(ctx, mode),
+  box_medium: (ctx, mode) => drawBoxMedium(ctx, mode),
+  box_tall: (ctx, mode) => drawBoxTall(ctx, mode),
 };
 
 /**

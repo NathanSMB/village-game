@@ -2,6 +2,7 @@ import * as ex from "excalibur";
 import type { BuildingType } from "../data/buildings.ts";
 import { flattenIngredients, totalMaterials } from "../data/buildings.ts";
 import type { InventoryState } from "../types/inventory.ts";
+import type { Item } from "../types/item.ts";
 import { buildingGraphic } from "../systems/building-sprites.ts";
 import { DamageFlash } from "./damage-flash.ts";
 import { FireEffect } from "./fire-effect.ts";
@@ -25,6 +26,9 @@ export class Building extends ex.Actor {
   tileRotation: number;
   readonly tileX: number;
   readonly tileY: number;
+
+  // Storage state (fixed slots, one item each)
+  storageSlots: (Item | null)[] = [];
 
   // Fire state
   isBurning = false;
@@ -68,6 +72,11 @@ export class Building extends ex.Actor {
     this.tileX = tileX;
     this.tileY = tileY;
     this.baseX = worldX;
+
+    // Initialize storage slots if this is a container building
+    if (type.storage) {
+      this.storageSlots = new Array<Item | null>(type.storage.slotCount).fill(null);
+    }
 
     this.damageFlash = new DamageFlash(this, TILE_SIZE);
     this.updateGraphic();
@@ -241,6 +250,7 @@ export class Building extends ex.Actor {
       rotation: this.tileRotation,
       isBurning: this.isBurning,
       burnTimer: this.burnTimer,
+      storageSlots: this.type.storage ? this.storageSlots : undefined,
     };
   }
 
@@ -259,6 +269,14 @@ export class Building extends ex.Actor {
     if (this.isBurning && this.type.fire) {
       this.fireEffect = new FireEffect();
       this.addChild(this.fireEffect);
+    }
+
+    // Restore storage contents
+    if (saved.storageSlots && this.type.storage) {
+      this.storageSlots = saved.storageSlots.slice(0, this.type.storage.slotCount);
+      while (this.storageSlots.length < this.type.storage.slotCount) {
+        this.storageSlots.push(null);
+      }
     }
   }
 }

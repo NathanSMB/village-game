@@ -11,7 +11,6 @@ const BROWN_LIGHT = "#8b6914";
 const BROWN_PLANK = "#a0782c";
 const BROWN_HIGHLIGHT = "#c09848";
 const OUTLINE = "#2a1a00";
-const WINDOW_BG = "#1a1a2e";
 const DOOR_KNOB = "#d4a850";
 const FENCE_POST = "#5c3a10";
 const FENCE_RAIL = "#7a5020";
@@ -135,24 +134,18 @@ export function drawEdgeWall(
 // ========== Edge Wall with Window ==========
 
 function drawHWallWindowOverlay(ctx: CanvasRenderingContext2D): void {
-  // Small window cutout in the center of the strip
-  const winW = 6;
-  const winH = 4;
+  // Open gap in the center (like a glassless window opening)
+  const winW = 8;
+  const winH = WALL_THICKNESS;
   const winX = (TILE - winW) / 2;
-  const winY = (WALL_THICKNESS - winH) / 2;
 
-  ctx.fillStyle = WINDOW_BG;
-  ctx.fillRect(winX, winY, winW, winH);
+  // Clear the gap to transparency
+  ctx.clearRect(winX, 0, winW, winH);
 
-  // Frame
-  ctx.strokeStyle = BROWN_PLANK;
-  ctx.lineWidth = 1;
-  ctx.strokeRect(winX + 0.5, winY + 0.5, winW - 1, winH - 1);
-
-  // Cross mullion
-  ctx.fillStyle = BROWN_PLANK;
-  ctx.fillRect(winX + Math.floor(winW / 2) - 0.5, winY, 1, winH);
-  ctx.fillRect(winX, winY + Math.floor(winH / 2) - 0.5, winW, 1);
+  // Thin frame on left and right edges of the gap
+  ctx.fillStyle = BROWN_DARK;
+  ctx.fillRect(winX, 0, 1, winH);
+  ctx.fillRect(winX + winW - 1, 0, 1, winH);
 }
 
 export function drawEdgeWallWindow(

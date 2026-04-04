@@ -40,6 +40,7 @@ import type {
 import { getGrassAnimations, getWaterAnimation, WaterTileType } from "../systems/sprite-loader.ts";
 import type { WaterTileTypeValue } from "../systems/sprite-loader.ts";
 import type { DeathCause } from "./game-over.ts";
+import { IndoorDarknessOverlay } from "../systems/indoor-lighting.ts";
 
 const MAP_COLS = 64;
 const MAP_ROWS = 64;
@@ -94,6 +95,9 @@ export class GameWorld extends ex.Scene<GameWorldData> {
   private edgeBuildingsList: EdgeBuilding[] = [];
   private edgeBuildings = new Map<number, EdgeBuilding>();
   private blockedEdges = new Set<number>();
+
+  // Indoor darkness overlay
+  private darknessOverlay: IndoorDarknessOverlay | null = null;
 
   // Planning mode state
   private planningMode = false;
@@ -155,6 +159,10 @@ export class GameWorld extends ex.Scene<GameWorldData> {
     }
 
     this.add(this.tilemap);
+
+    // Create indoor darkness overlay
+    this.darknessOverlay = new IndoorDarknessOverlay();
+    this.add(this.darknessOverlay);
 
     // Spawn berry bushes at seeded random positions
     const centerX = MAP_COLS / 2;
@@ -491,6 +499,9 @@ export class GameWorld extends ex.Scene<GameWorldData> {
       if (context.data.type === "load" && context.data.save.edgeBuildings) {
         this.restoreEdgeBuildingStates(context.data.save.edgeBuildings);
       }
+
+      // Recalculate indoor lighting after restoring buildings
+      this.recalculateIndoorLighting();
     }
 
     if (this.player) {
@@ -614,6 +625,7 @@ export class GameWorld extends ex.Scene<GameWorldData> {
                       if (building.isSolid()) {
                         this.blockedTiles.add(facingKey);
                       }
+                      this.recalculateIndoorLighting();
                     }
                   } else {
                     const nextReq = building.getNextRequired();
@@ -662,6 +674,7 @@ export class GameWorld extends ex.Scene<GameWorldData> {
                       if (edgeBuilding.isSolid()) {
                         this.blockedEdges.add(facingEdgeKey!);
                       }
+                      this.recalculateIndoorLighting();
                     }
                   } else {
                     const nextReq = edgeBuilding.getNextRequired();
@@ -791,6 +804,7 @@ export class GameWorld extends ex.Scene<GameWorldData> {
             } else {
               this.blockedEdges.delete(fEdgeKey!);
             }
+            this.recalculateIndoorLighting();
           }
         } else {
           // Tile-based building interaction (floors don't have doors, but keep for extensibility)
@@ -1704,6 +1718,7 @@ export class GameWorld extends ex.Scene<GameWorldData> {
     this.buildingByTile.delete(key);
     const idx = this.buildings.indexOf(building);
     if (idx !== -1) this.buildings.splice(idx, 1);
+    this.recalculateIndoorLighting();
   }
 
   // ==================== Edge Building Management ====================
@@ -1717,6 +1732,13 @@ export class GameWorld extends ex.Scene<GameWorldData> {
     if (edgeBuilding.isFenceType()) {
       this.refreshFenceNeighbors(edgeKey);
     }
+    this.recalculateIndoorLighting();
+  }
+
+  // ==================== Indoor Lighting ====================
+
+  private recalculateIndoorLighting(): void {
+    this.darknessOverlay?.recalculate(this.buildingByTile, this.edgeBuildings);
   }
 
   // ==================== Fence Autotile ====================

@@ -81,7 +81,12 @@ function posToTile(px: number): number {
   return Math.floor(px / TILE_SIZE);
 }
 
-export type BlockedCheck = (tileX: number, tileY: number) => boolean;
+export type BlockedCheck = (
+  fromTileX: number,
+  fromTileY: number,
+  toTileX: number,
+  toTileY: number,
+) => boolean;
 
 export class Player extends ex.Actor {
   readonly appearance: CharacterAppearance;
@@ -95,7 +100,7 @@ export class Player extends ex.Actor {
   private moving = false;
   private facing: Direction = "down";
   private walkFrame: 0 | 1 = 0;
-  private isBlocked: BlockedCheck = () => false;
+  private isBlocked: BlockedCheck = () => false; // eslint-disable-line @typescript-eslint/no-unused-vars
   private inputLocked = false;
 
   // Picking state
@@ -448,7 +453,7 @@ export class Player extends ex.Actor {
     const nextY = this.tileY + dy;
 
     if (nextX < 0 || nextX >= MAP_TILES || nextY < 0 || nextY >= MAP_TILES) return;
-    if (this.isBlocked(nextX, nextY)) return;
+    if (this.isBlocked(this.tileX, this.tileY, nextX, nextY)) return;
 
     this.targetX = nextX;
     this.targetY = nextY;

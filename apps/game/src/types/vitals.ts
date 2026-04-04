@@ -17,11 +17,14 @@ export const DEHYDRATION_DAMAGE_MS = 3 * 60 * 1000; // 3 minutes
 export const ENERGY_MAX = 1000;
 /** Energy decay: 1 per second. */
 const ENERGY_DECAY_PER_MS = 1 / 1000;
-/** Energy recovery while sleeping: 2 per second. */
-const ENERGY_RECOVERY_PER_MS = 2 / 1000;
+/** Energy recovery while sleeping: 3 per second. */
+const ENERGY_RECOVERY_PER_MS = 3 / 1000;
 
 const HUNGER_DECAY_RATE = 100 / HUNGER_DEPLETION_MS;
 const THIRST_DECAY_RATE = 100 / THIRST_DEPLETION_MS;
+
+/** While sleeping, hunger and thirst decay at 1/5 the normal rate. */
+const SLEEP_DECAY_FACTOR = 0.2;
 const STARVATION_DAMAGE_RATE = 100 / STARVATION_DAMAGE_MS;
 const DEHYDRATION_DAMAGE_RATE = 100 / DEHYDRATION_DAMAGE_MS;
 
@@ -44,8 +47,9 @@ export function defaultVitals(): VitalsState {
  * @param sleeping  Whether the player is currently sleeping in a bed
  */
 export function updateVitals(state: VitalsState, deltaMs: number, sleeping = false): VitalsState {
-  const hunger = clampVital(state.hunger - HUNGER_DECAY_RATE * deltaMs);
-  const thirst = clampVital(state.thirst - THIRST_DECAY_RATE * deltaMs);
+  const decayMult = sleeping ? SLEEP_DECAY_FACTOR : 1;
+  const hunger = clampVital(state.hunger - HUNGER_DECAY_RATE * decayMult * deltaMs);
+  const thirst = clampVital(state.thirst - THIRST_DECAY_RATE * decayMult * deltaMs);
 
   let damage = 0;
   if (hunger <= 0) damage += STARVATION_DAMAGE_RATE * deltaMs;

@@ -544,6 +544,17 @@ export class GameWorld extends ex.Scene<GameWorldData> {
 
       // Recalculate indoor lighting after restoring buildings
       this.recalculateIndoorLighting();
+
+      // Restore sleeping state — must run after buildings are restored so the
+      // bed Building exists in buildingByTile.
+      if (context.data.type === "load" && context.data.save.player.sleeping) {
+        const ss = context.data.save.player.sleeping;
+        const bedKey = tileKey(ss.bedTileX, ss.bedTileY);
+        const bed = this.buildingByTile.get(bedKey);
+        if (bed && bed.type.id === "bed" && bed.state === "complete") {
+          this.enterSleep(bed);
+        }
+      }
     }
 
     if (this.player) {
@@ -1111,14 +1122,33 @@ export class GameWorld extends ex.Scene<GameWorldData> {
 
   getPlayerState(): SaveData["player"] | null {
     if (!this.player) return null;
+
+    // When sleeping the player's position is on the bed, not where they were
+    // standing.  Save the pre-sleep tile as the canonical position so loading
+    // without sleep support still puts them in a sensible spot.
+    const sleeping =
+      this.playerSleeping && this.sleepingBed && this.preSleepPos
+        ? {
+            preSleepTileX: Math.floor(this.preSleepPos.x / TILE_SIZE),
+            preSleepTileY: Math.floor(this.preSleepPos.y / TILE_SIZE),
+            bedTileX: this.sleepingBed.tileX,
+            bedTileY: this.sleepingBed.tileY,
+          }
+        : undefined;
+
+    // Use the pre-sleep position as the saved tile so older loaders still work
+    const tileX = sleeping ? sleeping.preSleepTileX : this.player.getTileX();
+    const tileY = sleeping ? sleeping.preSleepTileY : this.player.getTileY();
+
     return {
-      tileX: this.player.getTileX(),
-      tileY: this.player.getTileY(),
+      tileX,
+      tileY,
       appearance: this.player.appearance,
       equipment: this.player.inventory.equipment,
       bag: this.player.inventory.bag,
       maxWeight: this.player.inventory.maxWeight,
       vitals: this.player.vitals,
+      sleeping,
     };
   }
 

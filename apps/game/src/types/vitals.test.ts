@@ -129,10 +129,28 @@ describe("updateVitals", () => {
     expect(result.energy).toBeCloseTo(ENERGY_MAX - 10, 1);
   });
 
-  test("energy recovers at 2 per second when sleeping", () => {
+  test("energy recovers at 3 per second when sleeping", () => {
     const state = { ...defaultVitals(), energy: 500 };
     const result = updateVitals(state, 10_000, true); // 10 seconds, sleeping
-    expect(result.energy).toBeCloseTo(520, 1);
+    expect(result.energy).toBeCloseTo(530, 1);
+  });
+
+  test("hunger decays at 1/5 rate while sleeping", () => {
+    const state = defaultVitals();
+    const awake = updateVitals(state, 60_000); // 1 minute awake
+    const asleep = updateVitals(state, 60_000, true); // 1 minute sleeping
+    const awakeDecay = 100 - awake.hunger;
+    const asleepDecay = 100 - asleep.hunger;
+    expect(asleepDecay).toBeCloseTo(awakeDecay / 5, 5);
+  });
+
+  test("thirst decays at 1/5 rate while sleeping", () => {
+    const state = defaultVitals();
+    const awake = updateVitals(state, 60_000);
+    const asleep = updateVitals(state, 60_000, true);
+    const awakeDecay = 100 - awake.thirst;
+    const asleepDecay = 100 - asleep.thirst;
+    expect(asleepDecay).toBeCloseTo(awakeDecay / 5, 5);
   });
 
   test("energy never exceeds ENERGY_MAX", () => {

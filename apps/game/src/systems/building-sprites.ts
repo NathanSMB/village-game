@@ -369,6 +369,130 @@ export function drawEdgeFenceGate(
   }
 }
 
+// ========== Bed (tile-based) ==========
+
+/**
+ * Sheet color for the bed.  The default gray matches the "Gray" clothing
+ * palette ({r:100, g:100, b:105}).  To support future dyeing, every shade
+ * used on the sheets is derived from this single base — swap it to change
+ * the entire colour.
+ */
+interface RGB {
+  r: number;
+  g: number;
+  b: number;
+}
+
+const DEFAULT_SHEET_COLOR: RGB = { r: 100, g: 100, b: 105 };
+
+function darkenRgb(c: RGB, amount: number): string {
+  const f = 1 - amount;
+  return `rgb(${Math.round(c.r * f)},${Math.round(c.g * f)},${Math.round(c.b * f)})`;
+}
+
+function lightenRgb(c: RGB, amount: number): string {
+  const r = Math.round(c.r + (255 - c.r) * amount);
+  const g = Math.round(c.g + (255 - c.g) * amount);
+  const b = Math.round(c.b + (255 - c.b) * amount);
+  return `rgb(${r},${g},${b})`;
+}
+
+function rgbStr(c: RGB): string {
+  return `rgb(${c.r},${c.g},${c.b})`;
+}
+
+export function drawBed(
+  ctx: CanvasRenderingContext2D,
+  mode: SpriteMode,
+  _isOpen = false,
+  sheetColor: RGB = DEFAULT_SHEET_COLOR,
+): void {
+  applyMode(ctx, mode);
+
+  const S = TILE; // 32
+
+  // --- Wooden frame ---
+  // Outer frame border
+  ctx.fillStyle = OUTLINE;
+  ctx.fillRect(0, 0, S, S);
+
+  // Frame fill
+  ctx.fillStyle = BROWN_MED;
+  ctx.fillRect(1, 1, S - 2, S - 2);
+
+  // --- Headboard (top 7px) ---
+  ctx.fillStyle = BROWN_DARK;
+  ctx.fillRect(1, 1, S - 2, 7);
+  // Headboard plank highlight
+  ctx.fillStyle = BROWN_LIGHT;
+  ctx.fillRect(3, 2, S - 6, 1);
+  ctx.fillRect(3, 5, S - 6, 1);
+  // Bedposts (top corners)
+  ctx.fillStyle = BROWN_HIGHLIGHT;
+  ctx.fillRect(2, 1, 2, 7);
+  ctx.fillRect(S - 4, 1, 2, 7);
+
+  // --- Mattress area ---
+  const mattY = 8;
+  const mattH = S - mattY - 2; // stop 2px from bottom for footboard
+  const mattX = 2;
+  const mattW = S - 4;
+
+  // Mattress base (light tan)
+  ctx.fillStyle = "#d4c4a0";
+  ctx.fillRect(mattX, mattY, mattW, mattH);
+
+  // --- Pillow (near headboard) ---
+  const pillowY = mattY + 1;
+  const pillowH = 4;
+  const pillowX = mattX + 3;
+  const pillowW = mattW - 6;
+  // Pillow shadow
+  ctx.fillStyle = lightenRgb(sheetColor, 0.45);
+  ctx.fillRect(pillowX, pillowY, pillowW, pillowH);
+  // Pillow highlight
+  ctx.fillStyle = lightenRgb(sheetColor, 0.6);
+  ctx.fillRect(pillowX + 1, pillowY, pillowW - 2, pillowH - 1);
+  // Pillow divider (two pillows)
+  ctx.fillStyle = lightenRgb(sheetColor, 0.3);
+  ctx.fillRect(mattX + mattW / 2, pillowY, 1, pillowH);
+
+  // --- Sheets / blanket ---
+  const sheetY = pillowY + pillowH + 1;
+  const sheetH = mattY + mattH - sheetY;
+  const sheetX = mattX;
+  const sheetW = mattW;
+
+  // Sheet base color
+  ctx.fillStyle = rgbStr(sheetColor);
+  ctx.fillRect(sheetX, sheetY, sheetW, sheetH);
+
+  // Fold lines (subtle wrinkles)
+  ctx.fillStyle = darkenRgb(sheetColor, 0.2);
+  ctx.fillRect(sheetX + 4, sheetY, 1, sheetH);
+  ctx.fillRect(sheetX + sheetW - 5, sheetY, 1, sheetH);
+  // Horizontal fold near center
+  ctx.fillRect(sheetX, sheetY + Math.floor(sheetH / 2), sheetW, 1);
+
+  // Sheet highlight (top edge of blanket)
+  ctx.fillStyle = lightenRgb(sheetColor, 0.2);
+  ctx.fillRect(sheetX + 1, sheetY, sheetW - 2, 1);
+
+  // Sheet shadow (bottom edge)
+  ctx.fillStyle = darkenRgb(sheetColor, 0.3);
+  ctx.fillRect(sheetX, sheetY + sheetH - 1, sheetW, 1);
+
+  // --- Footboard (bottom 2px) ---
+  ctx.fillStyle = BROWN_DARK;
+  ctx.fillRect(1, S - 2, S - 2, 1);
+  // Footboard posts
+  ctx.fillStyle = BROWN_HIGHLIGHT;
+  ctx.fillRect(2, S - 3, 2, 2);
+  ctx.fillRect(S - 4, S - 3, 2, 2);
+
+  applyHologramTint(ctx, mode, S, S);
+}
+
 // ========== Graphic builders ==========
 
 // --- Tile-based (floor only) ---
@@ -377,12 +501,19 @@ type TileDrawFn = (ctx: CanvasRenderingContext2D, mode: SpriteMode, isOpen: bool
 
 const TILE_DRAW_MAP: Record<string, TileDrawFn> = {
   floor: (ctx, mode) => drawFloor(ctx, mode),
+  bed: (ctx, mode, isOpen) => drawBed(ctx, mode, isOpen),
 };
 
 /**
- * Create an Excalibur Canvas graphic for a tile-based building type (floor).
+ * Create an Excalibur Canvas graphic for a tile-based building type.
+ * @param rotation  0-3 clockwise quarter-turns applied around the tile centre.
  */
-export function buildingGraphic(typeId: string, mode: SpriteMode, isOpen = false): ex.Canvas {
+export function buildingGraphic(
+  typeId: string,
+  mode: SpriteMode,
+  isOpen = false,
+  rotation = 0,
+): ex.Canvas {
   const canvas = new ex.Canvas({
     width: TILE,
     height: TILE,
@@ -390,8 +521,20 @@ export function buildingGraphic(typeId: string, mode: SpriteMode, isOpen = false
     draw: (ctx) => {
       ctx.imageSmoothingEnabled = false;
       ctx.clearRect(0, 0, TILE, TILE);
+
+      if (rotation !== 0) {
+        ctx.save();
+        ctx.translate(TILE / 2, TILE / 2);
+        ctx.rotate((rotation * Math.PI) / 2);
+        ctx.translate(-TILE / 2, -TILE / 2);
+      }
+
       const fn = TILE_DRAW_MAP[typeId];
       if (fn) fn(ctx, mode, isOpen);
+
+      if (rotation !== 0) {
+        ctx.restore();
+      }
     },
   });
   return canvas;

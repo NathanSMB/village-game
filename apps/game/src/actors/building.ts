@@ -20,6 +20,8 @@ export class Building extends ex.Actor {
   materialsDelivered: number;
   hp: number;
   isOpen: boolean;
+  /** 0-3 clockwise quarter-turns (0 = default orientation). */
+  tileRotation: number;
   readonly tileX: number;
   readonly tileY: number;
 
@@ -38,6 +40,7 @@ export class Building extends ex.Actor {
     tileX: number,
     tileY: number,
     state: "hologram" | "complete" = "hologram",
+    tileRotation = 0,
   ) {
     const worldX = tileX * TILE_SIZE + TILE_SIZE / 2;
     const worldY = tileY * TILE_SIZE + TILE_SIZE / 2;
@@ -53,6 +56,7 @@ export class Building extends ex.Actor {
     this.materialsDelivered = state === "complete" ? totalMaterials(type) : 0;
     this.hp = state === "complete" ? type.maxHp : 0;
     this.isOpen = false;
+    this.tileRotation = tileRotation;
     this.tileX = tileX;
     this.tileY = tileY;
     this.baseX = worldX;
@@ -64,9 +68,9 @@ export class Building extends ex.Actor {
   /** Update the displayed graphic based on current state. */
   updateGraphic(): void {
     if (this.state === "hologram") {
-      this.graphics.use(buildingGraphic(this.type.id, "hologram", this.isOpen));
+      this.graphics.use(buildingGraphic(this.type.id, "hologram", this.isOpen, this.tileRotation));
     } else {
-      this.graphics.use(buildingGraphic(this.type.id, "solid", this.isOpen));
+      this.graphics.use(buildingGraphic(this.type.id, "solid", this.isOpen, this.tileRotation));
     }
   }
 
@@ -187,6 +191,7 @@ export class Building extends ex.Actor {
       materialsDelivered: this.materialsDelivered,
       hp: this.hp,
       isOpen: this.isOpen,
+      rotation: this.tileRotation,
     };
   }
 
@@ -196,6 +201,7 @@ export class Building extends ex.Actor {
     this.materialsDelivered = saved.materialsDelivered;
     this.hp = saved.hp;
     this.isOpen = saved.isOpen;
+    this.tileRotation = saved.rotation ?? 0;
     this.updateGraphic();
   }
 }

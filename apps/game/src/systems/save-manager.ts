@@ -41,6 +41,8 @@ export interface BuildingSaveState {
   materialsDelivered: number;
   hp: number;
   isOpen: boolean;
+  /** 0-3 clockwise quarter-turns (0 = default). Absent in old saves → 0. */
+  rotation?: number;
 }
 
 export interface EdgeBuildingSaveState {
@@ -62,6 +64,15 @@ export interface SheepSaveState {
   following: boolean;
 }
 
+export interface SleepSaveState {
+  /** Tile the player was standing on before entering the bed. */
+  preSleepTileX: number;
+  preSleepTileY: number;
+  /** Tile the bed occupies. */
+  bedTileX: number;
+  bedTileY: number;
+}
+
 export interface SaveData {
   name: string;
   timestamp: number;
@@ -73,6 +84,8 @@ export interface SaveData {
     bag?: Item[];
     maxWeight?: number;
     vitals: VitalsState;
+    /** Present when the player saved while sleeping in a bed. */
+    sleeping?: SleepSaveState;
   };
   bushes?: BerryBushSaveState[];
   trees?: TreeSaveState[];

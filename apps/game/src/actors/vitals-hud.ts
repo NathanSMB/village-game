@@ -5,20 +5,24 @@ const BAR_W = 120;
 const BAR_H = 10;
 const BAR_GAP = 4;
 const LABEL_W = 14;
+const BAR_COUNT = 4;
 const CANVAS_W = LABEL_W + BAR_W + 4;
-const CANVAS_H = 3 * BAR_H + 2 * BAR_GAP;
+const CANVAS_H = BAR_COUNT * BAR_H + (BAR_COUNT - 1) * BAR_GAP;
 
 interface BarDef {
   label: string;
   key: keyof VitalsState;
   fg: string;
   bg: string;
+  /** Maximum value for this bar (default 100). */
+  max: number;
 }
 
 const BARS: BarDef[] = [
-  { label: "H", key: "health", fg: "#cc3333", bg: "#441111" },
-  { label: "F", key: "hunger", fg: "#cc8833", bg: "#442211" },
-  { label: "W", key: "thirst", fg: "#3388cc", bg: "#112244" },
+  { label: "H", key: "health", fg: "#cc3333", bg: "#441111", max: 100 },
+  { label: "F", key: "hunger", fg: "#cc8833", bg: "#442211", max: 100 },
+  { label: "W", key: "thirst", fg: "#3388cc", bg: "#112244", max: 100 },
+  { label: "E", key: "energy", fg: "#cccc33", bg: "#333311", max: 1000 },
 ];
 
 export class VitalsHud extends ex.ScreenElement {
@@ -48,7 +52,7 @@ export class VitalsHud extends ex.ScreenElement {
       const bar = BARS[i];
       const y = i * (BAR_H + BAR_GAP);
       const value = vitals[bar.key];
-      const fillW = (value / 100) * BAR_W;
+      const fillW = (value / bar.max) * BAR_W;
       const barX = LABEL_W;
 
       // Label

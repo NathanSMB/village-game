@@ -4,7 +4,7 @@
 
 local W = 16
 local H = 16
-local TOTAL_FRAMES = 15
+local TOTAL_FRAMES = 16
 
 local scriptPath = app.params["script-path"] or "."
 local outputDir = app.fs.joinPath(app.fs.filePath(scriptPath), "..", "assets", "ground")
@@ -668,10 +668,68 @@ local function drawWool(img)
   px(img, 8, 3, WOOL)
 end
 
+-- ============================================================
+-- Frame 15: Cooked Mutton (browned, darker variant of raw mutton)
+-- ============================================================
+local function drawCookedMutton(img)
+  clearImg(img)
+  local MEAT = Color{ r = 120, g = 70, b = 35, a = 255 }     -- cooked brown
+  local MEAT_D = Color{ r = 85, g = 45, b = 20, a = 255 }    -- dark brown edge
+  local MEAT_L = Color{ r = 155, g = 95, b = 50, a = 255 }   -- highlight
+  local CHAR = Color{ r = 60, g = 30, b = 10, a = 255 }      -- char marks
+  local BONE = Color{ r = 230, g = 220, b = 190, a = 255 }
+  local BONE_D = Color{ r = 195, g = 185, b = 160, a = 255 }
+  local SHADOW = Color{ r = 40, g = 20, b = 10, a = 60 }
+
+  -- Shadow
+  rect(img, 3, 13, 10, 1, SHADOW)
+
+  -- Meat body (same shape as raw mutton)
+  rect(img, 4, 6, 8, 6, MEAT)
+  rect(img, 3, 7, 10, 4, MEAT)
+  rect(img, 5, 5, 6, 1, MEAT)
+  rect(img, 5, 12, 6, 1, MEAT)
+
+  -- Dark edge (bottom/right)
+  rect(img, 3, 10, 10, 1, MEAT_D)
+  rect(img, 4, 11, 8, 1, MEAT_D)
+  rect(img, 5, 12, 6, 1, MEAT_D)
+  px(img, 12, 8, MEAT_D)
+  px(img, 12, 9, MEAT_D)
+
+  -- Light highlights (upper-left)
+  px(img, 5, 5, MEAT_L)
+  px(img, 6, 5, MEAT_L)
+  px(img, 4, 6, MEAT_L)
+  px(img, 5, 6, MEAT_L)
+  px(img, 3, 7, MEAT_L)
+
+  -- Char/grill marks
+  px(img, 6, 7, CHAR)
+  px(img, 7, 8, CHAR)
+  px(img, 8, 7, CHAR)
+  px(img, 9, 9, CHAR)
+  px(img, 5, 9, CHAR)
+  px(img, 10, 8, CHAR)
+
+  -- Bone (protruding from top-right)
+  rect(img, 10, 3, 2, 4, BONE)
+  px(img, 10, 3, BONE)
+  px(img, 11, 3, BONE_D)
+  px(img, 11, 6, BONE_D)
+  -- Bone knob
+  px(img, 9, 2, BONE)
+  px(img, 10, 2, BONE)
+  px(img, 11, 2, BONE)
+  px(img, 12, 2, BONE_D)
+  px(img, 10, 1, BONE)
+  px(img, 11, 1, BONE_D)
+end
+
 -- Generate frames
 local drawFuncs = { drawSmallRock, drawBerry, drawTunic, drawPants, drawBoots, drawBranch,
                     drawHammer, drawHatchet, drawPickaxe, drawSpear,
-                    drawLargeStone, drawFlint, drawLog, drawMutton, drawWool }
+                    drawLargeStone, drawFlint, drawLog, drawMutton, drawWool, drawCookedMutton }
 
 for i, drawFunc in ipairs(drawFuncs) do
   app.activeFrame = spr.frames[i]

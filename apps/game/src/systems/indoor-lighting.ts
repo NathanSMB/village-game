@@ -18,12 +18,14 @@ const TILE_SIZE = 32;
 const DARK_ROOM = 0.45;
 /** Darkness for rooms with at least one window or open door (natural light). */
 const LIT_ROOM = 0.2;
+/** Darkness for rooms with a burning fire (warm glow, barely any darkness). */
+const FIRELIT_ROOM = 0.05;
 
 /** Wall type IDs that count toward room enclosure. */
 const WALL_IDS = new Set(["wall", "wall_window", "wall_door"]);
 
 /** Tile building type IDs that count as floor for room detection. */
-const FLOOR_IDS = new Set(["floor", "bed"]);
+const FLOOR_IDS = new Set(["floor", "bed", "hearth"]);
 
 function tileKey(x: number, y: number): number {
   return y * MAP_COLS + x;
@@ -145,37 +147,47 @@ function detectRooms(
 
 /**
  * For each indoor tile, assign a uniform darkness level per room:
+ * - If the room has a burning fire → FIRELIT_ROOM
  * - If the room has at least one window or open door → LIT_ROOM
  * - Otherwise → DARK_ROOM
  */
 function computeTileDarkness(
   rooms: Room[],
   edgeBuildings: Map<number, EdgeBuilding>,
+  buildingByTile: Map<number, Building>,
 ): Map<number, number> {
   const darkness = new Map<number, number>();
 
   for (const room of rooms) {
     // Check if the room has any light source (window or open door)
     let hasLight = false;
+    let hasFire = false;
     for (const tk of room.tiles) {
-      if (hasLight) break;
-      const { tx, ty } = decodeTileKey(tk);
-      for (let d = 0; d < 4; d++) {
-        const nx = tx + DX[d];
-        const ny = ty + DY[d];
-        if (room.tiles.has(tileKey(nx, ny))) continue; // interior edge
-        const ek = edgeKeyBetween(tx, ty, nx, ny);
-        if (ek == null) continue;
-        const eb = edgeBuildings.get(ek);
-        if (!eb || eb.state !== "complete") continue;
-        if (eb.type.id === "wall_window" || (eb.type.id === "wall_door" && eb.isOpen)) {
-          hasLight = true;
-          break;
+      // Check for burning fire on this tile
+      const b = buildingByTile.get(tk);
+      if (b && b.type.fire && b.isBurning) {
+        hasFire = true;
+      }
+
+      if (!hasLight) {
+        const { tx, ty } = decodeTileKey(tk);
+        for (let d = 0; d < 4; d++) {
+          const nx = tx + DX[d];
+          const ny = ty + DY[d];
+          if (room.tiles.has(tileKey(nx, ny))) continue; // interior edge
+          const ek = edgeKeyBetween(tx, ty, nx, ny);
+          if (ek == null) continue;
+          const eb = edgeBuildings.get(ek);
+          if (!eb || eb.state !== "complete") continue;
+          if (eb.type.id === "wall_window" || (eb.type.id === "wall_door" && eb.isOpen)) {
+            hasLight = true;
+            break;
+          }
         }
       }
     }
 
-    const level = hasLight ? LIT_ROOM : DARK_ROOM;
+    const level = hasFire ? FIRELIT_ROOM : hasLight ? LIT_ROOM : DARK_ROOM;
     for (const tk of room.tiles) {
       darkness.set(tk, level);
     }
@@ -213,7 +225,7 @@ export class IndoorDarknessOverlay extends ex.Actor {
     edgeBuildings: Map<number, EdgeBuilding>,
   ): void {
     const rooms = detectRooms(buildingByTile, edgeBuildings);
-    this.tileDarkness = computeTileDarkness(rooms, edgeBuildings);
+    this.tileDarkness = computeTileDarkness(rooms, edgeBuildings, buildingByTile);
     this.graphics.use(this.buildGraphic());
   }
 

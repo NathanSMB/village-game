@@ -230,6 +230,7 @@ const ITEM_SPRITE_MAP: Record<string, number> = {
   log: 12,
   mutton: 13,
   wool: 14,
+  "cooked-mutton": 15,
 };
 
 function getItemsSheet(): ex.SpriteSheet {
@@ -238,7 +239,7 @@ function getItemsSheet(): ex.SpriteSheet {
       image: itemsImage,
       grid: {
         rows: 1,
-        columns: 15,
+        columns: 16,
         spriteWidth: 16,
         spriteHeight: 16,
       },

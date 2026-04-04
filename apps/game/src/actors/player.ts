@@ -3,7 +3,7 @@ import type { CharacterAppearance } from "../types/character.ts";
 import { type InventoryState, defaultInventory } from "../types/inventory.ts";
 import { type VitalsState, clampVital, defaultVitals, updateVitals } from "../types/vitals.ts";
 import { EquipmentSlot } from "../types/item.ts";
-import { isActionHeld } from "../systems/keybinds.ts";
+import { isActionHeld, wasActionPressed } from "../systems/keybinds.ts";
 import { compositeCharacter } from "../systems/character-compositor.ts";
 import { getWeaponSpriteSheet } from "../systems/sprite-loader.ts";
 
@@ -15,8 +15,19 @@ const DRINK_DURATION_MS = 1000; // 4 frames × 250ms each
 const DRINK_THIRST_RESTORE = 25;
 const PICKUP_DURATION_MS = 800; // 4 frames × 200ms each
 const ATTACK_DURATION_MS = 400; // 3 frames × ~133ms each
+const TURN_DELAY_MS = 120; // hold a direction key this long before walking
 
 export type Direction = "down" | "up" | "left" | "right";
+
+const DIRECTION_ACTIONS: readonly {
+  dir: Direction;
+  action: "moveUp" | "moveDown" | "moveLeft" | "moveRight";
+}[] = [
+  { dir: "up", action: "moveUp" },
+  { dir: "down", action: "moveDown" },
+  { dir: "left", action: "moveLeft" },
+  { dir: "right", action: "moveRight" },
+];
 
 const DIR_OFFSET: Record<Direction, number> = {
   down: 0,
@@ -119,6 +130,11 @@ export class Player extends ex.Actor {
   private attacking = false;
   private attackStyle: AttackStyle | null = null;
   private attackTimer = 0;
+
+  // Direction input state: tracks pressed direction keys ordered by most-recent first.
+  // The first entry that is still held is the active direction.
+  private directionStack: Direction[] = [];
+  private turnTimer = 0;
 
   // Weapon overlay: separate child actor with 64×64 sprites that can extend
   // beyond the character's 32×32 tile (prevents clipping during attacks).
@@ -256,13 +272,11 @@ export class Player extends ex.Actor {
 
   /**
    * Start an attack animation. Auto-detects swing vs thrust from equipped MainHand weapon.
-   * Returns the attack style used, or null if no weapon equipped.
+   * When no weapon is equipped, performs an unarmed swing attack.
    */
-  startAttack(): AttackStyle | null {
+  startAttack(): AttackStyle {
     const mainHand = this.inventory.equipment[EquipmentSlot.MainHand];
-    if (!mainHand) return null;
-
-    const style: AttackStyle = THRUST_ITEM_IDS.has(mainHand.id) ? "thrust" : "swing";
+    const style: AttackStyle = mainHand && THRUST_ITEM_IDS.has(mainHand.id) ? "thrust" : "swing";
     this.stopMovement();
     this.attacking = true;
     this.attackStyle = style;
@@ -400,6 +414,30 @@ export class Player extends ex.Actor {
       return;
     }
 
+    // Always track direction key presses/releases, even while moving,
+    // so the stack is accurate when the current tile-step finishes.
+    const kb = engine.input.keyboard;
+
+    if (!this.inputLocked) {
+      // Push newly pressed directions to the front of the stack
+      for (const { dir, action } of DIRECTION_ACTIONS) {
+        if (wasActionPressed(kb, action)) {
+          this.directionStack = this.directionStack.filter((d) => d !== dir);
+          this.directionStack.unshift(dir);
+        }
+      }
+
+      // Prune released directions
+      this.directionStack = this.directionStack.filter((dir) => {
+        const entry = DIRECTION_ACTIONS.find((d) => d.dir === dir)!;
+        return isActionHeld(kb, entry.action);
+      });
+    }
+
+    // Track whether we just finished a tile-step this frame so we can
+    // skip the turn delay and chain movements seamlessly.
+    let justArrived = false;
+
     if (this.moving) {
       const goalX = tileCenter(this.targetX);
       const goalY = tileCenter(this.targetY);
@@ -416,39 +454,43 @@ export class Player extends ex.Actor {
         this.moving = false;
         this.walkFrame = this.walkFrame === 0 ? 1 : 0;
         this.showFrame(DIR_OFFSET[this.facing]);
+        justArrived = true;
+      } else {
+        return;
       }
-      return;
     }
 
     // Skip all input when locked (e.g. item picker overlay is open)
     if (this.inputLocked) return;
 
-    const kb = engine.input.keyboard;
-    let dx = 0;
-    let dy = 0;
-    let newFacing: Direction | null = null;
+    // Determine the active direction (most recently pressed key still held)
+    const activeDir = this.directionStack[0] ?? null;
 
-    if (isActionHeld(kb, "moveLeft")) {
-      dx = -1;
-      newFacing = "left";
-    } else if (isActionHeld(kb, "moveRight")) {
-      dx = 1;
-      newFacing = "right";
-    } else if (isActionHeld(kb, "moveUp")) {
-      dy = -1;
-      newFacing = "up";
-    } else if (isActionHeld(kb, "moveDown")) {
-      dy = 1;
-      newFacing = "down";
+    if (!activeDir) {
+      this.turnTimer = 0;
+      return;
     }
 
-    if (newFacing && newFacing !== this.facing) {
-      this.facing = newFacing;
+    // Face the active direction immediately
+    if (activeDir !== this.facing) {
+      this.facing = activeDir;
       this.showFrame(DIR_OFFSET[this.facing]);
+      // Apply the turn delay only from idle — skip it when chaining tile-steps
+      // so direction changes mid-walk feel responsive.
+      if (!justArrived) {
+        this.turnTimer = TURN_DELAY_MS;
+      }
     }
 
-    if (dx === 0 && dy === 0) return;
+    // Count down the turn delay — don't walk until it expires
+    if (this.turnTimer > 0) {
+      this.turnTimer -= delta;
+      return;
+    }
 
+    // Start movement in the active direction
+    const dx = DIR_DX[activeDir];
+    const dy = DIR_DY[activeDir];
     const nextX = this.tileX + dx;
     const nextY = this.tileY + dy;
 

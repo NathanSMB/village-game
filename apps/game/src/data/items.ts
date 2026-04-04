@@ -68,6 +68,7 @@ export const ITEMS: Record<string, Item> = {
     weight: 2,
     slot: EquipmentSlot.MainHand,
     itemSprite: "hammer",
+    toolMultipliers: { building: 5 },
   },
   hatchet: {
     id: "hatchet",

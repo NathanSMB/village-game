@@ -350,6 +350,7 @@ export class SaveGame extends ex.Scene {
       trees: gameWorld.getTreeStates(),
       rocks: gameWorld.getRockStates(),
       groundItems: gameWorld.getGroundItemStates(),
+      buildings: gameWorld.getBuildingStates(),
     };
 
     await saveGame(data);

@@ -55,6 +55,13 @@ export interface EdgeBuildingSaveState {
   isOpen: boolean;
 }
 
+export interface SheepSaveState {
+  tileX: number;
+  tileY: number;
+  hp: number;
+  following: boolean;
+}
+
 export interface SaveData {
   name: string;
   timestamp: number;
@@ -73,6 +80,7 @@ export interface SaveData {
   groundItems?: GroundItemSaveState[];
   buildings?: BuildingSaveState[];
   edgeBuildings?: EdgeBuildingSaveState[];
+  sheep?: SheepSaveState[];
 }
 
 const DB_NAME = "village-game";

@@ -4,7 +4,7 @@
 
 local W = 16
 local H = 16
-local TOTAL_FRAMES = 13
+local TOTAL_FRAMES = 15
 
 local scriptPath = app.params["script-path"] or "."
 local outputDir = app.fs.joinPath(app.fs.filePath(scriptPath), "..", "assets", "ground")
@@ -554,10 +554,124 @@ local function drawLog(img)
   px(img, 1, 6, BARK_L)
 end
 
+-- ============================================================
+-- Frame 13: Mutton (raw meat)
+-- ============================================================
+local function drawMutton(img)
+  clearImg(img)
+  local MEAT = Color{ r = 180, g = 70, b = 70, a = 255 }
+  local MEAT_D = Color{ r = 140, g = 45, b = 45, a = 255 }
+  local MEAT_L = Color{ r = 210, g = 105, b = 100, a = 255 }
+  local FAT = Color{ r = 235, g = 215, b = 190, a = 255 }
+  local FAT_D = Color{ r = 200, g = 180, b = 155, a = 255 }
+  local BONE = Color{ r = 230, g = 225, b = 210, a = 255 }
+  local BONE_D = Color{ r = 195, g = 188, b = 172, a = 255 }
+  local SHADOW = Color{ r = 80, g = 30, b = 30, a = 80 }
+
+  -- Shadow
+  rect(img, 3, 13, 10, 1, SHADOW)
+
+  -- Meat body (leg chop shape)
+  rect(img, 4, 6, 8, 6, MEAT)
+  rect(img, 3, 7, 10, 4, MEAT)
+  rect(img, 5, 5, 6, 1, MEAT)
+  rect(img, 5, 12, 6, 1, MEAT)
+
+  -- Dark edge (bottom/right)
+  rect(img, 3, 10, 10, 1, MEAT_D)
+  rect(img, 4, 11, 8, 1, MEAT_D)
+  rect(img, 5, 12, 6, 1, MEAT_D)
+  px(img, 12, 8, MEAT_D)
+  px(img, 12, 9, MEAT_D)
+
+  -- Light highlights (upper-left)
+  px(img, 5, 5, MEAT_L)
+  px(img, 6, 5, MEAT_L)
+  px(img, 4, 6, MEAT_L)
+  px(img, 5, 6, MEAT_L)
+  px(img, 3, 7, MEAT_L)
+
+  -- Fat marbling
+  px(img, 7, 7, FAT)
+  px(img, 8, 7, FAT_D)
+  px(img, 6, 9, FAT)
+  px(img, 9, 8, FAT_D)
+  px(img, 10, 9, FAT)
+
+  -- Bone (protruding from top-right)
+  rect(img, 10, 3, 2, 4, BONE)
+  px(img, 10, 3, BONE)
+  px(img, 11, 3, BONE_D)
+  px(img, 11, 6, BONE_D)
+  -- Bone knob
+  px(img, 9, 2, BONE)
+  px(img, 10, 2, BONE)
+  px(img, 11, 2, BONE)
+  px(img, 12, 2, BONE_D)
+  px(img, 10, 1, BONE)
+  px(img, 11, 1, BONE_D)
+end
+
+-- ============================================================
+-- Frame 14: Wool (fluffy ball of wool)
+-- ============================================================
+local function drawWool(img)
+  clearImg(img)
+  local WOOL = Color{ r = 235, g = 228, b = 210, a = 255 }
+  local WOOL_D = Color{ r = 200, g = 192, b = 175, a = 255 }
+  local WOOL_L = Color{ r = 248, g = 244, b = 235, a = 255 }
+  local WOOL_DD = Color{ r = 175, g = 168, b = 152, a = 255 }
+  local SHADOW = Color{ r = 100, g = 95, b = 85, a = 60 }
+
+  -- Shadow
+  rect(img, 4, 13, 8, 1, SHADOW)
+
+  -- Main fluffy ball shape
+  rect(img, 5, 5, 6, 7, WOOL)
+  rect(img, 4, 6, 8, 5, WOOL)
+  rect(img, 6, 4, 4, 1, WOOL)
+  rect(img, 6, 12, 4, 1, WOOL)
+
+  -- Dark bottom/right edge
+  rect(img, 4, 10, 8, 1, WOOL_D)
+  rect(img, 5, 11, 6, 1, WOOL_D)
+  rect(img, 6, 12, 4, 1, WOOL_DD)
+  px(img, 11, 7, WOOL_D)
+  px(img, 11, 8, WOOL_D)
+  px(img, 11, 9, WOOL_D)
+
+  -- Light highlights (upper-left)
+  px(img, 6, 4, WOOL_L)
+  px(img, 7, 4, WOOL_L)
+  px(img, 5, 5, WOOL_L)
+  px(img, 6, 5, WOOL_L)
+  px(img, 4, 6, WOOL_L)
+  px(img, 5, 6, WOOL_L)
+
+  -- Fluffy texture (wispy curls)
+  px(img, 7, 6, WOOL_DD)
+  px(img, 9, 7, WOOL_DD)
+  px(img, 6, 8, WOOL_DD)
+  px(img, 8, 9, WOOL_DD)
+  px(img, 10, 6, WOOL_DD)
+  -- Light wisps
+  px(img, 8, 5, WOOL_L)
+  px(img, 5, 7, WOOL_L)
+  px(img, 7, 8, WOOL_L)
+  px(img, 9, 9, WOOL_L)
+
+  -- Protruding fluffy bits
+  px(img, 3, 7, WOOL_D)
+  px(img, 3, 8, WOOL)
+  px(img, 12, 7, WOOL_D)
+  px(img, 5, 3, WOOL_D)
+  px(img, 8, 3, WOOL)
+end
+
 -- Generate frames
 local drawFuncs = { drawSmallRock, drawBerry, drawTunic, drawPants, drawBoots, drawBranch,
                     drawHammer, drawHatchet, drawPickaxe, drawSpear,
-                    drawLargeStone, drawFlint, drawLog }
+                    drawLargeStone, drawFlint, drawLog, drawMutton, drawWool }
 
 for i, drawFunc in ipairs(drawFuncs) do
   app.activeFrame = spr.frames[i]

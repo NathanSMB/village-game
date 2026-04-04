@@ -5,6 +5,7 @@ import treePng from "../sprites/ground/tree.png";
 import waterPng from "../sprites/ground/water.png";
 import rockBigPng from "../sprites/ground/rock-big.png";
 import itemsPng from "../sprites/ground/items.png";
+import sheepPng from "../sprites/ground/sheep.png";
 import { getCharacterImageSources } from "./character-compositor.ts";
 
 // Mainhand weapon sprites (64×64 per frame, rendered as separate child actor)
@@ -227,6 +228,8 @@ const ITEM_SPRITE_MAP: Record<string, number> = {
   "large-stone": 10,
   flint: 11,
   log: 12,
+  mutton: 13,
+  wool: 14,
 };
 
 function getItemsSheet(): ex.SpriteSheet {
@@ -235,7 +238,7 @@ function getItemsSheet(): ex.SpriteSheet {
       image: itemsImage,
       grid: {
         rows: 1,
-        columns: 13,
+        columns: 15,
         spriteWidth: 16,
         spriteHeight: 16,
       },
@@ -286,6 +289,31 @@ export function getWeaponSpriteSheet(itemId: string): ex.SpriteSheet | null {
   return sheet;
 }
 
+// ─── Sheep sprite ─────────────────────────────────────────────────
+// 12 frames: 4 directions × 3 poses (idle, walk1, walk2), 32×32 each.
+
+export const sheepImage = new ex.ImageSource(sheepPng, {
+  filtering: ex.ImageFiltering.Pixel,
+});
+
+let sheepSheet: ex.SpriteSheet | null = null;
+
+/** Get the sheep sprite sheet (12 frames, 32×32). */
+export function getSheepSpriteSheet(): ex.SpriteSheet {
+  if (!sheepSheet) {
+    sheepSheet = ex.SpriteSheet.fromImageSource({
+      image: sheepImage,
+      grid: {
+        rows: 1,
+        columns: 12,
+        spriteWidth: 32,
+        spriteHeight: 32,
+      },
+    });
+  }
+  return sheepSheet;
+}
+
 export function getAllImageSources(): ex.ImageSource[] {
   return [
     grassImage,
@@ -294,6 +322,7 @@ export function getAllImageSources(): ex.ImageSource[] {
     waterImage,
     rockBigImage,
     itemsImage,
+    sheepImage,
     ...getCharacterImageSources(),
     ...Object.values(WEAPON_IMAGES),
   ];

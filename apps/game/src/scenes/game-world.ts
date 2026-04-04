@@ -35,12 +35,20 @@ import type {
   EdgeBuildingSaveState,
   GroundItemSaveState,
   TreeSaveState,
+  SheepSaveState,
   SaveData,
 } from "../systems/save-manager.ts";
-import { getGrassAnimations, getWaterAnimation, WaterTileType } from "../systems/sprite-loader.ts";
+import {
+  getGrassAnimations,
+  getWaterAnimation,
+  getSheepSpriteSheet,
+  WaterTileType,
+} from "../systems/sprite-loader.ts";
 import type { WaterTileTypeValue } from "../systems/sprite-loader.ts";
 import type { DeathCause } from "./game-over.ts";
 import { IndoorDarknessOverlay } from "../systems/indoor-lighting.ts";
+import { Sheep } from "../actors/sheep.ts";
+import { detectBreedingEnclosures } from "../systems/enclosure.ts";
 
 const MAP_COLS = 64;
 const MAP_ROWS = 64;
@@ -54,6 +62,10 @@ const POND_COUNT = 3; // Number of ponds to generate
 const POND_MIN_RADIUS = 3;
 const POND_MAX_RADIUS = 5;
 const WATER_EXCLUSION = 5; // No water within N tiles of center spawn
+const INITIAL_SHEEP_COUNT = 5;
+const BREEDING_INTERVAL_MS = 60_000; // 60 seconds
+const WILD_SPAWN_INTERVAL_MS = 600_000; // 10 minutes
+const WILD_SPAWN_MAX_SHEEP = 10; // Only wild spawn when ≤ 10 sheep alive
 
 export type GameWorldData =
   | { type: "new"; appearance: CharacterAppearance }
@@ -98,6 +110,13 @@ export class GameWorld extends ex.Scene<GameWorldData> {
 
   // Indoor darkness overlay
   private darknessOverlay: IndoorDarknessOverlay | null = null;
+
+  // Sheep / creature system
+  private sheepList: Sheep[] = [];
+  private sheepByTile = new Map<number, Sheep>();
+  private sheepRegisteredTile = new Map<Sheep, number>(); // last tile key registered in sheepByTile
+  private breedingTimer = BREEDING_INTERVAL_MS;
+  private wildSpawnTimer = WILD_SPAWN_INTERVAL_MS;
 
   // Planning mode state
   private planningMode = false;
@@ -500,6 +519,13 @@ export class GameWorld extends ex.Scene<GameWorldData> {
         this.restoreEdgeBuildingStates(context.data.save.edgeBuildings);
       }
 
+      // Sheep: restore from save or spawn fresh
+      if (context.data.type === "load" && context.data.save.sheep) {
+        this.restoreSheepStates(context.data.save.sheep);
+      } else if (context.data.type === "new") {
+        this.spawnInitialSheep();
+      }
+
       // Recalculate indoor lighting after restoring buildings
       this.recalculateIndoorLighting();
     }
@@ -512,7 +538,7 @@ export class GameWorld extends ex.Scene<GameWorldData> {
     }
   }
 
-  override onPreUpdate(engine: ex.Engine): void {
+  override onPreUpdate(engine: ex.Engine, delta: number): void {
     const kb = engine.input.keyboard;
 
     // Planning mode input handling
@@ -542,6 +568,11 @@ export class GameWorld extends ex.Scene<GameWorldData> {
 
     // Tree branch dropping
     this.updateTreeBranchDrops();
+
+    // Sheep AI, breeding, and wild spawning
+    this.updateSheep(delta);
+    this.updateBreeding(delta);
+    this.updateWildSpawn(delta);
 
     if (wasActionPressed(kb, "pause")) {
       void engine.goToScene("pause-menu");
@@ -608,6 +639,23 @@ export class GameWorld extends ex.Scene<GameWorldData> {
           }
           if (damage > 0) {
             this.spawnPickupText(`-${damage}`, targetX, targetY);
+          }
+        }
+
+        // Sheep damage
+        const sheepTarget = this.sheepByTile.get(facingKey);
+        if (sheepTarget && !sheepTarget.isDead) {
+          const mult = canonical?.toolMultipliers?.creature ?? 1;
+          const damage = baseDamage * mult;
+          const drops = sheepTarget.takeDamage(damage);
+          for (const drop of drops) {
+            this.dropResourceNear(sheepTarget.tileX, sheepTarget.tileY, drop);
+          }
+          if (damage > 0) {
+            this.spawnPickupText(`-${damage}`, targetX, targetY);
+          }
+          if (sheepTarget.isDead) {
+            this.removeSheep(sheepTarget);
           }
         }
 
@@ -715,6 +763,8 @@ export class GameWorld extends ex.Scene<GameWorldData> {
       const facingWater = this.waterTiles.has(facingKey);
       const groundStack = this.groundItems.get(facingKey);
       const hasGroundItems = groundStack && !groundStack.isEmpty();
+      const facingSheep = this.sheepByTile.get(facingKey);
+      const hasSheep = facingSheep && !facingSheep.isDead;
 
       if (bush?.canPick()) {
         // Berry bush interaction
@@ -756,6 +806,21 @@ export class GameWorld extends ex.Scene<GameWorldData> {
           setTimeout(() => {
             this.spawnPickupText("+Thirst", waterWorldX, waterWorldY);
           }, 950);
+        }
+      } else if (hasSheep) {
+        // Sheep petting interaction
+        const sheepWorldX = facingSheep.pos.x;
+        const sheepWorldY = facingSheep.pos.y;
+
+        if (this.actionPrompt) {
+          this.actionPrompt.text = "[E] Pet";
+          this.actionPrompt.pos = ex.vec(sheepWorldX, sheepWorldY - TILE_SIZE / 2 - 4);
+          this.actionPrompt.graphics.visible = true;
+        }
+
+        if (wasActionPressed(kb, "action")) {
+          facingSheep.toggleFollow();
+          this.spawnPickupText("*baaaa*", sheepWorldX, sheepWorldY);
         }
       } else if (hasGroundItems) {
         // Ground item interaction
@@ -1846,6 +1911,218 @@ export class GameWorld extends ex.Scene<GameWorldData> {
       if (eb.isFenceType()) {
         eb.updateGraphic(this.computeFenceConnections(eb.edgeKey));
       }
+    }
+  }
+
+  // ==================== Sheep System ====================
+
+  /** Spawn initial sheep for a new game. */
+  private spawnInitialSheep(): void {
+    const centerX = MAP_COLS / 2;
+    const centerY = MAP_ROWS / 2;
+    let placed = 0;
+    let attempts = 0;
+
+    while (placed < INITIAL_SHEEP_COUNT && attempts < 500) {
+      attempts++;
+      const sx = Math.floor(Math.random() * MAP_COLS);
+      const sy = Math.floor(Math.random() * MAP_ROWS);
+
+      // Skip near spawn
+      if (Math.abs(sx - centerX) <= SPAWN_EXCLUSION && Math.abs(sy - centerY) <= SPAWN_EXCLUSION) {
+        continue;
+      }
+      const key = tileKey(sx, sy);
+      if (this.blockedTiles.has(key)) continue;
+      if (this.waterTiles.has(key)) continue;
+
+      this.addSheep(sx, sy);
+      placed++;
+    }
+  }
+
+  /** Create a sheep at the given tile and register it in all tracking structures. */
+  private addSheep(tileX: number, tileY: number): Sheep {
+    const sheep = new Sheep(tileX, tileY);
+    sheep.setSpriteSheet(getSheepSpriteSheet());
+    sheep.setBlockedCheck((fromX, fromY, toX, toY) => {
+      if (this.blockedTiles.has(tileKey(toX, toY))) return true;
+      const ek = edgeKeyBetween(fromX, fromY, toX, toY);
+      return ek !== null && this.blockedEdges.has(ek);
+    });
+    this.sheepList.push(sheep);
+    const key = tileKey(tileX, tileY);
+    this.sheepByTile.set(key, sheep);
+    this.sheepRegisteredTile.set(sheep, key);
+    this.blockedTiles.add(key);
+    this.add(sheep);
+    return sheep;
+  }
+
+  /** Remove a sheep from all tracking structures and the scene. */
+  private removeSheep(sheep: Sheep): void {
+    const idx = this.sheepList.indexOf(sheep);
+    if (idx !== -1) this.sheepList.splice(idx, 1);
+    const registeredKey = this.sheepRegisteredTile.get(sheep);
+    const key = registeredKey ?? tileKey(sheep.tileX, sheep.tileY);
+    if (this.sheepByTile.get(key) === sheep) {
+      this.sheepByTile.delete(key);
+    }
+    this.blockedTiles.delete(key);
+    this.sheepRegisteredTile.delete(sheep);
+    // Also clean up target tile if sheep was moving
+    if (sheep.isMoving()) {
+      const targetKey = tileKey(sheep.getTargetTileX(), sheep.getTargetTileY());
+      if (!this.sheepByTile.has(targetKey)) {
+        this.blockedTiles.delete(targetKey);
+      }
+    }
+    this.remove(sheep);
+  }
+
+  /** Update sheep AI and tile tracking each frame. */
+  private updateSheep(delta: number): void {
+    if (!this.player) return;
+
+    const playerTX = this.player.getTileX();
+    const playerTY = this.player.getTileY();
+    const playerFacing = this.player.getFacing();
+
+    for (const sheep of this.sheepList) {
+      if (sheep.isDead) continue;
+
+      // Reconcile tile tracking: Creature.onPreUpdate updates tileX/tileY
+      // AFTER the scene's onPreUpdate, so we compare against the last
+      // registered tile to detect moves that completed in the previous frame.
+      const currentKey = tileKey(sheep.tileX, sheep.tileY);
+      const registeredKey = this.sheepRegisteredTile.get(sheep) ?? currentKey;
+      if (currentKey !== registeredKey) {
+        // Remove from old tile
+        if (this.sheepByTile.get(registeredKey) === sheep) {
+          this.sheepByTile.delete(registeredKey);
+          this.blockedTiles.delete(registeredKey);
+        }
+        // Add to new tile
+        this.sheepByTile.set(currentKey, sheep);
+        this.blockedTiles.add(currentKey);
+        this.sheepRegisteredTile.set(sheep, currentKey);
+      }
+
+      // Run AI
+      sheep.updateAI(delta, playerTX, playerTY, playerFacing);
+
+      // When sheep starts moving, also block the target tile
+      if (sheep.isMoving()) {
+        const targetKey = tileKey(sheep.getTargetTileX(), sheep.getTargetTileY());
+        this.blockedTiles.add(targetKey);
+      }
+    }
+  }
+
+  /** Breeding: every 60s, spawn new sheep in qualifying enclosures. */
+  private updateBreeding(delta: number): void {
+    this.breedingTimer -= delta;
+    if (this.breedingTimer > 0) return;
+    this.breedingTimer = BREEDING_INTERVAL_MS;
+
+    // Collect positions of living, non-following sheep
+    const breedingSheep: { x: number; y: number; idx: number }[] = [];
+    for (let i = 0; i < this.sheepList.length; i++) {
+      const s = this.sheepList[i];
+      if (!s.isDead && !s.following && !s.isMoving()) {
+        breedingSheep.push({ x: s.tileX, y: s.tileY, idx: i });
+      }
+    }
+
+    if (breedingSheep.length < 2) return;
+
+    // Create a copy of blockedTiles that excludes sheep positions,
+    // so the enclosure flood-fill can connect through sheep-occupied tiles.
+    const sheepTileKeys = new Set<number>();
+    for (const s of breedingSheep) {
+      sheepTileKeys.add(tileKey(s.x, s.y));
+    }
+    const blockedForBreeding = new Set<number>();
+    for (const bk of this.blockedTiles) {
+      if (!sheepTileKeys.has(bk)) {
+        blockedForBreeding.add(bk);
+      }
+    }
+
+    const positions = breedingSheep.map((s) => ({ x: s.x, y: s.y }));
+    const enclosures = detectBreedingEnclosures(
+      positions,
+      this.edgeBuildings,
+      blockedForBreeding,
+      this.waterTiles,
+    );
+
+    for (const enc of enclosures) {
+      // Find a free tile inside the enclosure to spawn on (exclude sheep + other blocked)
+      const freeTiles: number[] = [];
+      for (const tk of enc.tiles) {
+        if (!this.blockedTiles.has(tk) && !this.waterTiles.has(tk)) {
+          freeTiles.push(tk);
+        }
+      }
+
+      if (freeTiles.length === 0) continue;
+
+      const spawnKey = freeTiles[Math.floor(Math.random() * freeTiles.length)];
+      const spawnX = spawnKey % MAP_COLS;
+      const spawnY = Math.floor(spawnKey / MAP_COLS);
+      this.addSheep(spawnX, spawnY);
+    }
+  }
+
+  /** Wild spawning: every 10min, if ≤ 10 sheep, spawn one on a random open tile. */
+  private updateWildSpawn(delta: number): void {
+    this.wildSpawnTimer -= delta;
+    if (this.wildSpawnTimer > 0) return;
+    this.wildSpawnTimer = WILD_SPAWN_INTERVAL_MS;
+
+    const aliveSheep = this.sheepList.filter((s) => !s.isDead).length;
+    if (aliveSheep > WILD_SPAWN_MAX_SHEEP) return;
+
+    // Try to find a random walkable, non-water, non-blocked tile
+    for (let attempt = 0; attempt < 50; attempt++) {
+      const sx = Math.floor(Math.random() * MAP_COLS);
+      const sy = Math.floor(Math.random() * MAP_ROWS);
+      const key = tileKey(sx, sy);
+
+      if (this.blockedTiles.has(key)) continue;
+      if (this.waterTiles.has(key)) continue;
+      // Don't spawn on player's tile
+      if (this.player && sx === this.player.getTileX() && sy === this.player.getTileY()) continue;
+
+      this.addSheep(sx, sy);
+      return;
+    }
+  }
+
+  // ==================== Sheep Save/Load ====================
+
+  getSheepStates(): SheepSaveState[] {
+    return this.sheepList.filter((s) => !s.isDead).map((s) => s.getState());
+  }
+
+  private restoreSheepStates(states: SheepSaveState[]): void {
+    // Clear any existing sheep
+    for (const sheep of this.sheepList) {
+      const key = tileKey(sheep.tileX, sheep.tileY);
+      if (this.sheepByTile.get(key) === sheep) {
+        this.sheepByTile.delete(key);
+        this.blockedTiles.delete(key);
+      }
+      this.remove(sheep);
+    }
+    this.sheepList = [];
+    this.sheepByTile.clear();
+    this.sheepRegisteredTile.clear();
+
+    for (const saved of states) {
+      const sheep = this.addSheep(saved.tileX, saved.tileY);
+      sheep.restoreState(saved);
     }
   }
 }

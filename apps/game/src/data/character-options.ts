@@ -50,4 +50,5 @@ export const CLOTHING_COLORS: PaletteOption[] = [
   { name: "Sand", r: 180, g: 160, b: 120 },
   { name: "Plum", r: 90, g: 45, b: 80 },
   { name: "Teal", r: 45, g: 100, b: 100 },
+  { name: "White", r: 230, g: 230, b: 225 },
 ];

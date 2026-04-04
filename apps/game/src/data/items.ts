@@ -1,4 +1,5 @@
 import { EquipmentSlot, Rarity, type Item } from "../types/item.ts";
+import { CLOTHING_COLORS } from "./character-options.ts";
 
 export const ITEMS: Record<string, Item> = {
   starter_tunic: {
@@ -9,6 +10,8 @@ export const ITEMS: Record<string, Item> = {
     stats: {},
     weight: 2,
     slot: EquipmentSlot.Torso,
+    colorIndex: 8,
+    dye: "White",
     itemSprite: "tunic",
   },
   starter_pants: {
@@ -19,6 +22,8 @@ export const ITEMS: Record<string, Item> = {
     stats: {},
     weight: 2,
     slot: EquipmentSlot.Legs,
+    colorIndex: 8,
+    dye: "White",
     itemSprite: "pants",
   },
   starter_boots: {
@@ -151,5 +156,6 @@ export const ITEMS: Record<string, Item> = {
 
 export function createStarterItem(baseId: string, colorIndex: number): Item {
   const base = ITEMS[baseId];
-  return { ...base, colorIndex };
+  const dye = CLOTHING_COLORS[colorIndex]?.name;
+  return { ...base, colorIndex, dye };
 }

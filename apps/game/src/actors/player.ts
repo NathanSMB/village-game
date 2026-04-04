@@ -5,6 +5,7 @@ import { type VitalsState, clampVital, defaultVitals, updateVitals } from "../ty
 import { EquipmentSlot } from "../types/item.ts";
 import { isActionHeld } from "../systems/keybinds.ts";
 import { compositeCharacter } from "../systems/character-compositor.ts";
+import { getWeaponSpriteSheet } from "../systems/sprite-loader.ts";
 
 const TILE_SIZE = 32;
 const MOVE_SPEED = 160;
@@ -114,6 +115,11 @@ export class Player extends ex.Actor {
   private attackStyle: AttackStyle | null = null;
   private attackTimer = 0;
 
+  // Weapon overlay: separate child actor with 64×64 sprites that can extend
+  // beyond the character's 32×32 tile (prevents clipping during attacks).
+  private weaponActor: ex.Actor;
+  private weaponSheet: ex.SpriteSheet | null = null;
+
   constructor(
     appearance: CharacterAppearance,
     startPos: ex.Vector,
@@ -131,11 +137,50 @@ export class Player extends ex.Actor {
     this.inventory = inventory ?? defaultInventory(appearance);
     this.vitals = vitals ?? defaultVitals();
     this.spriteSheet = compositeCharacter(appearance, this.inventory.equipment);
-    this.updateGraphic();
+
+    // Create weapon child actor — positioned at same center as player,
+    // renders 64×64 sprite (16px overflow in each direction)
+    this.weaponActor = new ex.Actor({
+      anchor: ex.vec(0.5, 0.5),
+      z: 11,
+    });
+    this.addChild(this.weaponActor);
+    this.setupWeaponOverlay();
+
+    this.showFrame(DIR_OFFSET[this.facing]);
     this.tileX = posToTile(startPos.x);
     this.tileY = posToTile(startPos.y);
     this.targetX = this.tileX;
     this.targetY = this.tileY;
+  }
+
+  /** Load the weapon sprite sheet for the currently equipped MainHand item. */
+  private setupWeaponOverlay(): void {
+    const mainHand = this.inventory.equipment[EquipmentSlot.MainHand];
+    this.weaponSheet = mainHand ? getWeaponSpriteSheet(mainHand.id) : null;
+    if (!this.weaponSheet) {
+      this.weaponActor.graphics.visible = false;
+    }
+  }
+
+  /**
+   * Display a specific animation frame on both the character and weapon overlay.
+   * The weapon sprite is 64×64 (centered on the same point as the 32×32 character)
+   * so tools can visually extend into adjacent tiles during attack animations.
+   */
+  private showFrame(frameIdx: number): void {
+    const sprite = this.spriteSheet.getSprite(frameIdx, 0);
+    if (sprite) this.graphics.use(sprite);
+
+    if (this.weaponSheet) {
+      const weaponSprite = this.weaponSheet.getSprite(frameIdx, 0);
+      if (weaponSprite) {
+        this.weaponActor.graphics.use(weaponSprite);
+        this.weaponActor.graphics.visible = true;
+      } else {
+        this.weaponActor.graphics.visible = false;
+      }
+    }
   }
 
   setBlockedCheck(fn: BlockedCheck): void {
@@ -173,10 +218,7 @@ export class Player extends ex.Actor {
     this.stopMovement();
     this.picking = true;
     this.pickTimer = PICK_DURATION_MS;
-    // Show the reach frame immediately
-    const reachIdx = PICK_DIR_OFFSET[this.facing];
-    const sprite = this.spriteSheet.getSprite(reachIdx, 0);
-    if (sprite) this.graphics.use(sprite);
+    this.showFrame(PICK_DIR_OFFSET[this.facing]);
   }
 
   isPicking(): boolean {
@@ -188,10 +230,7 @@ export class Player extends ex.Actor {
     this.stopMovement();
     this.drinking = true;
     this.drinkTimer = DRINK_DURATION_MS;
-    // Show the first drink frame immediately (begin kneel)
-    const drinkIdx = DRINK_DIR_OFFSET[this.facing];
-    const sprite = this.spriteSheet.getSprite(drinkIdx, 0);
-    if (sprite) this.graphics.use(sprite);
+    this.showFrame(DRINK_DIR_OFFSET[this.facing]);
   }
 
   isDrinking(): boolean {
@@ -203,10 +242,7 @@ export class Player extends ex.Actor {
     this.stopMovement();
     this.pickingUpItem = true;
     this.pickupTimer = PICKUP_DURATION_MS;
-    // Show the first pickup frame immediately (begin bend)
-    const pickupIdx = PICKUP_DIR_OFFSET[this.facing];
-    const sprite = this.spriteSheet.getSprite(pickupIdx, 0);
-    if (sprite) this.graphics.use(sprite);
+    this.showFrame(PICKUP_DIR_OFFSET[this.facing]);
   }
 
   isPickingUpItem(): boolean {
@@ -228,9 +264,7 @@ export class Player extends ex.Actor {
     this.attackTimer = ATTACK_DURATION_MS;
 
     const offsets = style === "swing" ? SWING_DIR_OFFSET : THRUST_DIR_OFFSET;
-    const frameIdx = offsets[this.facing];
-    const sprite = this.spriteSheet.getSprite(frameIdx, 0);
-    if (sprite) this.graphics.use(sprite);
+    this.showFrame(offsets[this.facing]);
 
     return style;
   }
@@ -268,15 +302,13 @@ export class Player extends ex.Actor {
       this.pickTimer -= delta;
       const halfDuration = PICK_DURATION_MS / 2;
 
-      // First half: reach frame, second half: grab frame
       const pickBase = PICK_DIR_OFFSET[this.facing];
       const frameIdx = this.pickTimer > halfDuration ? pickBase : pickBase + 1;
-      const sprite = this.spriteSheet.getSprite(frameIdx, 0);
-      if (sprite) this.graphics.use(sprite);
+      this.showFrame(frameIdx);
 
       if (this.pickTimer <= 0) {
         this.picking = false;
-        this.updateGraphic();
+        this.showFrame(DIR_OFFSET[this.facing]);
       }
       return;
     }
@@ -286,31 +318,27 @@ export class Player extends ex.Actor {
       this.drinkTimer -= delta;
       const quarterDuration = DRINK_DURATION_MS / 4;
 
-      // 4 frames: begin kneel, kneel, reach, drink
       const drinkBase = DRINK_DIR_OFFSET[this.facing];
       let poseIdx: number;
       if (this.drinkTimer > quarterDuration * 3) {
-        poseIdx = 0; // begin kneel
+        poseIdx = 0;
       } else if (this.drinkTimer > quarterDuration * 2) {
-        poseIdx = 1; // full kneel
+        poseIdx = 1;
       } else if (this.drinkTimer > quarterDuration) {
-        poseIdx = 2; // reach toward water
+        poseIdx = 2;
       } else {
-        poseIdx = 3; // drink
+        poseIdx = 3;
       }
 
-      const frameIdx = drinkBase + poseIdx;
-      const sprite = this.spriteSheet.getSprite(frameIdx, 0);
-      if (sprite) this.graphics.use(sprite);
+      this.showFrame(drinkBase + poseIdx);
 
       if (this.drinkTimer <= 0) {
         this.drinking = false;
-        // Restore thirst
         this.vitals = {
           ...this.vitals,
           thirst: clampVital(this.vitals.thirst + DRINK_THIRST_RESTORE),
         };
-        this.updateGraphic();
+        this.showFrame(DIR_OFFSET[this.facing]);
       }
       return;
     }
@@ -320,26 +348,23 @@ export class Player extends ex.Actor {
       this.pickupTimer -= delta;
       const quarterDuration = PICKUP_DURATION_MS / 4;
 
-      // 4 frames: begin bend, crouch, reach ground, grab
       const pickupBase = PICKUP_DIR_OFFSET[this.facing];
       let poseIdx: number;
       if (this.pickupTimer > quarterDuration * 3) {
-        poseIdx = 0; // begin bend
+        poseIdx = 0;
       } else if (this.pickupTimer > quarterDuration * 2) {
-        poseIdx = 1; // crouch
+        poseIdx = 1;
       } else if (this.pickupTimer > quarterDuration) {
-        poseIdx = 2; // reach to ground
+        poseIdx = 2;
       } else {
-        poseIdx = 3; // grab/rise
+        poseIdx = 3;
       }
 
-      const frameIdx = pickupBase + poseIdx;
-      const sprite = this.spriteSheet.getSprite(frameIdx, 0);
-      if (sprite) this.graphics.use(sprite);
+      this.showFrame(pickupBase + poseIdx);
 
       if (this.pickupTimer <= 0) {
         this.pickingUpItem = false;
-        this.updateGraphic();
+        this.showFrame(DIR_OFFSET[this.facing]);
       }
       return;
     }
@@ -353,21 +378,19 @@ export class Player extends ex.Actor {
       const base = offsets[this.facing];
       let poseIdx: number;
       if (this.attackTimer > thirdDuration * 2) {
-        poseIdx = 0; // wind-up / draw-back
+        poseIdx = 0;
       } else if (this.attackTimer > thirdDuration) {
-        poseIdx = 1; // mid-swing / thrust
+        poseIdx = 1;
       } else {
-        poseIdx = 2; // follow-through / recover
+        poseIdx = 2;
       }
 
-      const frameIdx = base + poseIdx;
-      const sprite = this.spriteSheet.getSprite(frameIdx, 0);
-      if (sprite) this.graphics.use(sprite);
+      this.showFrame(base + poseIdx);
 
       if (this.attackTimer <= 0) {
         this.attacking = false;
         this.attackStyle = null;
-        this.updateGraphic();
+        this.showFrame(DIR_OFFSET[this.facing]);
       }
       return;
     }
@@ -387,7 +410,7 @@ export class Player extends ex.Actor {
         this.vel = ex.vec(0, 0);
         this.moving = false;
         this.walkFrame = this.walkFrame === 0 ? 1 : 0;
-        this.updateGraphic();
+        this.showFrame(DIR_OFFSET[this.facing]);
       }
       return;
     }
@@ -416,7 +439,7 @@ export class Player extends ex.Actor {
 
     if (newFacing && newFacing !== this.facing) {
       this.facing = newFacing;
-      this.updateGraphic();
+      this.showFrame(DIR_OFFSET[this.facing]);
     }
 
     if (dx === 0 && dy === 0) return;
@@ -431,10 +454,8 @@ export class Player extends ex.Actor {
     this.targetY = nextY;
     this.moving = true;
 
-    // Show walk frame while moving
     const walkFrameIdx = DIR_OFFSET[this.facing] + 1 + this.walkFrame;
-    const sprite = this.spriteSheet.getSprite(walkFrameIdx, 0);
-    if (sprite) this.graphics.use(sprite);
+    this.showFrame(walkFrameIdx);
 
     const goalX = tileCenter(this.targetX);
     const goalY = tileCenter(this.targetY);
@@ -446,13 +467,8 @@ export class Player extends ex.Actor {
 
   refreshSprite(): void {
     this.spriteSheet = compositeCharacter(this.appearance, this.inventory.equipment);
-    this.updateGraphic();
-  }
-
-  private updateGraphic(): void {
-    const frameIdx = DIR_OFFSET[this.facing];
-    const sprite = this.spriteSheet.getSprite(frameIdx, 0);
-    if (sprite) this.graphics.use(sprite);
+    this.setupWeaponOverlay();
+    this.showFrame(DIR_OFFSET[this.facing]);
   }
 
   getTileX(): number {

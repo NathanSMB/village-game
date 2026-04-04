@@ -7,6 +7,12 @@ import rockBigPng from "../sprites/ground/rock-big.png";
 import itemsPng from "../sprites/ground/items.png";
 import { getCharacterImageSources } from "./character-compositor.ts";
 
+// Mainhand weapon sprites (64×64 per frame, rendered as separate child actor)
+import mainhandHammerPng from "../sprites/characters/equipment/mainhand/hammer.png";
+import mainhandHatchetPng from "../sprites/characters/equipment/mainhand/hatchet.png";
+import mainhandPickaxePng from "../sprites/characters/equipment/mainhand/pickaxe.png";
+import mainhandSpearPng from "../sprites/characters/equipment/mainhand/spear.png";
+
 export const grassImage = new ex.ImageSource(grassPng, {
   filtering: ex.ImageFiltering.Pixel,
 });
@@ -238,6 +244,40 @@ export function getItemSprite(itemSpriteId: string): ex.Sprite | null {
   return sheet.getSprite(idx, 0) ?? null;
 }
 
+// Weapon overlay sprites (64×64 frames for overflow beyond character tile)
+const WEAPON_FRAME_SIZE = 64;
+const WEAPON_FRAME_COUNT = 76;
+
+const WEAPON_IMAGES: Record<string, ex.ImageSource> = {
+  hammer: new ex.ImageSource(mainhandHammerPng, { filtering: ex.ImageFiltering.Pixel }),
+  hatchet: new ex.ImageSource(mainhandHatchetPng, { filtering: ex.ImageFiltering.Pixel }),
+  pickaxe: new ex.ImageSource(mainhandPickaxePng, { filtering: ex.ImageFiltering.Pixel }),
+  spear: new ex.ImageSource(mainhandSpearPng, { filtering: ex.ImageFiltering.Pixel }),
+};
+
+const weaponSheetCache = new Map<string, ex.SpriteSheet>();
+
+/** Get a 64×64 weapon sprite sheet for a mainhand item. */
+export function getWeaponSpriteSheet(itemId: string): ex.SpriteSheet | null {
+  const cached = weaponSheetCache.get(itemId);
+  if (cached) return cached;
+
+  const img = WEAPON_IMAGES[itemId];
+  if (!img) return null;
+
+  const sheet = ex.SpriteSheet.fromImageSource({
+    image: img,
+    grid: {
+      rows: 1,
+      columns: WEAPON_FRAME_COUNT,
+      spriteWidth: WEAPON_FRAME_SIZE,
+      spriteHeight: WEAPON_FRAME_SIZE,
+    },
+  });
+  weaponSheetCache.set(itemId, sheet);
+  return sheet;
+}
+
 export function getAllImageSources(): ex.ImageSource[] {
   return [
     grassImage,
@@ -247,5 +287,6 @@ export function getAllImageSources(): ex.ImageSource[] {
     rockBigImage,
     itemsImage,
     ...getCharacterImageSources(),
+    ...Object.values(WEAPON_IMAGES),
   ];
 }

@@ -4,9 +4,10 @@
 --          + 16 drink (empty) + 16 pickup (empty)
 -- Tools use fixed colors (no palette swap reference colors needed).
 
-local W = 32
-local H = 32
+local W = 64
+local H = 64
 local FRAMES = 76
+local OFFSET = 16 -- center the 32x32 character area within the 64x64 canvas
 
 local scriptPath = app.params["script-path"] or "."
 local baseDir = app.fs.joinPath(app.fs.filePath(scriptPath), "..", "assets", "characters", "equipment", "mainhand")
@@ -555,7 +556,7 @@ for _, tool in ipairs(tools) do
       local cel = spr:newCel(spr.layers[1], frameIdx)
       clearImg(cel.image)
       local hx, hy, orient = getStandardHandPos(dir, pose)
-      tool.draw(cel.image, hx, hy, orient)
+      tool.draw(cel.image, hx, hy + OFFSET, orient)
       spr.frames[frameIdx].duration = 0.2
     end
   end
@@ -568,7 +569,7 @@ for _, tool in ipairs(tools) do
       local cel = spr:newCel(spr.layers[1], frameIdx)
       clearImg(cel.image)
       local hx, hy, orient = getPickHandPos(dir, pickPose)
-      tool.draw(cel.image, hx, hy, orient)
+      tool.draw(cel.image, hx, hy + OFFSET, orient)
       spr.frames[frameIdx].duration = 0.2
     end
   end
@@ -603,7 +604,7 @@ for _, tool in ipairs(tools) do
       local cel = spr:newCel(spr.layers[1], frameIdx)
       clearImg(cel.image)
       local hx, hy, orient = getSwingHandPos(dir, swingPose)
-      tool.draw(cel.image, hx, hy, orient)
+      tool.draw(cel.image, hx, hy + OFFSET, orient)
       spr.frames[frameIdx].duration = 0.2
     end
   end
@@ -616,7 +617,7 @@ for _, tool in ipairs(tools) do
       local cel = spr:newCel(spr.layers[1], frameIdx)
       clearImg(cel.image)
       local hx, hy, orient = getThrustHandPos(dir, thrustPose)
-      tool.draw(cel.image, hx, hy, orient)
+      tool.draw(cel.image, hx, hy + OFFSET, orient)
       spr.frames[frameIdx].duration = 0.2
     end
   end

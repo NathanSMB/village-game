@@ -474,7 +474,13 @@ export class GameWorld extends ex.Scene<GameWorldData> {
         const style = this.player.startAttack();
         if (style) {
           const facing = this.player.getFacingTile();
-          this.add(new AttackEffect(facing.x, facing.y, style, this.player.getFacing()));
+          const targetX = facing.x * TILE_SIZE + TILE_SIZE / 2;
+          const targetY = facing.y * TILE_SIZE + TILE_SIZE / 2;
+          // Position between player and facing tile center
+          const blend = style === "swing" ? 0.55 : 0.7;
+          const effectX = this.player.pos.x + (targetX - this.player.pos.x) * blend;
+          const effectY = this.player.pos.y + (targetY - this.player.pos.y) * blend;
+          this.add(new AttackEffect(effectX, effectY, style, this.player.getFacing()));
         }
       }
     }

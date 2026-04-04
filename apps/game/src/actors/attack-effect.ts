@@ -1,15 +1,16 @@
 import * as ex from "excalibur";
 
 const EFFECT_DURATION = 300; // ms
-const TILE_SIZE = 32;
+const CANVAS_SIZE = 64; // larger than a tile so the effect doesn't clip at edges
 
 type AttackStyle = "swing" | "thrust";
 type Direction = "down" | "up" | "left" | "right";
 
 /**
- * Visual "air rush" effect that appears on the attacked tile.
+ * Visual "air rush" effect that appears near the attacked tile.
  * - Swing: curved arc lines showing the sweep of the weapon
  * - Thrust: straight streak lines showing the forward jab
+ * Uses a 64×64 canvas so arcs/lines aren't clipped at the edges.
  * Fades out over EFFECT_DURATION and self-destructs.
  */
 export class AttackEffect extends ex.Actor {
@@ -17,11 +18,9 @@ export class AttackEffect extends ex.Actor {
   private style: AttackStyle;
   private dir: Direction;
 
-  constructor(tileX: number, tileY: number, style: AttackStyle, dir: Direction) {
+  constructor(worldX: number, worldY: number, style: AttackStyle, dir: Direction) {
     super({
-      pos: ex.vec(tileX * TILE_SIZE + TILE_SIZE / 2, tileY * TILE_SIZE + TILE_SIZE / 2),
-      width: TILE_SIZE,
-      height: TILE_SIZE,
+      pos: ex.vec(worldX, worldY),
       anchor: ex.vec(0.5, 0.5),
       z: 50,
     });
@@ -29,8 +28,8 @@ export class AttackEffect extends ex.Actor {
     this.dir = dir;
 
     const canvas = new ex.Canvas({
-      width: TILE_SIZE,
-      height: TILE_SIZE,
+      width: CANVAS_SIZE,
+      height: CANVAS_SIZE,
       draw: (ctx) => this.drawEffect(ctx),
       filtering: ex.ImageFiltering.Pixel,
     });
@@ -43,7 +42,7 @@ export class AttackEffect extends ex.Actor {
     const spread = t * 6; // lines spread out over time
 
     ctx.save();
-    ctx.translate(TILE_SIZE / 2, TILE_SIZE / 2);
+    ctx.translate(CANVAS_SIZE / 2, CANVAS_SIZE / 2);
 
     if (this.style === "swing") {
       this.drawSwingEffect(ctx, alpha, spread, t);

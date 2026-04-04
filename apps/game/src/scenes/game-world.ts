@@ -1,6 +1,6 @@
 import * as ex from "excalibur";
 import type { CharacterAppearance } from "../types/character.ts";
-import type { InventoryState } from "../types/inventory.ts";
+import { totalWeight, type InventoryState } from "../types/inventory.ts";
 import { EquipmentSlot, type Item } from "../types/item.ts";
 import { isAlive } from "../types/vitals.ts";
 import { Player } from "../actors/player.ts";
@@ -130,6 +130,15 @@ export class GameWorld extends ex.Scene<GameWorldData> {
   private cookingMenuIndex = 0;
   private cookingBuilding: Building | null = null;
   private cookingMenuPanel: ex.ScreenElement | null = null;
+
+  // Storage menu state
+  private storageMenuOpen = false;
+  private storageBuilding: Building | null = null;
+  private storageMenuPanel: ex.ScreenElement | null = null;
+  private storageFocus: "bag" | "box" = "bag";
+  private storageBagIndex = 0;
+  private storageBoxIndex = 0;
+  private storageBagScroll = 0;
 
   // Indoor tile cache (computed when entering planning mode for bed validation)
   private indoorTilesCache: Set<number> | null = null;
@@ -606,6 +615,12 @@ export class GameWorld extends ex.Scene<GameWorldData> {
       return; // Block all other input while cooking menu is open
     }
 
+    // Storage menu input handling
+    if (this.storageMenuOpen) {
+      this.handleStorageMenuInput(kb);
+      return; // Block all other input while storage menu is open
+    }
+
     // Tree branch dropping
     this.updateTreeBranchDrops();
 
@@ -938,6 +953,22 @@ export class GameWorld extends ex.Scene<GameWorldData> {
               // Multiple items: open item picker
               this.openItemPicker(groundStack, facingKey, worldX, worldY);
             }
+          }
+        } else if (
+          facingBuilding &&
+          facingBuilding.type.storage &&
+          facingBuilding.state === "complete"
+        ) {
+          // Storage box interaction
+          const worldX = facing.x * TILE_SIZE + TILE_SIZE / 2;
+          const worldY = facing.y * TILE_SIZE + TILE_SIZE / 2;
+          if (this.actionPrompt) {
+            this.actionPrompt.text = "[E] Open";
+            this.actionPrompt.pos = ex.vec(worldX, worldY - TILE_SIZE / 2 - 4);
+            this.actionPrompt.graphics.visible = true;
+          }
+          if (wasActionPressed(kb, "action")) {
+            this.openStorageMenu(facingBuilding);
           }
         } else if (
           facingBuilding &&
@@ -2311,6 +2342,350 @@ export class GameWorld extends ex.Scene<GameWorldData> {
     this.cookingMenuPanel.graphics.use(canvas);
   }
 
+  // ==================== Storage Menu ====================
+
+  private openStorageMenu(building: Building): void {
+    if (!this.player) return;
+    this.storageMenuOpen = true;
+    this.storageBuilding = building;
+    this.storageFocus = "bag";
+    this.storageBagIndex = 0;
+    this.storageBoxIndex = 0;
+    this.storageBagScroll = 0;
+    this.player.lockInput();
+
+    this.storageMenuPanel = new ex.ScreenElement({
+      x: 8,
+      y: 40,
+      z: 200,
+    });
+    this.add(this.storageMenuPanel);
+    this.updateStorageMenu();
+  }
+
+  private closeStorageMenu(): void {
+    this.storageMenuOpen = false;
+    this.storageBuilding = null;
+    if (this.storageMenuPanel) {
+      this.remove(this.storageMenuPanel);
+      this.storageMenuPanel = null;
+    }
+    this.player?.unlockInput();
+  }
+
+  private readonly STORAGE_PANEL_WIDTH = 380;
+  private readonly STORAGE_LINE_HEIGHT = 20;
+  private readonly STORAGE_MAX_VISIBLE = 8;
+
+  private handleStorageMenuInput(kb: ex.Keyboard): void {
+    if (wasActionPressed(kb, "back")) {
+      this.closeStorageMenu();
+      return;
+    }
+
+    if (!this.player || !this.storageBuilding) return;
+
+    const bag = this.player.inventory.bag;
+    const slots = this.storageBuilding.storageSlots;
+    const maxVis = this.STORAGE_MAX_VISIBLE;
+
+    // Switch focus between bag and box
+    if (wasActionPressed(kb, "moveLeft")) {
+      this.storageFocus = "bag";
+      this.updateStorageMenu();
+    }
+    if (wasActionPressed(kb, "moveRight")) {
+      this.storageFocus = "box";
+      this.updateStorageMenu();
+    }
+
+    // Navigate within focused column
+    if (wasActionPressed(kb, "moveUp")) {
+      if (this.storageFocus === "bag") {
+        this.storageBagIndex = Math.max(0, this.storageBagIndex - 1);
+        // Scroll up if needed
+        if (this.storageBagIndex < this.storageBagScroll) {
+          this.storageBagScroll = this.storageBagIndex;
+        }
+      } else {
+        this.storageBoxIndex = Math.max(0, this.storageBoxIndex - 1);
+      }
+      this.updateStorageMenu();
+    }
+    if (wasActionPressed(kb, "moveDown")) {
+      if (this.storageFocus === "bag") {
+        this.storageBagIndex = Math.min(bag.length - 1, this.storageBagIndex + 1);
+        // Scroll down if needed
+        if (this.storageBagIndex >= this.storageBagScroll + maxVis) {
+          this.storageBagScroll = this.storageBagIndex - maxVis + 1;
+        }
+      } else {
+        this.storageBoxIndex = Math.min(slots.length - 1, this.storageBoxIndex + 1);
+      }
+      this.updateStorageMenu();
+    }
+
+    // Transfer item
+    if (wasActionPressed(kb, "action") || wasActionPressed(kb, "confirm")) {
+      if (this.storageFocus === "bag") {
+        // Bag → Box: find first empty slot
+        if (bag.length > 0 && this.storageBagIndex < bag.length) {
+          const emptyIdx = slots.indexOf(null);
+          if (emptyIdx !== -1) {
+            const item = bag.splice(this.storageBagIndex, 1)[0];
+            slots[emptyIdx] = item;
+            // Clamp index after removal
+            if (this.storageBagIndex >= bag.length && bag.length > 0) {
+              this.storageBagIndex = bag.length - 1;
+            }
+            if (this.storageBagIndex < 0) this.storageBagIndex = 0;
+            // Adjust scroll
+            if (this.storageBagScroll > 0 && bag.length <= this.storageBagScroll + maxVis) {
+              this.storageBagScroll = Math.max(0, bag.length - maxVis);
+            }
+            const worldX = this.storageBuilding.pos.x;
+            const worldY = this.storageBuilding.pos.y;
+            this.spawnPickupText(`Stored [${item.name}]`, worldX, worldY);
+          } else {
+            const worldX = this.storageBuilding.pos.x;
+            const worldY = this.storageBuilding.pos.y;
+            this.spawnPickupText("Box Full!", worldX, worldY);
+          }
+        }
+      } else {
+        // Box → Bag: check weight limit
+        const slotItem = slots[this.storageBoxIndex];
+        if (slotItem) {
+          const currentWeight = totalWeight(this.player.inventory);
+          if (currentWeight + slotItem.weight <= this.player.inventory.maxWeight) {
+            slots[this.storageBoxIndex] = null;
+            bag.push(slotItem);
+            const worldX = this.storageBuilding.pos.x;
+            const worldY = this.storageBuilding.pos.y;
+            this.spawnPickupText(`+[${slotItem.name}]`, worldX, worldY);
+          } else {
+            const worldX = this.storageBuilding.pos.x;
+            const worldY = this.storageBuilding.pos.y;
+            this.spawnPickupText("Too Heavy!", worldX, worldY);
+          }
+        }
+      }
+      this.updateStorageMenu();
+    }
+  }
+
+  private updateStorageMenu(): void {
+    if (!this.storageMenuPanel || !this.storageBuilding || !this.player) return;
+
+    const building = this.storageBuilding;
+    const bag = this.player.inventory.bag;
+    const slots = building.storageSlots;
+    const pw = this.STORAGE_PANEL_WIDTH;
+    const lh = this.STORAGE_LINE_HEIGHT;
+    const maxVis = this.STORAGE_MAX_VISIBLE;
+
+    const headerH = 28;
+    const subHeaderH = 24;
+    const hintH = 36;
+    const contentRows = Math.max(maxVis, slots.length);
+    const contentH = contentRows * lh;
+    const ph = headerH + subHeaderH + contentH + hintH + 12;
+    const colW = Math.floor((pw - 16) / 2); // each column width (with padding)
+
+    const focusCol = this.storageFocus;
+    const bagIdx = this.storageBagIndex;
+    const boxIdx = this.storageBoxIndex;
+    const bagScroll = this.storageBagScroll;
+    const inv = this.player.inventory;
+
+    const canvas = new ex.Canvas({
+      width: pw,
+      height: ph,
+      cache: false,
+      draw: (ctx) => {
+        ctx.imageSmoothingEnabled = false;
+
+        // Background with rounded corners
+        ctx.fillStyle = "rgba(10, 10, 20, 0.88)";
+        const r = 4;
+        ctx.beginPath();
+        ctx.moveTo(r, 0);
+        ctx.lineTo(pw - r, 0);
+        ctx.arcTo(pw, 0, pw, r, r);
+        ctx.lineTo(pw, ph - r);
+        ctx.arcTo(pw, ph, pw - r, ph, r);
+        ctx.lineTo(r, ph);
+        ctx.arcTo(0, ph, 0, ph - r, r);
+        ctx.lineTo(0, r);
+        ctx.arcTo(0, 0, r, 0, r);
+        ctx.closePath();
+        ctx.fill();
+
+        // Border (warm amber to match wood crate)
+        ctx.strokeStyle = "rgba(180, 140, 60, 0.35)";
+        ctx.lineWidth = 1;
+        ctx.stroke();
+
+        // Title
+        const boxName = building.type.name;
+        const slotCount = slots.length;
+        ctx.fillStyle = "#ffffff";
+        ctx.font = "bold 14px monospace";
+        ctx.textAlign = "center";
+        ctx.fillText(`${boxName} (${slotCount})`, pw / 2, 18);
+
+        // Title divider
+        ctx.strokeStyle = "rgba(180, 140, 60, 0.25)";
+        ctx.beginPath();
+        ctx.moveTo(8, headerH);
+        ctx.lineTo(pw - 8, headerH);
+        ctx.stroke();
+
+        // Column positions
+        const leftX = 8;
+        const rightX = 8 + colW + 8; // 8px gap between columns
+        const contentTop = headerH + subHeaderH;
+
+        // Center vertical divider
+        const divX = Math.floor(pw / 2);
+        ctx.strokeStyle = "rgba(180, 140, 60, 0.15)";
+        ctx.beginPath();
+        ctx.moveTo(divX, headerH + 4);
+        ctx.lineTo(divX, contentTop + contentH + 4);
+        ctx.stroke();
+
+        // Sub-headers
+        ctx.font = "bold 11px monospace";
+        ctx.textAlign = "left";
+        // BAG header
+        ctx.fillStyle = focusCol === "bag" ? "#f0c040" : "#888888";
+        ctx.fillText("BAG", leftX, headerH + 16);
+        // Focused underline accent
+        if (focusCol === "bag") {
+          ctx.fillStyle = "rgba(240, 192, 64, 0.4)";
+          ctx.fillRect(leftX, headerH + 19, 24, 1);
+        }
+        // STORAGE header
+        ctx.fillStyle = focusCol === "box" ? "#f0c040" : "#888888";
+        ctx.fillText("STORAGE", rightX, headerH + 16);
+        if (focusCol === "box") {
+          ctx.fillStyle = "rgba(240, 192, 64, 0.4)";
+          ctx.fillRect(rightX, headerH + 19, 52, 1);
+        }
+
+        // === BAG COLUMN (left) ===
+        const bagVisStart = bagScroll;
+        const bagVisEnd = Math.min(bag.length, bagScroll + maxVis);
+
+        // Scroll-up indicator
+        if (bagScroll > 0) {
+          ctx.fillStyle = "#666666";
+          ctx.font = "9px monospace";
+          ctx.textAlign = "left";
+          ctx.fillText("...", leftX + 8, contentTop + 4);
+        }
+
+        for (let vi = 0; vi < maxVis; vi++) {
+          const realIdx = bagVisStart + vi;
+          const y = contentTop + vi * lh + lh / 2 + 4;
+
+          if (realIdx < bagVisEnd) {
+            const item = bag[realIdx];
+            const selected = focusCol === "bag" && realIdx === bagIdx;
+
+            // Selection highlight
+            if (selected) {
+              ctx.fillStyle = "rgba(240, 192, 64, 0.1)";
+              ctx.fillRect(leftX - 2, contentTop + vi * lh + 2, colW, lh);
+            }
+
+            const prefix = selected ? "> " : "  ";
+            ctx.textAlign = "left";
+            ctx.font = selected ? "bold 11px monospace" : "11px monospace";
+            ctx.fillStyle = selected ? "#f0c040" : "#cccccc";
+
+            // Truncate long names to fit column
+            let name = item.name;
+            if (name.length > 18) name = name.slice(0, 17) + "…";
+            ctx.fillText(`${prefix}${name}`, leftX, y);
+          }
+        }
+
+        // Scroll-down indicator
+        if (bagVisEnd < bag.length) {
+          ctx.fillStyle = "#666666";
+          ctx.font = "9px monospace";
+          ctx.textAlign = "left";
+          ctx.fillText("...", leftX + 8, contentTop + maxVis * lh + 4);
+        }
+
+        // Empty bag message
+        if (bag.length === 0) {
+          ctx.fillStyle = "#444444";
+          ctx.font = "11px monospace";
+          ctx.textAlign = "left";
+          ctx.fillText("  (empty)", leftX, contentTop + lh / 2 + 4);
+        }
+
+        // === BOX COLUMN (right) ===
+        for (let i = 0; i < slots.length; i++) {
+          if (i >= maxVis * 2) break; // safety cap for display
+          const y = contentTop + i * lh + lh / 2 + 4;
+          const item = slots[i];
+          const selected = focusCol === "box" && i === boxIdx;
+
+          // Selection highlight
+          if (selected) {
+            ctx.fillStyle = "rgba(240, 192, 64, 0.1)";
+            ctx.fillRect(rightX - 2, contentTop + i * lh + 2, colW, lh);
+          }
+
+          const slotNum = `${i + 1}. `;
+          ctx.textAlign = "left";
+
+          if (item) {
+            const prefix = selected ? "> " : "  ";
+            ctx.font = selected ? "bold 11px monospace" : "11px monospace";
+            ctx.fillStyle = selected ? "#f0c040" : "#cccccc";
+            let name = item.name;
+            if (name.length > 15) name = name.slice(0, 14) + "…";
+            ctx.fillText(`${prefix}${slotNum}${name}`, rightX, y);
+          } else {
+            const prefix = selected ? "> " : "  ";
+            ctx.font = "11px monospace";
+            ctx.fillStyle = selected ? "#f0c040" : "#444444";
+            ctx.fillText(`${prefix}${slotNum}---`, rightX, y);
+          }
+        }
+
+        // Bottom divider
+        const bottomDivY = contentTop + contentH + 4;
+        ctx.strokeStyle = "rgba(180, 140, 60, 0.25)";
+        ctx.beginPath();
+        ctx.moveTo(8, bottomDivY);
+        ctx.lineTo(pw - 8, bottomDivY);
+        ctx.stroke();
+
+        // Hint text
+        ctx.textAlign = "center";
+        ctx.font = "9px monospace";
+        ctx.fillStyle = "#666666";
+        const hintY1 = bottomDivY + 14;
+        ctx.fillText("[E] Transfer  [\u2190\u2192] Switch  [Esc] Close", pw / 2, hintY1);
+
+        // Weight display
+        const curWeight = totalWeight(inv);
+        const maxW = inv.maxWeight;
+        const overWeight = curWeight > maxW;
+        ctx.font = "9px monospace";
+        ctx.fillStyle = overWeight ? "#ff4444" : "#666666";
+        ctx.fillText(`Weight: ${curWeight}/${maxW}`, pw / 2, hintY1 + 14);
+      },
+    });
+
+    this.storageMenuPanel.graphics.use(canvas);
+  }
+
   // ==================== Building Management (tile-based) ====================
 
   private removeBuilding(building: Building, key: number): void {
@@ -2321,6 +2696,18 @@ export class GameWorld extends ex.Scene<GameWorldData> {
     // If the player is sleeping in this bed, wake them up
     if (this.sleepingBed === building) {
       this.exitSleep();
+    }
+    // If the player has this storage box open, close it
+    if (this.storageBuilding === building) {
+      this.closeStorageMenu();
+    }
+    // Drop stored items on the ground
+    if (building.type.storage) {
+      for (const item of building.storageSlots) {
+        if (item) {
+          this.dropResourceNear(building.tileX, building.tileY, item);
+        }
+      }
     }
     this.recalculateIndoorLighting();
   }

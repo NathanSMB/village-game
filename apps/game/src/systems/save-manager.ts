@@ -47,6 +47,8 @@ export interface BuildingSaveState {
   isBurning?: boolean;
   /** Remaining burn time in ms (0 when not burning). */
   burnTimer?: number;
+  /** Contents of a storage building (one item per slot, null = empty). */
+  storageSlots?: (Item | null)[];
 }
 
 export interface EdgeBuildingSaveState {

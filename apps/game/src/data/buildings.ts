@@ -14,6 +14,11 @@ export interface FireConfig {
   fuelCost: BuildingIngredient[];
 }
 
+export interface StorageConfig {
+  /** Number of item slots in the container. */
+  slotCount: number;
+}
+
 export interface BuildingType {
   id: string;
   name: string;
@@ -31,6 +36,8 @@ export interface BuildingType {
   requiresIndoor?: boolean;
   /** If set, this building supports fire behavior (burn timer, ignition, cooking). */
   fire?: FireConfig;
+  /** If set, this building acts as an item container with fixed slots. */
+  storage?: StorageConfig;
 }
 
 export const BUILDING_TYPES: BuildingType[] = [
@@ -165,6 +172,39 @@ export const BUILDING_TYPES: BuildingType[] = [
         { itemId: "flint", count: 1 },
       ],
     },
+  },
+  {
+    id: "box_short",
+    name: "Short Box",
+    ingredients: [{ itemId: "log", count: 2 }],
+    maxHp: 40,
+    solid: true,
+    interactable: false,
+    solidWhenClosed: false,
+    placement: "tile",
+    storage: { slotCount: 8 },
+  },
+  {
+    id: "box_medium",
+    name: "Medium Box",
+    ingredients: [{ itemId: "log", count: 4 }],
+    maxHp: 60,
+    solid: true,
+    interactable: false,
+    solidWhenClosed: false,
+    placement: "tile",
+    storage: { slotCount: 12 },
+  },
+  {
+    id: "box_tall",
+    name: "Tall Box",
+    ingredients: [{ itemId: "log", count: 8 }],
+    maxHp: 80,
+    solid: true,
+    interactable: false,
+    solidWhenClosed: false,
+    placement: "tile",
+    storage: { slotCount: 16 },
   },
 ];
 

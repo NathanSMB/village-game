@@ -2,6 +2,7 @@ import * as ex from "excalibur";
 import type { CharacterAppearance } from "../types/character.ts";
 import { type InventoryState, defaultInventory } from "../types/inventory.ts";
 import { type VitalsState, clampVital, defaultVitals, updateVitals } from "../types/vitals.ts";
+import { EquipmentSlot } from "../types/item.ts";
 import { isActionHeld } from "../systems/keybinds.ts";
 import { compositeCharacter } from "../systems/character-compositor.ts";
 
@@ -12,6 +13,7 @@ const PICK_DURATION_MS = 500;
 const DRINK_DURATION_MS = 1000; // 4 frames × 250ms each
 const DRINK_THIRST_RESTORE = 25;
 const PICKUP_DURATION_MS = 800; // 4 frames × 200ms each
+const ATTACK_DURATION_MS = 400; // 3 frames × ~133ms each
 
 export type Direction = "down" | "up" | "left" | "right";
 
@@ -49,6 +51,27 @@ const PICKUP_DIR_OFFSET: Record<Direction, number> = {
   right: 48,
 };
 
+// Swing attack frame offsets: frames 52-63 (4 dirs × 3 swing poses)
+const SWING_DIR_OFFSET: Record<Direction, number> = {
+  down: 52,
+  up: 55,
+  left: 58,
+  right: 61,
+};
+
+// Thrust attack frame offsets: frames 64-75 (4 dirs × 3 thrust poses)
+const THRUST_DIR_OFFSET: Record<Direction, number> = {
+  down: 64,
+  up: 67,
+  left: 70,
+  right: 73,
+};
+
+export type AttackStyle = "swing" | "thrust";
+
+// Items that use thrust animation (spear). Everything else uses swing.
+const THRUST_ITEM_IDS = new Set(["spear"]);
+
 function tileCenter(tile: number): number {
   return tile * TILE_SIZE + TILE_SIZE / 2;
 }
@@ -85,6 +108,11 @@ export class Player extends ex.Actor {
   // Pickup-item state
   private pickingUpItem = false;
   private pickupTimer = 0;
+
+  // Attack state
+  private attacking = false;
+  private attackStyle: AttackStyle | null = null;
+  private attackTimer = 0;
 
   constructor(
     appearance: CharacterAppearance,
@@ -185,9 +213,39 @@ export class Player extends ex.Actor {
     return this.pickingUpItem;
   }
 
+  /**
+   * Start an attack animation. Auto-detects swing vs thrust from equipped MainHand weapon.
+   * Returns the attack style used, or null if no weapon equipped.
+   */
+  startAttack(): AttackStyle | null {
+    const mainHand = this.inventory.equipment[EquipmentSlot.MainHand];
+    if (!mainHand) return null;
+
+    const style: AttackStyle = THRUST_ITEM_IDS.has(mainHand.id) ? "thrust" : "swing";
+    this.stopMovement();
+    this.attacking = true;
+    this.attackStyle = style;
+    this.attackTimer = ATTACK_DURATION_MS;
+
+    const offsets = style === "swing" ? SWING_DIR_OFFSET : THRUST_DIR_OFFSET;
+    const frameIdx = offsets[this.facing];
+    const sprite = this.spriteSheet.getSprite(frameIdx, 0);
+    if (sprite) this.graphics.use(sprite);
+
+    return style;
+  }
+
+  isAttacking(): boolean {
+    return this.attacking;
+  }
+
+  getAttackStyle(): AttackStyle | null {
+    return this.attackStyle;
+  }
+
   /** Returns true if the player is locked in any animation. */
   isBusy(): boolean {
-    return this.picking || this.drinking || this.pickingUpItem;
+    return this.picking || this.drinking || this.pickingUpItem || this.attacking;
   }
 
   getFacing(): Direction {
@@ -281,6 +339,34 @@ export class Player extends ex.Actor {
 
       if (this.pickupTimer <= 0) {
         this.pickingUpItem = false;
+        this.updateGraphic();
+      }
+      return;
+    }
+
+    // Attack animation locks movement
+    if (this.attacking && this.attackStyle) {
+      this.attackTimer -= delta;
+      const thirdDuration = ATTACK_DURATION_MS / 3;
+
+      const offsets = this.attackStyle === "swing" ? SWING_DIR_OFFSET : THRUST_DIR_OFFSET;
+      const base = offsets[this.facing];
+      let poseIdx: number;
+      if (this.attackTimer > thirdDuration * 2) {
+        poseIdx = 0; // wind-up / draw-back
+      } else if (this.attackTimer > thirdDuration) {
+        poseIdx = 1; // mid-swing / thrust
+      } else {
+        poseIdx = 2; // follow-through / recover
+      }
+
+      const frameIdx = base + poseIdx;
+      const sprite = this.spriteSheet.getSprite(frameIdx, 0);
+      if (sprite) this.graphics.use(sprite);
+
+      if (this.attackTimer <= 0) {
+        this.attacking = false;
+        this.attackStyle = null;
         this.updateGraphic();
       }
       return;

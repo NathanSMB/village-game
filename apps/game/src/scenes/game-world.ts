@@ -9,6 +9,7 @@ import { BigRock } from "../actors/big-rock.ts";
 import { Tree } from "../actors/tree.ts";
 import { GroundItemStack } from "../actors/ground-item-stack.ts";
 import { FloatingText } from "../actors/floating-text.ts";
+import { AttackEffect } from "../actors/attack-effect.ts";
 import { VitalsHud } from "../actors/vitals-hud.ts";
 import { wasActionPressed } from "../systems/keybinds.ts";
 import { ITEMS } from "../data/items.ts";
@@ -465,6 +466,17 @@ export class GameWorld extends ex.Scene<GameWorldData> {
     if (this.player && !isAlive(this.player.vitals)) {
       const cause = this.getDeathCause();
       void engine.goToScene("game-over", { sceneActivationData: { cause } });
+    }
+
+    // Attack handling
+    if (this.player && !this.player.isBusy() && !this.player.isMoving()) {
+      if (wasActionPressed(kb, "attack")) {
+        const style = this.player.startAttack();
+        if (style) {
+          const facing = this.player.getFacingTile();
+          this.add(new AttackEffect(facing.x, facing.y, style, this.player.getFacing()));
+        }
+      }
     }
 
     // Action prompt + interaction

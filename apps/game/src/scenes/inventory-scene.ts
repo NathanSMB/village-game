@@ -17,6 +17,9 @@ import {
 } from "../types/item.ts";
 import type { Player } from "../actors/player.ts";
 import type { GameWorld } from "./game-world.ts";
+import { RECIPES } from "../data/recipes.ts";
+import { canCraft, craft } from "../types/crafting.ts";
+import { ITEMS } from "../data/items.ts";
 
 const FONT_DROP_HINT = new ex.Font({
   family: "monospace",
@@ -127,16 +130,44 @@ const FONT_WEIGHT = new ex.Font({
   baseAlign: ex.BaseAlign.Middle,
 });
 
+const FONT_CRAFT_AVAILABLE = new ex.Font({
+  family: "monospace",
+  size: 16,
+  color: ex.Color.White,
+  textAlign: ex.TextAlign.Left,
+  baseAlign: ex.BaseAlign.Middle,
+});
+
+const FONT_CRAFT_UNAVAILABLE = new ex.Font({
+  family: "monospace",
+  size: 16,
+  color: ex.Color.fromHex("#666666"),
+  textAlign: ex.TextAlign.Left,
+  baseAlign: ex.BaseAlign.Middle,
+});
+
+const FONT_CRAFT_SELECTED = new ex.Font({
+  family: "monospace",
+  size: 16,
+  bold: true,
+  color: ex.Color.fromHex("#f0c040"),
+  textAlign: ex.TextAlign.Left,
+  baseAlign: ex.BaseAlign.Middle,
+});
+
 const MAX_VISIBLE_BAG = 8;
+const MAX_VISIBLE_RECIPES = 8;
 const SLOT_COUNT = ALL_EQUIPMENT_SLOTS.length;
 
-type Focus = "equipment" | "bag";
+type Focus = "equipment" | "bag" | "crafting";
 
 export class InventoryScene extends ex.Scene {
   private focus: Focus = "equipment";
   private equipmentIndex = 0;
   private bagIndex = 0;
   private bagScrollOffset = 0;
+  private craftIndex = 0;
+  private craftScrollOffset = 0;
   private inventory: InventoryState | null = null;
   private player: Player | null = null;
 
@@ -145,6 +176,7 @@ export class InventoryScene extends ex.Scene {
   private bagLabels: ex.Label[] = [];
   private bagEmptyLabel!: ex.Label;
   private weightLabel!: ex.Label;
+  private craftLabels: ex.Label[] = [];
 
   // Detail panel
   private detailName!: ex.Label;
@@ -169,7 +201,7 @@ export class InventoryScene extends ex.Scene {
     this.allActors.push(title);
 
     // Equipment panel (left side)
-    const eqHeaderX = this.centerX * 0.45;
+    const eqHeaderX = this.centerX * 0.35;
     const eqHeader = new ex.Label({
       text: "Equipment",
       pos: ex.vec(eqHeaderX, 65),
@@ -211,8 +243,8 @@ export class InventoryScene extends ex.Scene {
       this.slotValues.push(value);
     }
 
-    // Bag panel (right side)
-    const bagHeaderX = this.centerX * 1.5;
+    // Bag panel (center)
+    const bagHeaderX = this.centerX;
     const bagHeader = new ex.Label({
       text: "Bag",
       pos: ex.vec(bagHeaderX, 65),
@@ -222,7 +254,7 @@ export class InventoryScene extends ex.Scene {
     this.allActors.push(bagHeader);
 
     const bagStartY = 95;
-    const bagItemX = bagHeaderX - 80;
+    const bagItemX = bagHeaderX - 60;
 
     this.bagEmptyLabel = new ex.Label({
       text: "Empty",
@@ -249,10 +281,40 @@ export class InventoryScene extends ex.Scene {
       this.bagLabels.push(label);
     }
 
+    // Crafting panel (right side)
+    const craftHeaderX = this.centerX * 1.65;
+    const craftHeader = new ex.Label({
+      text: "Craft",
+      pos: ex.vec(craftHeaderX, 65),
+      font: FONT_HEADER,
+    });
+    this.add(craftHeader);
+    this.allActors.push(craftHeader);
+
+    const craftStartY = 95;
+    const craftItemX = craftHeaderX - 60;
+
+    for (let i = 0; i < MAX_VISIBLE_RECIPES; i++) {
+      const y = craftStartY + i * 28;
+      const label = new ex.Label({
+        text: "",
+        pos: ex.vec(craftItemX, y),
+        font: FONT_CRAFT_AVAILABLE.clone(),
+      });
+      label.on("pointerdown", () => {
+        this.focus = "crafting";
+        this.craftIndex = this.craftScrollOffset + i;
+        this.updateDisplay();
+      });
+      this.add(label);
+      this.allActors.push(label);
+      this.craftLabels.push(label);
+    }
+
     // Weight display
     this.weightLabel = new ex.Label({
       text: "",
-      pos: ex.vec(this.centerX, 310),
+      pos: ex.vec(this.centerX, 325),
       font: FONT_WEIGHT,
     });
     this.add(this.weightLabel);
@@ -260,7 +322,7 @@ export class InventoryScene extends ex.Scene {
 
     // Detail panel (bottom area)
     const detailX = 30;
-    const detailY = 340;
+    const detailY = 350;
 
     this.detailName = new ex.Label({
       text: "",
@@ -319,6 +381,8 @@ export class InventoryScene extends ex.Scene {
     this.equipmentIndex = 0;
     this.bagIndex = 0;
     this.bagScrollOffset = 0;
+    this.craftIndex = 0;
+    this.craftScrollOffset = 0;
     this.updateDisplay();
   }
 
@@ -330,85 +394,150 @@ export class InventoryScene extends ex.Scene {
       return;
     }
 
-    if (wasActionPressed(kb, "moveLeft") && this.focus === "bag") {
-      this.focus = "equipment";
-      this.updateDisplay();
-      return;
-    }
-
-    if (wasActionPressed(kb, "moveRight") && this.focus === "equipment") {
-      if (this.inventory && this.inventory.bag.length > 0) {
-        this.focus = "bag";
+    // Panel navigation: Left/Right to switch focus
+    if (wasActionPressed(kb, "moveLeft")) {
+      if (this.focus === "bag") {
+        this.focus = "equipment";
         this.updateDisplay();
+        return;
       }
-      return;
-    }
-
-    if (this.focus === "equipment") {
-      if (wasActionPressed(kb, "moveUp")) {
-        this.equipmentIndex = (this.equipmentIndex - 1 + SLOT_COUNT) % SLOT_COUNT;
-        this.updateDisplay();
-      }
-      if (wasActionPressed(kb, "moveDown")) {
-        this.equipmentIndex = (this.equipmentIndex + 1) % SLOT_COUNT;
-        this.updateDisplay();
-      }
-      if (wasActionPressed(kb, "confirm") && this.inventory) {
-        const slot = ALL_EQUIPMENT_SLOTS[this.equipmentIndex];
-        if (this.inventory.equipment[slot]) {
-          unequipItem(this.inventory, slot);
-          this.player?.refreshSprite();
-          this.updateDisplay();
-        }
-      }
-    } else {
-      if (!this.inventory) return;
-      const bagLen = this.inventory.bag.length;
-      if (bagLen === 0) return;
-
-      if (wasActionPressed(kb, "moveUp")) {
-        if (this.bagIndex > 0) {
-          this.bagIndex--;
-          if (this.bagIndex < this.bagScrollOffset) {
-            this.bagScrollOffset = this.bagIndex;
-          }
-          this.updateDisplay();
-        }
-      }
-      if (wasActionPressed(kb, "moveDown")) {
-        if (this.bagIndex < bagLen - 1) {
-          this.bagIndex++;
-          if (this.bagIndex >= this.bagScrollOffset + MAX_VISIBLE_BAG) {
-            this.bagScrollOffset = this.bagIndex - MAX_VISIBLE_BAG + 1;
-          }
-          this.updateDisplay();
-        }
-      }
-      if (wasActionPressed(kb, "confirm")) {
-        const selectedItem = this.inventory.bag[this.bagIndex];
-        if (selectedItem && isConsumable(selectedItem)) {
-          // Consume the item (eat it)
-          if (this.player) {
-            const newVitals = consumeItem(this.inventory, this.bagIndex, this.player.vitals);
-            if (newVitals) {
-              this.player.vitals = newVitals;
-            }
-          }
+      if (this.focus === "crafting") {
+        if (this.inventory && this.inventory.bag.length > 0) {
+          this.focus = "bag";
         } else {
-          // Equip the item
-          equipItem(this.inventory, this.bagIndex);
-          this.player?.refreshSprite();
-        }
-        if (this.bagIndex >= this.inventory.bag.length) {
-          this.bagIndex = Math.max(0, this.inventory.bag.length - 1);
-        }
-        if (this.inventory.bag.length === 0) {
           this.focus = "equipment";
         }
         this.updateDisplay();
+        return;
       }
-      if (wasActionPressed(kb, "drop")) {
-        this.dropSelectedItem(engine);
+    }
+
+    if (wasActionPressed(kb, "moveRight")) {
+      if (this.focus === "equipment") {
+        if (this.inventory && this.inventory.bag.length > 0) {
+          this.focus = "bag";
+        } else if (RECIPES.length > 0) {
+          this.focus = "crafting";
+        }
+        this.updateDisplay();
+        return;
+      }
+      if (this.focus === "bag") {
+        if (RECIPES.length > 0) {
+          this.focus = "crafting";
+          this.updateDisplay();
+        }
+        return;
+      }
+    }
+
+    // Panel-specific input handling
+    if (this.focus === "equipment") {
+      this.handleEquipmentInput(kb);
+    } else if (this.focus === "bag") {
+      this.handleBagInput(kb, engine);
+    } else if (this.focus === "crafting") {
+      this.handleCraftingInput(kb);
+    }
+  }
+
+  private handleEquipmentInput(kb: ex.Keyboard): void {
+    if (wasActionPressed(kb, "moveUp")) {
+      this.equipmentIndex = (this.equipmentIndex - 1 + SLOT_COUNT) % SLOT_COUNT;
+      this.updateDisplay();
+    }
+    if (wasActionPressed(kb, "moveDown")) {
+      this.equipmentIndex = (this.equipmentIndex + 1) % SLOT_COUNT;
+      this.updateDisplay();
+    }
+    if (wasActionPressed(kb, "confirm") && this.inventory) {
+      const slot = ALL_EQUIPMENT_SLOTS[this.equipmentIndex];
+      if (this.inventory.equipment[slot]) {
+        unequipItem(this.inventory, slot);
+        this.player?.refreshSprite();
+        this.updateDisplay();
+      }
+    }
+  }
+
+  private handleBagInput(kb: ex.Keyboard, engine: ex.Engine): void {
+    if (!this.inventory) return;
+    const bagLen = this.inventory.bag.length;
+    if (bagLen === 0) return;
+
+    if (wasActionPressed(kb, "moveUp")) {
+      if (this.bagIndex > 0) {
+        this.bagIndex--;
+        if (this.bagIndex < this.bagScrollOffset) {
+          this.bagScrollOffset = this.bagIndex;
+        }
+        this.updateDisplay();
+      }
+    }
+    if (wasActionPressed(kb, "moveDown")) {
+      if (this.bagIndex < bagLen - 1) {
+        this.bagIndex++;
+        if (this.bagIndex >= this.bagScrollOffset + MAX_VISIBLE_BAG) {
+          this.bagScrollOffset = this.bagIndex - MAX_VISIBLE_BAG + 1;
+        }
+        this.updateDisplay();
+      }
+    }
+    if (wasActionPressed(kb, "confirm")) {
+      const selectedItem = this.inventory.bag[this.bagIndex];
+      if (selectedItem && isConsumable(selectedItem)) {
+        // Consume the item (eat it)
+        if (this.player) {
+          const newVitals = consumeItem(this.inventory, this.bagIndex, this.player.vitals);
+          if (newVitals) {
+            this.player.vitals = newVitals;
+          }
+        }
+      } else {
+        // Equip the item
+        equipItem(this.inventory, this.bagIndex);
+        this.player?.refreshSprite();
+      }
+      if (this.bagIndex >= this.inventory.bag.length) {
+        this.bagIndex = Math.max(0, this.inventory.bag.length - 1);
+      }
+      if (this.inventory.bag.length === 0) {
+        this.focus = "equipment";
+      }
+      this.updateDisplay();
+    }
+    if (wasActionPressed(kb, "drop")) {
+      this.dropSelectedItem(engine);
+    }
+  }
+
+  private handleCraftingInput(kb: ex.Keyboard): void {
+    if (!this.inventory) return;
+    const recipeCount = RECIPES.length;
+    if (recipeCount === 0) return;
+
+    if (wasActionPressed(kb, "moveUp")) {
+      if (this.craftIndex > 0) {
+        this.craftIndex--;
+        if (this.craftIndex < this.craftScrollOffset) {
+          this.craftScrollOffset = this.craftIndex;
+        }
+        this.updateDisplay();
+      }
+    }
+    if (wasActionPressed(kb, "moveDown")) {
+      if (this.craftIndex < recipeCount - 1) {
+        this.craftIndex++;
+        if (this.craftIndex >= this.craftScrollOffset + MAX_VISIBLE_RECIPES) {
+          this.craftScrollOffset = this.craftIndex - MAX_VISIBLE_RECIPES + 1;
+        }
+        this.updateDisplay();
+      }
+    }
+    if (wasActionPressed(kb, "confirm")) {
+      const recipe = RECIPES[this.craftIndex];
+      if (recipe && craft(this.inventory, recipe)) {
+        this.updateDisplay();
       }
     }
   }
@@ -443,7 +572,10 @@ export class InventoryScene extends ex.Scene {
       const slot = ALL_EQUIPMENT_SLOTS[this.equipmentIndex];
       return this.inventory.equipment[slot];
     }
-    return this.inventory.bag[this.bagIndex] ?? null;
+    if (this.focus === "bag") {
+      return this.inventory.bag[this.bagIndex] ?? null;
+    }
+    return null;
   }
 
   private updateDisplay(): void {
@@ -485,6 +617,31 @@ export class InventoryScene extends ex.Scene {
       }
     }
 
+    // Crafting recipes
+    for (let i = 0; i < MAX_VISIBLE_RECIPES; i++) {
+      const recipeIdx = this.craftScrollOffset + i;
+      const label = this.craftLabels[i];
+      if (recipeIdx < RECIPES.length) {
+        const recipe = RECIPES[recipeIdx];
+        const available = canCraft(this.inventory, recipe);
+        const selected = this.focus === "crafting" && recipeIdx === this.craftIndex;
+
+        label.text = selected ? `> ${recipe.name}` : recipe.name;
+        if (selected) {
+          label.font = FONT_CRAFT_SELECTED.clone();
+          label.color = ex.Color.fromHex("#f0c040");
+        } else if (available) {
+          label.font = FONT_CRAFT_AVAILABLE.clone();
+          label.color = ex.Color.White;
+        } else {
+          label.font = FONT_CRAFT_UNAVAILABLE.clone();
+          label.color = ex.Color.fromHex("#666666");
+        }
+      } else {
+        label.text = "";
+      }
+    }
+
     // Weight
     const current = totalWeight(this.inventory);
     this.weightLabel.text = `Weight: ${current} / ${this.inventory.maxWeight}`;
@@ -492,6 +649,14 @@ export class InventoryScene extends ex.Scene {
       current > this.inventory.maxWeight ? ex.Color.fromHex("#ff6060") : ex.Color.White;
 
     // Detail panel
+    if (this.focus === "crafting") {
+      this.updateCraftingDetail();
+    } else {
+      this.updateItemDetail();
+    }
+  }
+
+  private updateItemDetail(): void {
     const item = this.getSelectedItem();
     if (item) {
       this.detailName.text = item.name;
@@ -544,6 +709,76 @@ export class InventoryScene extends ex.Scene {
       this.dropHintLabel.color = ex.Color.fromHex("#aaaaaa");
     } else {
       this.dropHintLabel.text = "";
+    }
+  }
+
+  private updateCraftingDetail(): void {
+    const recipe = RECIPES[this.craftIndex];
+    if (!recipe || !this.inventory) {
+      this.detailName.text = "";
+      this.detailRarity.text = "";
+      this.detailDesc.text = "";
+      this.detailStats.text = "";
+      this.detailWeight.text = "";
+      this.dropHintLabel.text = "";
+      return;
+    }
+
+    const resultItem = ITEMS[recipe.resultId];
+    if (!resultItem) {
+      this.detailName.text = recipe.name;
+      this.detailName.color = ex.Color.White;
+      this.detailRarity.text = "";
+      this.detailDesc.text = "";
+      this.detailStats.text = "";
+      this.detailWeight.text = "";
+      this.dropHintLabel.text = "";
+      return;
+    }
+
+    // Recipe name in result rarity color
+    this.detailName.text = resultItem.name;
+    this.detailName.color = ex.Color.fromHex(RARITY_COLORS[resultItem.rarity]);
+
+    // Show rarity and slot
+    if (resultItem.slot) {
+      this.detailRarity.text = `${resultItem.rarity} - ${EQUIPMENT_SLOT_LABELS[resultItem.slot]}`;
+    } else {
+      this.detailRarity.text = resultItem.rarity;
+    }
+    this.detailRarity.color = ex.Color.fromHex(RARITY_COLORS[resultItem.rarity]);
+
+    // Ingredients list with availability coloring
+    const ingredientParts: string[] = [];
+    for (const ingredient of recipe.ingredients) {
+      const ingredientItem = ITEMS[ingredient.itemId];
+      const name = ingredientItem ? ingredientItem.name : ingredient.itemId;
+      ingredientParts.push(`${ingredient.count}x ${name}`);
+    }
+    this.detailDesc.text = `Requires: ${ingredientParts.join(", ")}`;
+    this.detailDesc.color = canCraft(this.inventory, recipe)
+      ? ex.Color.fromHex("#66cc66")
+      : ex.Color.fromHex("#cc6666");
+
+    // Result stats
+    const statParts: string[] = [];
+    if (resultItem.stats.attack) statParts.push(`ATK +${resultItem.stats.attack}`);
+    if (resultItem.stats.defense) statParts.push(`DEF +${resultItem.stats.defense}`);
+    if (resultItem.stats.speed) statParts.push(`SPD +${resultItem.stats.speed}`);
+    this.detailStats.text = statParts.length > 0 ? statParts.join("  ") : "";
+    this.detailStats.color = ex.Color.fromHex("#66cc66");
+
+    // Result weight
+    this.detailWeight.text = `Weight: ${resultItem.weight}`;
+    this.detailWeight.color = ex.Color.fromHex("#cccccc");
+
+    // Craft hint
+    if (canCraft(this.inventory, recipe)) {
+      this.dropHintLabel.text = "[Enter] Craft";
+      this.dropHintLabel.color = ex.Color.fromHex("#aaaaaa");
+    } else {
+      this.dropHintLabel.text = "Missing materials";
+      this.dropHintLabel.color = ex.Color.fromHex("#666666");
     }
   }
 }

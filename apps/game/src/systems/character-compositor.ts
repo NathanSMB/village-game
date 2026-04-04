@@ -24,11 +24,15 @@ import facialFullPng from "../sprites/characters/facial-hair/facial-full.png";
 import torsoTunicPng from "../sprites/characters/equipment/torso/tunic.png";
 import legsPantsPng from "../sprites/characters/equipment/legs/pants.png";
 import feetBootsPng from "../sprites/characters/equipment/feet/boots.png";
+import mainhandHammerPng from "../sprites/characters/equipment/mainhand/hammer.png";
+import mainhandHatchetPng from "../sprites/characters/equipment/mainhand/hatchet.png";
+import mainhandPickaxePng from "../sprites/characters/equipment/mainhand/pickaxe.png";
+import mainhandSpearPng from "../sprites/characters/equipment/mainhand/spear.png";
 
-const STRIP_W = 1664; // 52 frames × 32px
+const STRIP_W = 2432; // 76 frames × 32px
 const STRIP_H = 32;
 const FRAME_SIZE = 32;
-const FRAME_COUNT = 52;
+const FRAME_COUNT = 76;
 
 // Reference colors (must match what the Lua scripts draw)
 const REF_SKIN = { r: 255, g: 0, b: 255 };
@@ -68,6 +72,17 @@ addLayer("facial-full", facialFullPng);
 addLayer("torso-tunic", torsoTunicPng);
 addLayer("legs-pants", legsPantsPng);
 addLayer("feet-boots", feetBootsPng);
+addLayer("mainhand-hammer", mainhandHammerPng);
+addLayer("mainhand-hatchet", mainhandHatchetPng);
+addLayer("mainhand-pickaxe", mainhandPickaxePng);
+addLayer("mainhand-spear", mainhandSpearPng);
+
+const MAINHAND_LAYERS: Record<string, string> = {
+  hammer: "mainhand-hammer",
+  hatchet: "mainhand-hatchet",
+  pickaxe: "mainhand-pickaxe",
+  spear: "mainhand-spear",
+};
 
 export function getCharacterImageSources(): ex.ImageSource[] {
   return Object.values(LAYER_IMAGES);
@@ -244,6 +259,17 @@ export function compositeCharacter(
   if (hairStyle.id !== "bald") {
     const hairKey = `hair-${hairStyle.id}`;
     paletteSwapLayer(ctx, LAYER_IMAGES[hairKey].image, getHairMappings(hairColor));
+  }
+
+  // 7. Main-hand equipment (tools — drawn on top, no palette swap)
+  if (equipment) {
+    const mainHandItem = equipment[EquipmentSlot.MainHand];
+    if (mainHandItem) {
+      const layerKey = MAINHAND_LAYERS[mainHandItem.id];
+      if (layerKey && LAYER_IMAGES[layerKey]) {
+        ctx.drawImage(LAYER_IMAGES[layerKey].image, 0, 0);
+      }
+    }
   }
 
   // Create ImageSource from the composited canvas

@@ -209,6 +209,10 @@ const ITEM_SPRITE_MAP: Record<string, number> = {
   pants: 3,
   boots: 4,
   branch: 5,
+  hammer: 6,
+  hatchet: 7,
+  pickaxe: 8,
+  spear: 9,
 };
 
 function getItemsSheet(): ex.SpriteSheet {
@@ -217,7 +221,7 @@ function getItemsSheet(): ex.SpriteSheet {
       image: itemsImage,
       grid: {
         rows: 1,
-        columns: 6,
+        columns: 10,
         spriteWidth: 16,
         spriteHeight: 16,
       },

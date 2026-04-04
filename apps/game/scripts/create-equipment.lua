@@ -1,12 +1,14 @@
 -- Create equipment sprites: tunic, pants, boots
--- 52 frames each: 12 standard (4 dirs x 3 poses) + 8 pick (4 dirs x 2 pick poses)
+-- 76 frames each: 12 standard (4 dirs x 3 poses) + 8 pick (4 dirs x 2 pick poses)
 --                + 16 drink (4 dirs x 4 drink poses)
 --                + 16 pickup-item (4 dirs x 4 pickup poses)
+--                + 12 swing attack (4 dirs x 3 poses)
+--                + 12 thrust attack (4 dirs x 3 poses)
 -- Uses cyan reference colors for palette swapping
 
 local W = 32
 local H = 32
-local FRAMES = 52
+local FRAMES = 76
 
 local scriptPath = app.params["script-path"] or "."
 local baseDir = app.fs.joinPath(app.fs.filePath(scriptPath), "..", "assets", "characters", "equipment")
@@ -543,6 +545,123 @@ local function drawPickupItemBoots(img, dir, pickupPose)
   end
 end
 
+-- Swing attack sleeves (follow swing arm positions from create-body.lua)
+local function drawSwingSleeves(img, dir, swingPose)
+  if dir == 0 or dir == 1 then
+    if swingPose == 0 then
+      -- Wind-up: right sleeve raised
+      rect(img, bodyX - armW, 14, armW, 4, CLOTH)
+      px(img, bodyX - armW, 14, CLOTH_SHADOW)
+      rect(img, bodyX + bodyW, 7, armW, 4, CLOTH)
+      px(img, bodyX + bodyW + armW - 1, 7, CLOTH_SHADOW)
+    elseif swingPose == 1 then
+      -- Mid-swing: right sleeve horizontal
+      rect(img, bodyX - armW, 14, armW, 4, CLOTH)
+      px(img, bodyX - armW, 14, CLOTH_SHADOW)
+      rect(img, bodyX + bodyW, 16, 4, armW, CLOTH)
+      px(img, bodyX + bodyW + 3, 16, CLOTH_SHADOW)
+    elseif swingPose == 2 then
+      -- Follow-through: right sleeve low
+      rect(img, bodyX - armW, 14, armW, 4, CLOTH)
+      px(img, bodyX - armW, 14, CLOTH_SHADOW)
+      rect(img, bodyX + bodyW, 14, armW, 5, CLOTH)
+      px(img, bodyX + bodyW + armW - 1, 14, CLOTH_SHADOW)
+    end
+  elseif dir == 2 then
+    if swingPose == 0 then
+      rect(img, bodyX - armW, 7, armW, 4, CLOTH)
+      px(img, bodyX - armW, 7, CLOTH_SHADOW)
+      rect(img, bodyX + bodyW, 14, armW, 4, CLOTH)
+      px(img, bodyX + bodyW + armW - 1, 14, CLOTH_SHADOW)
+    elseif swingPose == 1 then
+      rect(img, bodyX - 4, 16, 4, armW, CLOTH)
+      px(img, bodyX - 4, 16, CLOTH_SHADOW)
+      rect(img, bodyX + bodyW, 14, armW, 4, CLOTH)
+      px(img, bodyX + bodyW + armW - 1, 14, CLOTH_SHADOW)
+    elseif swingPose == 2 then
+      rect(img, bodyX - armW, 14, armW, 5, CLOTH)
+      px(img, bodyX - armW, 14, CLOTH_SHADOW)
+      rect(img, bodyX + bodyW, 14, armW, 4, CLOTH)
+      px(img, bodyX + bodyW + armW - 1, 14, CLOTH_SHADOW)
+    end
+  elseif dir == 3 then
+    if swingPose == 0 then
+      rect(img, bodyX - armW, 14, armW, 4, CLOTH)
+      px(img, bodyX - armW, 14, CLOTH_SHADOW)
+      rect(img, bodyX + bodyW, 7, armW, 4, CLOTH)
+      px(img, bodyX + bodyW + armW - 1, 7, CLOTH_SHADOW)
+    elseif swingPose == 1 then
+      rect(img, bodyX - armW, 14, armW, 4, CLOTH)
+      px(img, bodyX - armW, 14, CLOTH_SHADOW)
+      rect(img, bodyX + bodyW, 16, 4, armW, CLOTH)
+      px(img, bodyX + bodyW + 3, 16, CLOTH_SHADOW)
+    elseif swingPose == 2 then
+      rect(img, bodyX - armW, 14, armW, 4, CLOTH)
+      px(img, bodyX - armW, 14, CLOTH_SHADOW)
+      rect(img, bodyX + bodyW, 14, armW, 5, CLOTH)
+      px(img, bodyX + bodyW + armW - 1, 14, CLOTH_SHADOW)
+    end
+  end
+end
+
+-- Thrust attack sleeves (follow thrust arm positions from create-body.lua)
+local function drawThrustSleeves(img, dir, thrustPose)
+  if dir == 0 then
+    if thrustPose == 0 then
+      rect(img, bodyX - armW, 14, armW, 4, CLOTH)
+      px(img, bodyX - armW, 14, CLOTH_SHADOW)
+      rect(img, bodyX + bodyW, 14, armW, 4, CLOTH)
+      px(img, bodyX + bodyW + armW - 1, 14, CLOTH_SHADOW)
+    elseif thrustPose == 1 then
+      rect(img, bodyX - armW, 14, armW, 4, CLOTH)
+      px(img, bodyX - armW, 14, CLOTH_SHADOW)
+      rect(img, bodyX + bodyW, 14, armW, 5, CLOTH)
+      px(img, bodyX + bodyW + armW - 1, 14, CLOTH_SHADOW)
+    elseif thrustPose == 2 then
+      rect(img, bodyX - armW, 14, armW, 4, CLOTH)
+      px(img, bodyX - armW, 14, CLOTH_SHADOW)
+      rect(img, bodyX + bodyW, 14, armW, 5, CLOTH)
+      px(img, bodyX + bodyW + armW - 1, 14, CLOTH_SHADOW)
+    end
+  elseif dir == 1 then
+    if thrustPose == 0 then
+      rect(img, bodyX - armW, 14, armW, 4, CLOTH)
+      rect(img, bodyX + bodyW, 14, armW, 4, CLOTH)
+    elseif thrustPose == 1 then
+      rect(img, bodyX - armW, 14, armW, 4, CLOTH)
+      rect(img, bodyX + bodyW, 4, armW, 5, CLOTH)
+      px(img, bodyX + bodyW + armW - 1, 4, CLOTH_SHADOW)
+    elseif thrustPose == 2 then
+      rect(img, bodyX - armW, 14, armW, 4, CLOTH)
+      rect(img, bodyX + bodyW, 10, armW, 5, CLOTH)
+    end
+  elseif dir == 2 then
+    if thrustPose == 0 then
+      rect(img, bodyX - 2, 16, 2, armW, CLOTH)
+      rect(img, bodyX + bodyW, 14, armW, 4, CLOTH)
+    elseif thrustPose == 1 then
+      rect(img, bodyX - 4, 16, 4, armW, CLOTH)
+      px(img, bodyX - 4, 16, CLOTH_SHADOW)
+      rect(img, bodyX + bodyW, 14, armW, 4, CLOTH)
+    elseif thrustPose == 2 then
+      rect(img, bodyX - 3, 16, 3, armW, CLOTH)
+      rect(img, bodyX + bodyW, 14, armW, 4, CLOTH)
+    end
+  elseif dir == 3 then
+    if thrustPose == 0 then
+      rect(img, bodyX - armW, 14, armW, 4, CLOTH)
+      rect(img, bodyX + bodyW, 16, 2, armW, CLOTH)
+    elseif thrustPose == 1 then
+      rect(img, bodyX - armW, 14, armW, 4, CLOTH)
+      rect(img, bodyX + bodyW, 16, 4, armW, CLOTH)
+      px(img, bodyX + bodyW + 3, 16, CLOTH_SHADOW)
+    elseif thrustPose == 2 then
+      rect(img, bodyX - armW, 14, armW, 4, CLOTH)
+      rect(img, bodyX + bodyW, 16, 3, armW, CLOTH)
+    end
+  end
+end
+
 local function createSprite(filename, drawFunc, hasPickSleeves, drinkDrawFunc, pickupItemDrawFunc)
   local spr = Sprite{ width = W, height = H, colorMode = ColorMode.RGB }
   for i = 2, FRAMES do
@@ -596,6 +715,38 @@ local function createSprite(filename, drawFunc, hasPickSleeves, drinkDrawFunc, p
       app.activeFrame = spr.frames[frameIdx]
       local cel = spr:newCel(spr.layers[1], frameIdx)
       pickupItemDrawFunc(cel.image, dir, pickupPose)
+      spr.frames[frameIdx].duration = 0.2
+    end
+  end
+
+  -- Swing attack frames (12): 4 directions x 3 swing poses
+  for dir = 0, 3 do
+    for swingPose = 0, 2 do
+      local frameIdx = 53 + dir * 3 + swingPose
+      app.activeFrame = spr.frames[frameIdx]
+      local cel = spr:newCel(spr.layers[1], frameIdx)
+      if hasPickSleeves then
+        drawFunc(cel.image, dir, 0, true) -- tunic body without sleeves
+        drawSwingSleeves(cel.image, dir, swingPose)
+      else
+        drawFunc(cel.image, dir, 0) -- pants/boots idle
+      end
+      spr.frames[frameIdx].duration = 0.2
+    end
+  end
+
+  -- Thrust attack frames (12): 4 directions x 3 thrust poses
+  for dir = 0, 3 do
+    for thrustPose = 0, 2 do
+      local frameIdx = 65 + dir * 3 + thrustPose
+      app.activeFrame = spr.frames[frameIdx]
+      local cel = spr:newCel(spr.layers[1], frameIdx)
+      if hasPickSleeves then
+        drawFunc(cel.image, dir, 0, true) -- tunic body without sleeves
+        drawThrustSleeves(cel.image, dir, thrustPose)
+      else
+        drawFunc(cel.image, dir, 0) -- pants/boots idle
+      end
       spr.frames[frameIdx].duration = 0.2
     end
   end

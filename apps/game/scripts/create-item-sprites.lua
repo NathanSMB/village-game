@@ -4,7 +4,7 @@
 
 local W = 16
 local H = 16
-local TOTAL_FRAMES = 6
+local TOTAL_FRAMES = 10
 
 local scriptPath = app.params["script-path"] or "."
 local outputDir = app.fs.joinPath(app.fs.filePath(scriptPath), "..", "assets", "ground")
@@ -268,8 +268,138 @@ local function drawBranch(img)
   px(img, 8, 8, WOOD_D)
 end
 
+-- ============================================================
+-- Frame 6: Hammer (T-shape, wooden handle + stone head)
+-- ============================================================
+local function drawHammer(img)
+  clearImg(img)
+  local WOOD = Color{ r = 110, g = 75, b = 42, a = 255 }
+  local WOOD_D = Color{ r = 80, g = 52, b = 28, a = 255 }
+  local WOOD_L = Color{ r = 140, g = 100, b = 60, a = 255 }
+  local STONE = Color{ r = 130, g = 125, b = 115, a = 255 }
+  local STONE_D = Color{ r = 95, g = 90, b = 82, a = 255 }
+  local STONE_L = Color{ r = 165, g = 160, b = 150, a = 255 }
+  local SHADOW = Color{ r = 50, g = 50, b = 45, a = 80 }
+
+  -- Shadow
+  rect(img, 5, 14, 6, 1, SHADOW)
+
+  -- Handle (vertical)
+  rect(img, 7, 6, 2, 8, WOOD)
+  px(img, 7, 6, WOOD_L)
+  px(img, 8, 13, WOOD_D)
+
+  -- Stone head (horizontal block on top)
+  rect(img, 4, 3, 8, 3, STONE)
+  rect(img, 4, 3, 8, 1, STONE_L)
+  rect(img, 4, 5, 8, 1, STONE_D)
+  px(img, 4, 4, STONE_D)
+  px(img, 11, 4, STONE_D)
+end
+
+-- ============================================================
+-- Frame 7: Hatchet (handle + angled stone blade)
+-- ============================================================
+local function drawHatchet(img)
+  clearImg(img)
+  local WOOD = Color{ r = 110, g = 75, b = 42, a = 255 }
+  local WOOD_D = Color{ r = 80, g = 52, b = 28, a = 255 }
+  local WOOD_L = Color{ r = 140, g = 100, b = 60, a = 255 }
+  local STONE = Color{ r = 130, g = 125, b = 115, a = 255 }
+  local STONE_D = Color{ r = 95, g = 90, b = 82, a = 255 }
+  local STONE_L = Color{ r = 165, g = 160, b = 150, a = 255 }
+  local SHADOW = Color{ r = 50, g = 50, b = 45, a = 80 }
+
+  -- Shadow
+  rect(img, 5, 14, 6, 1, SHADOW)
+
+  -- Handle (vertical)
+  rect(img, 7, 6, 2, 8, WOOD)
+  px(img, 7, 6, WOOD_L)
+  px(img, 8, 13, WOOD_D)
+
+  -- Stone blade (right side of head, triangular)
+  rect(img, 9, 3, 3, 4, STONE)
+  rect(img, 9, 3, 3, 1, STONE_L)
+  px(img, 11, 6, STONE_D)
+  rect(img, 9, 6, 3, 1, STONE_D)
+  -- Left binding area
+  rect(img, 6, 4, 3, 2, STONE)
+  px(img, 6, 4, STONE_L)
+  px(img, 6, 5, STONE_D)
+end
+
+-- ============================================================
+-- Frame 8: Pickaxe (handle + pointed stone head)
+-- ============================================================
+local function drawPickaxe(img)
+  clearImg(img)
+  local WOOD = Color{ r = 110, g = 75, b = 42, a = 255 }
+  local WOOD_D = Color{ r = 80, g = 52, b = 28, a = 255 }
+  local WOOD_L = Color{ r = 140, g = 100, b = 60, a = 255 }
+  local STONE = Color{ r = 130, g = 125, b = 115, a = 255 }
+  local STONE_D = Color{ r = 95, g = 90, b = 82, a = 255 }
+  local STONE_L = Color{ r = 165, g = 160, b = 150, a = 255 }
+  local SHADOW = Color{ r = 50, g = 50, b = 45, a = 80 }
+
+  -- Shadow
+  rect(img, 5, 14, 6, 1, SHADOW)
+
+  -- Handle (vertical)
+  rect(img, 7, 6, 2, 8, WOOD)
+  px(img, 7, 6, WOOD_L)
+  px(img, 8, 13, WOOD_D)
+
+  -- Stone head (pointed ends)
+  rect(img, 4, 4, 8, 2, STONE)
+  rect(img, 4, 4, 8, 1, STONE_L)
+  rect(img, 5, 5, 6, 1, STONE_D)
+  -- Pointed tips
+  px(img, 3, 4, STONE_L)
+  px(img, 3, 5, STONE)
+  px(img, 12, 4, STONE)
+  px(img, 12, 5, STONE_D)
+  -- Top ridge
+  rect(img, 5, 3, 6, 1, STONE)
+  px(img, 6, 3, STONE_L)
+end
+
+-- ============================================================
+-- Frame 9: Spear (long shaft + stone tip)
+-- ============================================================
+local function drawSpear(img)
+  clearImg(img)
+  local WOOD = Color{ r = 110, g = 75, b = 42, a = 255 }
+  local WOOD_D = Color{ r = 80, g = 52, b = 28, a = 255 }
+  local WOOD_L = Color{ r = 140, g = 100, b = 60, a = 255 }
+  local STONE = Color{ r = 130, g = 125, b = 115, a = 255 }
+  local STONE_D = Color{ r = 95, g = 90, b = 82, a = 255 }
+  local STONE_L = Color{ r = 165, g = 160, b = 150, a = 255 }
+  local SHADOW = Color{ r = 50, g = 50, b = 45, a = 80 }
+
+  -- Shadow
+  rect(img, 7, 15, 2, 1, SHADOW)
+
+  -- Long shaft (vertical)
+  rect(img, 7, 5, 2, 10, WOOD)
+  px(img, 7, 5, WOOD_L)
+  px(img, 8, 14, WOOD_D)
+  px(img, 7, 14, WOOD_D)
+
+  -- Stone tip (pointed, at top)
+  rect(img, 7, 2, 2, 3, STONE)
+  px(img, 7, 2, STONE_L)
+  px(img, 8, 4, STONE_D)
+  -- Point
+  px(img, 7, 1, STONE_L)
+  px(img, 8, 1, STONE)
+  -- Binding
+  rect(img, 6, 5, 4, 1, WOOD_D)
+end
+
 -- Generate frames
-local drawFuncs = { drawSmallRock, drawBerry, drawTunic, drawPants, drawBoots, drawBranch }
+local drawFuncs = { drawSmallRock, drawBerry, drawTunic, drawPants, drawBoots, drawBranch,
+                    drawHammer, drawHatchet, drawPickaxe, drawSpear }
 
 for i, drawFunc in ipairs(drawFuncs) do
   app.activeFrame = spr.frames[i]

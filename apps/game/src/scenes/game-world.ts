@@ -504,19 +504,25 @@ export class GameWorld extends ex.Scene<GameWorldData> {
         this.restoreRockStates(context.data.save.rocks);
       }
 
-      // Restore ground item states from save
+      // Restore ground item states from save, or clear them for a new game
       if (context.data.type === "load" && context.data.save.groundItems) {
         this.restoreGroundItemStates(context.data.save.groundItems);
+      } else if (context.data.type === "new") {
+        this.restoreGroundItemStates([]);
       }
 
-      // Restore building states from save
+      // Restore building states from save, or clear them for a new game
       if (context.data.type === "load" && context.data.save.buildings) {
         this.restoreBuildingStates(context.data.save.buildings);
+      } else if (context.data.type === "new") {
+        this.restoreBuildingStates([]);
       }
 
-      // Restore edge building states from save
+      // Restore edge building states from save, or clear them for a new game
       if (context.data.type === "load" && context.data.save.edgeBuildings) {
         this.restoreEdgeBuildingStates(context.data.save.edgeBuildings);
+      } else if (context.data.type === "new") {
+        this.restoreEdgeBuildingStates([]);
       }
 
       // Sheep: restore from save or spawn fresh

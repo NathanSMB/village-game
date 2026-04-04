@@ -46,7 +46,7 @@ import {
 } from "../systems/sprite-loader.ts";
 import type { WaterTileTypeValue } from "../systems/sprite-loader.ts";
 import type { DeathCause } from "./game-over.ts";
-import { IndoorDarknessOverlay } from "../systems/indoor-lighting.ts";
+import { IndoorDarknessOverlay, getIndoorTiles } from "../systems/indoor-lighting.ts";
 import { Sheep } from "../actors/sheep.ts";
 import { detectBreedingEnclosures } from "../systems/enclosure.ts";
 
@@ -117,6 +117,13 @@ export class GameWorld extends ex.Scene<GameWorldData> {
   private sheepRegisteredTile = new Map<Sheep, number>(); // last tile key registered in sheepByTile
   private breedingTimer = BREEDING_INTERVAL_MS;
   private wildSpawnTimer = WILD_SPAWN_INTERVAL_MS;
+
+  // Sleeping state
+  private playerSleeping = false;
+  private sleepingBed: Building | null = null;
+
+  // Indoor tile cache (computed when entering planning mode for bed validation)
+  private indoorTilesCache: Set<number> | null = null;
 
   // Planning mode state
   private planningMode = false;
@@ -580,6 +587,24 @@ export class GameWorld extends ex.Scene<GameWorldData> {
     this.updateBreeding(delta);
     this.updateWildSpawn(delta);
 
+    // Sleeping: only allow pause and waking up
+    if (this.playerSleeping && this.sleepingBed) {
+      if (wasActionPressed(kb, "pause")) {
+        void engine.goToScene("pause-menu");
+      }
+      const bedWorldX = this.sleepingBed.pos.x;
+      const bedWorldY = this.sleepingBed.pos.y;
+      if (this.actionPrompt) {
+        this.actionPrompt.text = "[E] Get Up";
+        this.actionPrompt.pos = ex.vec(bedWorldX, bedWorldY - TILE_SIZE / 2 - 4);
+        this.actionPrompt.graphics.visible = true;
+      }
+      if (wasActionPressed(kb, "action")) {
+        this.exitSleep();
+      }
+      return;
+    }
+
     if (wasActionPressed(kb, "pause")) {
       void engine.goToScene("pause-menu");
     }
@@ -876,13 +901,32 @@ export class GameWorld extends ex.Scene<GameWorldData> {
             this.recalculateIndoorLighting();
           }
         } else {
-          // Tile-based building interaction (floors don't have doors, but keep for extensibility)
           const facingBuilding = this.buildingByTile.get(facingKey);
+
           if (
+            facingBuilding &&
+            facingBuilding.type.id === "bed" &&
+            facingBuilding.state === "complete"
+          ) {
+            // Bed interaction — sleep
+            const worldX = facing.x * TILE_SIZE + TILE_SIZE / 2;
+            const worldY = facing.y * TILE_SIZE + TILE_SIZE / 2;
+
+            if (this.actionPrompt) {
+              this.actionPrompt.text = "[E] Sleep";
+              this.actionPrompt.pos = ex.vec(worldX, worldY - TILE_SIZE / 2 - 4);
+              this.actionPrompt.graphics.visible = true;
+            }
+
+            if (wasActionPressed(kb, "action")) {
+              this.enterSleep(facingBuilding);
+            }
+          } else if (
             facingBuilding &&
             facingBuilding.type.interactable &&
             facingBuilding.state === "complete"
           ) {
+            // Tile-based building interaction (toggle open/close)
             const worldX = facing.x * TILE_SIZE + TILE_SIZE / 2;
             const worldY = facing.y * TILE_SIZE + TILE_SIZE / 2;
             const promptText = facingBuilding.isOpen ? "[E] Close" : "[E] Open";
@@ -917,6 +961,27 @@ export class GameWorld extends ex.Scene<GameWorldData> {
     if (hunger <= 0 && thirst <= 0) return "both";
     if (hunger <= 0) return "starvation";
     return "dehydration";
+  }
+
+  // ==================== Sleeping ====================
+
+  private enterSleep(bed: Building): void {
+    if (!this.player) return;
+    this.playerSleeping = true;
+    this.sleepingBed = bed;
+    this.player.lockInput();
+    this.player.enterBed();
+  }
+
+  private exitSleep(): void {
+    if (!this.player) return;
+    this.playerSleeping = false;
+    this.sleepingBed = null;
+    this.player.exitBed();
+    this.player.unlockInput();
+    if (this.actionPrompt) {
+      this.actionPrompt.graphics.visible = false;
+    }
   }
 
   getPlayerState(): SaveData["player"] | null {
@@ -1304,6 +1369,9 @@ export class GameWorld extends ex.Scene<GameWorldData> {
     this.selectedBuildType = null;
     this.planEdgeOrientation = "N";
 
+    // Compute indoor tiles once for bed placement validation
+    this.indoorTilesCache = getIndoorTiles(this.buildingByTile, this.edgeBuildings);
+
     // Create radius overlay
     this.createPlanRadiusOverlay();
 
@@ -1320,12 +1388,25 @@ export class GameWorld extends ex.Scene<GameWorldData> {
     if (!this.player) return;
 
     if (confirm) {
-      // Spawn tile-based buildings (floors) as holograms
+      // Spawn tile-based buildings as holograms
       for (const planned of this.plannedBuildings.values()) {
+        const key = tileKey(planned.x, planned.y);
+
+        // Indoor buildings (bed) replace the existing floor tile
+        if (planned.type.requiresIndoor) {
+          const existingFloor = this.buildingByTile.get(key);
+          if (existingFloor) {
+            this.remove(existingFloor);
+            const idx = this.buildings.indexOf(existingFloor);
+            if (idx !== -1) this.buildings.splice(idx, 1);
+            this.buildingByTile.delete(key);
+          }
+        }
+
         const building = new Building(planned.type, planned.x, planned.y, "hologram");
-        building.onDestroy = () => this.removeBuilding(building, tileKey(planned.x, planned.y));
+        building.onDestroy = () => this.removeBuilding(building, key);
         this.buildings.push(building);
-        this.buildingByTile.set(tileKey(planned.x, planned.y), building);
+        this.buildingByTile.set(key, building);
         this.add(building);
       }
 
@@ -1368,6 +1449,7 @@ export class GameWorld extends ex.Scene<GameWorldData> {
 
     this.planningMode = false;
     this.selectedBuildType = null;
+    this.indoorTilesCache = null;
     this.player.unlockInput();
   }
 
@@ -1585,6 +1667,18 @@ export class GameWorld extends ex.Scene<GameWorldData> {
 
   private isTileValidForBuilding(tx: number, ty: number): boolean {
     const key = tileKey(tx, ty);
+
+    // Indoor-only buildings (bed): must be placed on a completed indoor floor
+    if (this.selectedBuildType?.requiresIndoor) {
+      const existing = this.buildingByTile.get(key);
+      if (!existing || existing.type.id !== "floor" || existing.state !== "complete") return false;
+      if (!this.indoorTilesCache?.has(key)) return false;
+      if (this.plannedBuildings.has(key)) return false;
+      if (this.player && tx === this.player.getTileX() && ty === this.player.getTileY())
+        return false;
+      return true;
+    }
+
     // Can't place on blocked tiles (trees, rocks, bushes, water, other buildings)
     if (this.blockedTiles.has(key)) return false;
     if (this.waterTiles.has(key)) return false;
@@ -1787,6 +1881,10 @@ export class GameWorld extends ex.Scene<GameWorldData> {
     this.buildingByTile.delete(key);
     const idx = this.buildings.indexOf(building);
     if (idx !== -1) this.buildings.splice(idx, 1);
+    // If the player is sleeping in this bed, wake them up
+    if (this.sleepingBed === building) {
+      this.exitSleep();
+    }
     this.recalculateIndoorLighting();
   }
 

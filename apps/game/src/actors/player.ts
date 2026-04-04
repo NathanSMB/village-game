@@ -131,6 +131,9 @@ export class Player extends ex.Actor {
   private attackStyle: AttackStyle | null = null;
   private attackTimer = 0;
 
+  // Sleeping state (in bed)
+  sleeping = false;
+
   // Direction input state: tracks pressed direction keys ordered by most-recent first.
   // The first entry that is still held is the active direction.
   private directionStack: Direction[] = [];
@@ -314,7 +317,10 @@ export class Player extends ex.Actor {
   }
 
   override onPreUpdate(engine: ex.Engine, delta: number): void {
-    this.vitals = updateVitals(this.vitals, delta);
+    this.vitals = updateVitals(this.vitals, delta, this.sleeping);
+
+    // Sleeping in bed — skip all input and animation
+    if (this.sleeping) return;
 
     // Picking animation locks movement
     if (this.picking) {
@@ -524,5 +530,23 @@ export class Player extends ex.Actor {
 
   getTileY(): number {
     return this.tileY;
+  }
+
+  /** Enter bed: hide character and weapon sprites, set sleeping flag. */
+  enterBed(): void {
+    this.sleeping = true;
+    this.stopMovement();
+    this.graphics.visible = false;
+    this.weaponActor.graphics.visible = false;
+  }
+
+  /** Exit bed: restore character and weapon sprites, clear sleeping flag. */
+  exitBed(): void {
+    this.sleeping = false;
+    this.graphics.visible = true;
+    if (this.weaponSheet) {
+      this.weaponActor.graphics.visible = true;
+    }
+    this.showFrame(DIR_OFFSET[this.facing]);
   }
 }

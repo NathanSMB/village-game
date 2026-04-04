@@ -22,6 +22,9 @@ const LIT_ROOM = 0.2;
 /** Wall type IDs that count toward room enclosure. */
 const WALL_IDS = new Set(["wall", "wall_window", "wall_door"]);
 
+/** Tile building type IDs that count as floor for room detection. */
+const FLOOR_IDS = new Set(["floor", "bed"]);
+
 function tileKey(x: number, y: number): number {
   return y * MAP_COLS + x;
 }
@@ -54,7 +57,7 @@ function detectRooms(
   // Collect all completed floor tile keys
   const floorTiles = new Set<number>();
   for (const [key, b] of buildingByTile) {
-    if (b.type.id === "floor" && b.state === "complete") {
+    if (FLOOR_IDS.has(b.type.id) && b.state === "complete") {
       floorTiles.add(key);
     }
   }
@@ -234,4 +237,22 @@ export class IndoorDarknessOverlay extends ex.Actor {
       },
     });
   }
+}
+
+/**
+ * Return the set of tile keys that are currently inside a fully enclosed room.
+ * Used by the planning system to validate indoor-only buildings like beds.
+ */
+export function getIndoorTiles(
+  buildingByTile: Map<number, Building>,
+  edgeBuildings: Map<number, EdgeBuilding>,
+): Set<number> {
+  const rooms = detectRooms(buildingByTile, edgeBuildings);
+  const indoor = new Set<number>();
+  for (const room of rooms) {
+    for (const tk of room.tiles) {
+      indoor.add(tk);
+    }
+  }
+  return indoor;
 }

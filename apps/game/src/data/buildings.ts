@@ -16,6 +16,8 @@ export interface BuildingType {
   solidWhenClosed: boolean;
   /** How this building is placed: "tile" occupies a full tile, "edge" sits on the boundary between two tiles. */
   placement: "tile" | "edge";
+  /** If true, this building can only be placed on a completed indoor floor tile (which it replaces). */
+  requiresIndoor?: boolean;
 }
 
 export const BUILDING_TYPES: BuildingType[] = [
@@ -78,6 +80,20 @@ export const BUILDING_TYPES: BuildingType[] = [
     interactable: true,
     solidWhenClosed: true,
     placement: "edge",
+  },
+  {
+    id: "bed",
+    name: "Bed",
+    ingredients: [
+      { itemId: "log", count: 2 },
+      { itemId: "wool", count: 3 },
+    ],
+    maxHp: 80,
+    solid: true,
+    interactable: false,
+    solidWhenClosed: false,
+    placement: "tile",
+    requiresIndoor: true,
   },
 ];
 

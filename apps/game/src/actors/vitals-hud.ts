@@ -27,14 +27,16 @@ const BARS: BarDef[] = [
 
 export class VitalsHud extends ex.ScreenElement {
   private vitalsSource: () => VitalsState;
+  private uiScale: number;
 
-  constructor(vitalsSource: () => VitalsState) {
-    super({ pos: ex.vec(8, 8), z: 100, anchor: ex.vec(0, 0) });
+  constructor(vitalsSource: () => VitalsState, uiScale = 1) {
+    super({ pos: ex.vec(8 * uiScale, 8 * uiScale), z: 100, anchor: ex.vec(0, 0) });
     this.vitalsSource = vitalsSource;
+    this.uiScale = uiScale;
 
     const canvas = new ex.Canvas({
-      width: CANVAS_W,
-      height: CANVAS_H,
+      width: Math.round(CANVAS_W * uiScale),
+      height: Math.round(CANVAS_H * uiScale),
       cache: false, // re-draw every frame so bars update
       draw: (ctx) => this.drawBars(ctx),
     });
@@ -43,6 +45,7 @@ export class VitalsHud extends ex.ScreenElement {
   }
 
   private drawBars(ctx: CanvasRenderingContext2D): void {
+    ctx.scale(this.uiScale, this.uiScale);
     const vitals = this.vitalsSource();
 
     ctx.font = "bold 10px monospace";

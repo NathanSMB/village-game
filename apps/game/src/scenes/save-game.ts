@@ -2,6 +2,7 @@ import * as ex from "excalibur";
 import { wasActionPressed } from "../systems/keybinds.ts";
 import { type SaveData, listSaves, saveGame } from "../systems/save-manager.ts";
 import type { GameWorld } from "./game-world.ts";
+import { UI_REF_HEIGHT } from "../systems/ui-scale.ts";
 
 const FONT_TITLE = new ex.Font({
   family: "monospace",
@@ -210,6 +211,9 @@ export class SaveGame extends ex.Scene {
   }
 
   override async onActivate(): Promise<void> {
+    const vh = this.engine.drawHeight * this.camera.zoom;
+    this.camera.zoom = vh / UI_REF_HEIGHT;
+    this.camera.pos = ex.vec(this.centerX, UI_REF_HEIGHT / 2);
     this.saveName = "";
     this.mode = "nav";
     this.section = "name";
@@ -293,7 +297,11 @@ export class SaveGame extends ex.Scene {
 
   private handleTextInput(kb: ex.Keyboard): void {
     // Enter or Escape exits typing mode
-    if (kb.wasPressed(ex.Keys.Enter) || kb.wasPressed(ex.Keys.Escape)) {
+    if (
+      kb.wasPressed(ex.Keys.Enter) ||
+      kb.wasPressed(ex.Keys.Escape) ||
+      kb.wasPressed(ex.Keys.Tab)
+    ) {
       this.mode = "nav";
       this.updateDisplay();
       return;

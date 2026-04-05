@@ -7,6 +7,7 @@ import {
   importSaveFromFile,
   listSaves,
 } from "../systems/save-manager.ts";
+import { UI_REF_HEIGHT } from "../systems/ui-scale.ts";
 
 const FONT_TITLE = new ex.Font({
   family: "monospace",
@@ -172,6 +173,9 @@ export class LoadGame extends ex.Scene<LoadGameData> {
   }
 
   override async onActivate(context: ex.SceneActivationContext<LoadGameData>): Promise<void> {
+    const vh = this.engine.drawHeight * this.camera.zoom;
+    this.camera.zoom = vh / UI_REF_HEIGHT;
+    this.camera.pos = ex.vec(this.centerX, UI_REF_HEIGHT / 2);
     this.returnTo = context.data?.returnTo ?? "start";
     this.mode = "saves";
     this.selectedSave = 0;

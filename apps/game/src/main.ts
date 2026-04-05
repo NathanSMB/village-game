@@ -14,9 +14,14 @@ import { getAllImageSources } from "./systems/sprite-loader.ts";
 await initDB();
 await loadKeybinds();
 
+// Prevent Tab from cycling focus away from the game canvas
+window.addEventListener("keydown", (e) => {
+  if (e.key === "Tab") e.preventDefault();
+});
+
 const engine = new ex.Engine({
   canvasElementId: "game",
-  displayMode: ex.DisplayMode.FitScreen,
+  displayMode: ex.DisplayMode.FillScreen,
   pixelArt: true,
   antialiasing: false,
   snapToPixel: true,

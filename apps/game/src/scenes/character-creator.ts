@@ -11,6 +11,7 @@ import {
 } from "../data/character-options.ts";
 import { wasActionPressed } from "../systems/keybinds.ts";
 import { getCharacterPreviewSprite } from "../systems/character-compositor.ts";
+import { UI_REF_HEIGHT } from "../systems/ui-scale.ts";
 
 const PREVIEW_SCALE = 6;
 
@@ -202,9 +203,10 @@ export class CharacterCreator extends ex.Scene {
     });
     this.add(title);
 
-    // Character preview
+    // Character preview — position in the left quarter of the zoomed visible area
+    const visibleW = (engine.drawWidth * UI_REF_HEIGHT) / engine.drawHeight;
     this.previewActor = new ex.Actor({
-      pos: ex.vec(this.centerX * 0.45, 230),
+      pos: ex.vec(this.centerX - visibleW * 0.25, 230),
       anchor: ex.vec(0.5, 0.5),
     });
     this.previewActor.graphics.use(getCharacterPreviewSprite(this.appearance, PREVIEW_SCALE));
@@ -216,6 +218,10 @@ export class CharacterCreator extends ex.Scene {
   }
 
   override onActivate(): void {
+    const vw = this.engine.drawWidth * this.camera.zoom;
+    const vh = this.engine.drawHeight * this.camera.zoom;
+    this.camera.zoom = vh / UI_REF_HEIGHT;
+    this.camera.pos = ex.vec(vw / 2, UI_REF_HEIGHT / 2);
     this.appearance = defaultAppearance();
     this.selectedRow = 0;
     this.rebuildOptionRows();

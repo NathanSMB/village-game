@@ -9,6 +9,7 @@ import {
   setBinding,
   type ActionName,
 } from "../systems/keybinds.ts";
+import { UI_REF_HEIGHT } from "../systems/ui-scale.ts";
 
 interface SettingsData {
   returnTo: string;
@@ -113,6 +114,10 @@ export class Settings extends ex.Scene<SettingsData> {
   }
 
   override onActivate(context: ex.SceneActivationContext<SettingsData>): void {
+    const vw = this.engine.drawWidth * this.camera.zoom;
+    const vh = this.engine.drawHeight * this.camera.zoom;
+    this.camera.zoom = vh / UI_REF_HEIGHT;
+    this.camera.pos = ex.vec(vw / 2, UI_REF_HEIGHT / 2);
     this.returnTo = context.data?.returnTo ?? "start";
     this.selectedRow = 0;
     this.selectedSlot = 0;

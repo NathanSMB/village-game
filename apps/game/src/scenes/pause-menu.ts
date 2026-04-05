@@ -1,5 +1,6 @@
 import * as ex from "excalibur";
 import { wasActionPressed } from "../systems/keybinds.ts";
+import { UI_REF_HEIGHT } from "../systems/ui-scale.ts";
 
 const FONT_TITLE = new ex.Font({
   family: "monospace",
@@ -104,6 +105,10 @@ export class PauseMenu extends ex.Scene {
   }
 
   override onActivate(): void {
+    const vw = this.engine.drawWidth * this.camera.zoom;
+    const vh = this.engine.drawHeight * this.camera.zoom;
+    this.camera.zoom = vh / UI_REF_HEIGHT;
+    this.camera.pos = ex.vec(vw / 2, UI_REF_HEIGHT / 2);
     this.selectedIndex = 0;
     this.updateSelection();
   }

@@ -16,7 +16,7 @@ await loadKeybinds();
 
 const engine = new ex.Engine({
   canvasElementId: "game",
-  displayMode: ex.DisplayMode.FitScreen,
+  displayMode: ex.DisplayMode.FillScreen,
   pixelArt: true,
   antialiasing: false,
   snapToPixel: true,

@@ -79,6 +79,7 @@ import { IndoorDarknessOverlay, getIndoorTiles } from "../systems/indoor-lightin
 import { Sheep } from "../actors/sheep.ts";
 import { Cow } from "../actors/cow.ts";
 import { detectBreedingEnclosures } from "../systems/enclosure.ts";
+import { getUIScale } from "../systems/ui-scale.ts";
 
 const MAP_COLS = 64;
 const MAP_ROWS = 64;
@@ -193,11 +194,24 @@ export class GameWorld extends ex.Scene<GameWorldData> {
   private selectedBuildType: BuildingType | null = null;
   private plannedBuildings = new Map<
     number,
-    { type: BuildingType; x: number; y: number; rotation: number; actor: ex.Actor }
+    {
+      type: BuildingType;
+      x: number;
+      y: number;
+      rotation: number;
+      actor: ex.Actor;
+    }
   >();
   private plannedEdges = new Map<
     number,
-    { type: BuildingType; edgeKey: number; axis: EdgeAxis; x: number; y: number; actor: ex.Actor }
+    {
+      type: BuildingType;
+      edgeKey: number;
+      axis: EdgeAxis;
+      x: number;
+      y: number;
+      actor: ex.Actor;
+    }
   >();
   private planEdgeOrientation: EdgeOrientation = "N";
   private planTileRotation = 0;
@@ -228,7 +242,10 @@ export class GameWorld extends ex.Scene<GameWorldData> {
   private inventoryEquipSubmenuIndex = 0;
   private inventoryEquipSubmenuScroll = 0;
 
-  override onInitialize(): void {
+  private uiScale = 1;
+
+  override onInitialize(engine: ex.Engine): void {
+    this.uiScale = getUIScale(engine);
     this.tilemap = new ex.TileMap({
       tileWidth: TILE_SIZE,
       tileHeight: TILE_SIZE,
@@ -585,7 +602,7 @@ export class GameWorld extends ex.Scene<GameWorldData> {
       });
       this.add(this.player);
 
-      this.hud = new VitalsHud(() => this.player!.vitals);
+      this.hud = new VitalsHud(() => this.player!.vitals, this.uiScale);
       this.add(this.hud);
 
       // Restore berry bush states from save
@@ -655,6 +672,7 @@ export class GameWorld extends ex.Scene<GameWorldData> {
 
     if (this.player) {
       this.camera.clearAllStrategies();
+      this.camera.zoom = 3.5;
       this.camera.strategy.lockToActor(this.player);
       const mapBounds = new ex.BoundingBox(0, 0, MAP_COLS * TILE_SIZE, MAP_ROWS * TILE_SIZE);
       this.camera.strategy.limitCameraBounds(mapBounds);
@@ -1812,8 +1830,8 @@ export class GameWorld extends ex.Scene<GameWorldData> {
 
     // Create ScreenElement panel (same pattern as build/cooking/storage menus)
     this.itemPickerPanel = new ex.ScreenElement({
-      x: 8,
-      y: 40,
+      x: 8 * this.uiScale,
+      y: 40 * this.uiScale,
       z: 200,
     });
     this.add(this.itemPickerPanel);
@@ -1836,11 +1854,12 @@ export class GameWorld extends ex.Scene<GameWorldData> {
     const scroll = this.itemPickerScroll;
 
     const canvas = new ex.Canvas({
-      width: w,
-      height: h,
+      width: Math.round(w * this.uiScale),
+      height: Math.round(h * this.uiScale),
       cache: false,
       draw: (ctx) => {
         ctx.imageSmoothingEnabled = false;
+        ctx.scale(this.uiScale, this.uiScale);
 
         // Background with rounded corners
         ctx.fillStyle = "rgba(10, 10, 20, 0.88)";
@@ -2499,8 +2518,8 @@ export class GameWorld extends ex.Scene<GameWorldData> {
 
   private createPlanMenu(): void {
     this.planMenuPanel = new ex.ScreenElement({
-      x: 8,
-      y: 40,
+      x: 8 * this.uiScale,
+      y: 40 * this.uiScale,
       z: 200,
     });
     this.add(this.planMenuPanel);
@@ -2520,11 +2539,12 @@ export class GameWorld extends ex.Scene<GameWorldData> {
     const activeId = this.selectedBuildType?.id ?? null;
 
     const canvas = new ex.Canvas({
-      width: w,
-      height: h,
+      width: Math.round(w * this.uiScale),
+      height: Math.round(h * this.uiScale),
       cache: false,
       draw: (ctx) => {
         ctx.imageSmoothingEnabled = false;
+        ctx.scale(this.uiScale, this.uiScale);
 
         // Background
         ctx.fillStyle = "rgba(10, 10, 20, 0.88)";
@@ -2622,8 +2642,8 @@ export class GameWorld extends ex.Scene<GameWorldData> {
     this.player.lockInput();
 
     this.cookingMenuPanel = new ex.ScreenElement({
-      x: 8,
-      y: 40,
+      x: 8 * this.uiScale,
+      y: 40 * this.uiScale,
       z: 200,
     });
     this.add(this.cookingMenuPanel);
@@ -2647,7 +2667,11 @@ export class GameWorld extends ex.Scene<GameWorldData> {
     recipe: (typeof COOKING_RECIPES)[0];
   }[] {
     if (!this.player) return [];
-    const results: { item: Item; bagIndex: number; recipe: (typeof COOKING_RECIPES)[0] }[] = [];
+    const results: {
+      item: Item;
+      bagIndex: number;
+      recipe: (typeof COOKING_RECIPES)[0];
+    }[] = [];
     for (let i = 0; i < this.player.inventory.bag.length; i++) {
       const item = this.player.inventory.bag[i];
       const recipe = COOKING_RECIPE_MAP[item.id];
@@ -2713,11 +2737,12 @@ export class GameWorld extends ex.Scene<GameWorldData> {
     const menuIdx = this.cookingMenuIndex;
 
     const canvas = new ex.Canvas({
-      width: w,
-      height: h,
+      width: Math.round(w * this.uiScale),
+      height: Math.round(h * this.uiScale),
       cache: false,
       draw: (ctx) => {
         ctx.imageSmoothingEnabled = false;
+        ctx.scale(this.uiScale, this.uiScale);
 
         // Background
         ctx.fillStyle = "rgba(10, 10, 20, 0.88)";
@@ -2817,8 +2842,8 @@ export class GameWorld extends ex.Scene<GameWorldData> {
     this.player.lockInput();
 
     this.storageMenuPanel = new ex.ScreenElement({
-      x: 8,
-      y: 40,
+      x: 8 * this.uiScale,
+      y: 40 * this.uiScale,
       z: 200,
     });
     this.add(this.storageMenuPanel);
@@ -2954,11 +2979,12 @@ export class GameWorld extends ex.Scene<GameWorldData> {
     const inv = this.player.inventory;
 
     const canvas = new ex.Canvas({
-      width: pw,
-      height: ph,
+      width: Math.round(pw * this.uiScale),
+      height: Math.round(ph * this.uiScale),
       cache: false,
       draw: (ctx) => {
         ctx.imageSmoothingEnabled = false;
+        ctx.scale(this.uiScale, this.uiScale);
 
         // Background with rounded corners
         ctx.fillStyle = "rgba(10, 10, 20, 0.88)";
@@ -3170,8 +3196,8 @@ export class GameWorld extends ex.Scene<GameWorldData> {
     this.player.lockInput();
 
     this.inventoryMenuPanel = new ex.ScreenElement({
-      x: 8,
-      y: 40,
+      x: 8 * this.uiScale,
+      y: 40 * this.uiScale,
       z: 200,
     });
     this.add(this.inventoryMenuPanel);
@@ -3542,7 +3568,10 @@ export class GameWorld extends ex.Scene<GameWorldData> {
       this.inventoryViewBag = [];
       return;
     }
-    let entries = this.player.inventory.bag.map((item, i) => ({ item, realIndex: i }));
+    let entries = this.player.inventory.bag.map((item, i) => ({
+      item,
+      realIndex: i,
+    }));
     const query = this.inventoryFilterText.trim().toLowerCase();
     if (query) {
       entries = entries.filter((e) => e.item.name.toLowerCase().includes(query));
@@ -3777,11 +3806,12 @@ export class GameWorld extends ex.Scene<GameWorldData> {
     const submenuTotalOptions = submenuItems.length + (submenuEquipped ? 1 : 0);
 
     const canvas = new ex.Canvas({
-      width: pw,
-      height: ph,
+      width: Math.round(pw * this.uiScale),
+      height: Math.round(ph * this.uiScale),
       cache: false,
       draw: (ctx) => {
         ctx.imageSmoothingEnabled = false;
+        ctx.scale(this.uiScale, this.uiScale);
         const detailMaxW = pw - 16; // text wrap width
 
         // ── Background with rounded corners ──

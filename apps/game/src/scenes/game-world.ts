@@ -79,7 +79,17 @@ import { IndoorDarknessOverlay, getIndoorTiles } from "../systems/indoor-lightin
 import { Sheep } from "../actors/sheep.ts";
 import { Cow } from "../actors/cow.ts";
 import { detectBreedingEnclosures } from "../systems/enclosure.ts";
-import { getUIScale } from "../systems/ui-scale.ts";
+import { getUIScale, UI_REF_HEIGHT } from "../systems/ui-scale.ts";
+import { SpeechBubble } from "../actors/speech-bubble.ts";
+import { ChatLog } from "../actors/chat-log.ts";
+import {
+  type ChatMessage,
+  type ChatMode,
+  CHAT_MODE_ORDER,
+  CHAT_EXPIRE_MS,
+  CHAT_MODE_COLORS,
+  CHAT_MODE_VERBS,
+} from "../types/chat.ts";
 
 const MAP_COLS = 64;
 const MAP_ROWS = 64;
@@ -104,6 +114,57 @@ const GROUND_ITEM_DESPAWN_MS = 180_000; // 3 minutes until non-permanent ground 
 export type GameWorldData =
   | { type: "new"; appearance: CharacterAppearance }
   | { type: "load"; save: SaveData };
+
+/** Map an Excalibur key code + shift state to a printable character, or null. */
+function chatKeyToChar(key: ex.Keys, shift: boolean): string | null {
+  const s = key as string;
+
+  // Letter keys: KeyA → "a"/"A"
+  if (s.startsWith("Key") && s.length === 4) {
+    const ch = s[3].toLowerCase();
+    return shift ? ch.toUpperCase() : ch;
+  }
+
+  // Digit keys: Digit0 → "0" (or shift symbols)
+  const DIGIT_SHIFT: Record<string, string> = {
+    Digit1: "!",
+    Digit2: "@",
+    Digit3: "#",
+    Digit4: "$",
+    Digit5: "%",
+    Digit6: "^",
+    Digit7: "&",
+    Digit8: "*",
+    Digit9: "(",
+    Digit0: ")",
+  };
+  if (s.startsWith("Digit") && s.length === 6) {
+    if (shift) return DIGIT_SHIFT[s] ?? s[5];
+    return s[5];
+  }
+
+  // Space
+  if (key === ex.Keys.Space) return " ";
+
+  // Punctuation keys
+  const PUNCT: Record<string, [string, string]> = {
+    Minus: ["-", "_"],
+    Equal: ["=", "+"],
+    BracketLeft: ["[", "{"],
+    BracketRight: ["]", "}"],
+    Backslash: ["\\", "|"],
+    Semicolon: [";", ":"],
+    Quote: ["'", '"'],
+    Comma: [",", "<"],
+    Period: [".", ">"],
+    Slash: ["/", "?"],
+    Backquote: ["`", "~"],
+  };
+  const punct = PUNCT[s];
+  if (punct) return shift ? punct[1] : punct[0];
+
+  return null;
+}
 
 /** Encode tile coords into a single number for Set lookups. */
 function tileKey(x: number, y: number): number {
@@ -241,6 +302,15 @@ export class GameWorld extends ex.Scene<GameWorldData> {
   private inventoryEquipSubmenuItems: { item: Item; realIndex: number }[] = [];
   private inventoryEquipSubmenuIndex = 0;
   private inventoryEquipSubmenuScroll = 0;
+
+  // Chat state
+  private chatMessages: ChatMessage[] = [];
+  private chatOpen = false;
+  private chatInputPanel: ex.ScreenElement | null = null;
+  private chatInputText = "";
+  private chatMode: ChatMode = "talk";
+  private chatLog: ChatLog | null = null;
+  private playerName = "Player";
 
   private uiScale = 1;
 
@@ -605,6 +675,38 @@ export class GameWorld extends ex.Scene<GameWorldData> {
       this.hud = new VitalsHud(() => this.player!.vitals, this.uiScale);
       this.add(this.hud);
 
+      // Chat system setup
+      if (this.chatLog) {
+        this.remove(this.chatLog);
+        this.chatLog = null;
+      }
+      if (this.chatInputPanel) {
+        this.remove(this.chatInputPanel);
+        this.chatInputPanel = null;
+      }
+      this.chatMessages = [];
+      this.chatOpen = false;
+      this.chatInputText = "";
+      this.playerName = context.data.type === "load" ? context.data.save.name : "Player";
+
+      // Chat input/hint panel sits at the very bottom-left.
+      // UI_REF_HEIGHT (600) is the design-unit screen height; multiplying by
+      // uiScale converts to ScreenElement pixel coordinates.
+      const inputPanelH = 20;
+      const inputY = (UI_REF_HEIGHT - 8) * this.uiScale; // 8 design-units from bottom
+      this.chatInputPanel = new ex.ScreenElement({
+        pos: ex.vec(8 * this.uiScale, inputY),
+        z: 100,
+        anchor: ex.vec(0, 1),
+      });
+      this.updateChatInputPanel();
+      this.add(this.chatInputPanel);
+
+      // Chat log sits just above the input panel (2 design-unit gap)
+      const chatLogY = (UI_REF_HEIGHT - 8 - inputPanelH - 2) * this.uiScale;
+      this.chatLog = new ChatLog(() => this.chatMessages, this.uiScale, chatLogY);
+      this.add(this.chatLog);
+
       // Restore berry bush states from save
       if (context.data.type === "load" && context.data.save.bushes) {
         this.restoreBushStates(context.data.save.bushes);
@@ -726,6 +828,15 @@ export class GameWorld extends ex.Scene<GameWorldData> {
       return; // Block all other input while storage menu is open
     }
 
+    // Chat input handling
+    if (this.chatOpen) {
+      this.handleChatInput(kb);
+      return; // Block all other input while chat is open
+    }
+
+    // Chat message expiry cleanup
+    this.updateChatCleanup();
+
     // Tree branch dropping
     this.updateTreeBranchDrops();
 
@@ -776,6 +887,9 @@ export class GameWorld extends ex.Scene<GameWorldData> {
     }
     if (wasActionPressed(kb, "inventory")) {
       this.openInventoryMenu();
+    }
+    if (wasActionPressed(kb, "chat")) {
+      this.openChat();
     }
     if (
       this.player &&
@@ -3165,6 +3279,225 @@ export class GameWorld extends ex.Scene<GameWorldData> {
     });
 
     this.storageMenuPanel.graphics.use(canvas);
+  }
+
+  // ==================== Chat System ====================
+
+  private readonly CHAT_INPUT_WIDTH = 280;
+  private readonly CHAT_INPUT_HEIGHT = 20;
+  private readonly CHAT_MAX_INPUT = 80;
+
+  private openChat(): void {
+    if (!this.player || this.chatOpen) return;
+    this.chatOpen = true;
+    this.chatInputText = "";
+    this.chatMode = "talk";
+    this.player.lockInput();
+    this.updateChatInputPanel();
+  }
+
+  private closeChat(): void {
+    this.chatOpen = false;
+    this.chatLog?.scrollToBottom();
+    if (this.player) {
+      this.player.unlockInput();
+    }
+    this.updateChatInputPanel();
+  }
+
+  private handleChatInput(kb: ex.Keyboard): void {
+    // Arrow keys scroll the chat log
+    if (kb.wasPressed(ex.Keys.ArrowUp) || kb.wasPressed(ex.Keys.W)) {
+      this.chatLog?.scrollUp();
+      return;
+    }
+    if (kb.wasPressed(ex.Keys.ArrowDown) || kb.wasPressed(ex.Keys.S)) {
+      this.chatLog?.scrollDown();
+      return;
+    }
+
+    // Tab cycles chat mode
+    if (kb.wasPressed(ex.Keys.Tab)) {
+      const idx = CHAT_MODE_ORDER.indexOf(this.chatMode);
+      this.chatMode = CHAT_MODE_ORDER[(idx + 1) % CHAT_MODE_ORDER.length];
+      this.updateChatInputPanel();
+      return;
+    }
+
+    // Enter sends or closes
+    if (kb.wasPressed(ex.Keys.Enter)) {
+      if (this.chatInputText.trim().length > 0) {
+        this.sendChatMessage();
+      }
+      this.closeChat();
+      return;
+    }
+
+    // Escape closes without sending
+    if (kb.wasPressed(ex.Keys.Escape)) {
+      this.closeChat();
+      return;
+    }
+
+    // Backspace removes last character
+    if (kb.wasPressed(ex.Keys.Backspace)) {
+      if (this.chatInputText.length > 0) {
+        this.chatInputText = this.chatInputText.slice(0, -1);
+        this.updateChatInputPanel();
+      }
+      return;
+    }
+
+    // Check for printable key presses
+    if (this.chatInputText.length >= this.CHAT_MAX_INPUT) return;
+
+    const shift = kb.isHeld(ex.Keys.ShiftLeft) || kb.isHeld(ex.Keys.ShiftRight);
+
+    // Check all printable keys
+    for (const key of kb.getKeys()) {
+      if (!kb.wasPressed(key)) continue;
+      const ch = chatKeyToChar(key, shift);
+      if (ch !== null) {
+        this.chatInputText += ch;
+        this.updateChatInputPanel();
+        return;
+      }
+    }
+  }
+
+  private sendChatMessage(): void {
+    if (!this.player) return;
+    const msg: ChatMessage = {
+      sender: this.playerName,
+      text: this.chatInputText.trim(),
+      tileX: this.player.getTileX(),
+      tileY: this.player.getTileY(),
+      mode: this.chatMode,
+      timestamp: Date.now(),
+    };
+
+    // The sender always sees their own message
+    this.chatMessages.push(msg);
+    this.chatLog?.scrollToBottom();
+
+    // In the future, distribute to nearby AI agents here:
+    // for each agent within CHAT_MODE_RADIUS[msg.mode] Chebyshev distance,
+    // push msg into that agent's personal chat log.
+
+    // Spawn speech bubble as a child of the player (auto-attaches via constructor)
+    new SpeechBubble(msg.text, this.player, msg.mode);
+  }
+
+  /**
+   * Renders the bottom-left chat hint / text input panel.
+   * - When chat is closed: "Press [T] to chat" in dim text
+   * - When chat is open + empty: placeholder "Currently talking [Press tab to cycle]" in mode color
+   * - When chat is open + typing: user text in mode color with blinking cursor
+   */
+  private updateChatInputPanel(): void {
+    if (!this.chatInputPanel) return;
+
+    const panelW = this.CHAT_INPUT_WIDTH;
+    const panelH = this.CHAT_INPUT_HEIGHT;
+
+    const canvas = new ex.Canvas({
+      width: Math.round(panelW * this.uiScale),
+      height: Math.round(panelH * this.uiScale),
+      cache: false,
+      draw: (ctx) => {
+        ctx.imageSmoothingEnabled = false;
+        ctx.scale(this.uiScale, this.uiScale);
+
+        // Background (shared by both idle hint and active input)
+        ctx.fillStyle = "rgba(10, 10, 20, 0.6)";
+        this.drawRoundRect(ctx, 0, 0, panelW, panelH, 3);
+        ctx.fill();
+
+        if (!this.chatOpen) {
+          // Idle hint: "Press [T] to chat"
+          ctx.font = "10px monospace";
+          ctx.textBaseline = "middle";
+          ctx.fillStyle = "#888888";
+          ctx.fillText("Press [T] to chat", 6, panelH / 2);
+          return;
+        }
+
+        // Active chat: add teal border on top of shared background
+        ctx.strokeStyle = "rgba(80, 200, 180, 0.35)";
+        ctx.lineWidth = 1;
+        this.drawRoundRect(ctx, 0, 0, panelW, panelH, 3);
+        ctx.stroke();
+
+        const modeColor = CHAT_MODE_COLORS[this.chatMode];
+        ctx.font = "10px monospace";
+        ctx.textBaseline = "middle";
+        const textY = panelH / 2;
+
+        if (this.chatInputText.length === 0) {
+          // Placeholder text in mode color (dimmed)
+          const verb = CHAT_MODE_VERBS[this.chatMode];
+          ctx.fillStyle = modeColor;
+          ctx.globalAlpha = 0.45;
+          ctx.fillText(`Currently ${verb} [Press tab to cycle]`, 6, textY);
+          ctx.globalAlpha = 1;
+
+          // Blinking cursor at start
+          const cursorOn = Math.floor(Date.now() / 500) % 2 === 0;
+          if (cursorOn) {
+            ctx.fillStyle = modeColor;
+            ctx.fillRect(6, textY - 5, 1, 11);
+          }
+        } else {
+          // User text in mode color
+          const maxTextW = panelW - 12;
+          let displayText = this.chatInputText;
+
+          // Truncate from the left if text overflows
+          while (ctx.measureText(displayText + "_").width > maxTextW && displayText.length > 0) {
+            displayText = displayText.slice(1);
+          }
+
+          ctx.fillStyle = modeColor;
+          ctx.fillText(displayText, 6, textY);
+
+          // Blinking cursor after text
+          const cursorOn = Math.floor(Date.now() / 500) % 2 === 0;
+          if (cursorOn) {
+            const cursorX = 6 + ctx.measureText(displayText).width;
+            ctx.fillRect(cursorX, textY - 5, 1, 11);
+          }
+        }
+      },
+    });
+
+    this.chatInputPanel.graphics.use(canvas);
+  }
+
+  private updateChatCleanup(): void {
+    const now = Date.now();
+    this.chatMessages = this.chatMessages.filter((msg) => now - msg.timestamp <= CHAT_EXPIRE_MS);
+  }
+
+  /** Draw a rounded rectangle path (shared helper). */
+  private drawRoundRect(
+    ctx: CanvasRenderingContext2D,
+    x: number,
+    y: number,
+    w: number,
+    h: number,
+    r: number,
+  ): void {
+    ctx.beginPath();
+    ctx.moveTo(x + r, y);
+    ctx.lineTo(x + w - r, y);
+    ctx.quadraticCurveTo(x + w, y, x + w, y + r);
+    ctx.lineTo(x + w, y + h - r);
+    ctx.quadraticCurveTo(x + w, y + h, x + w - r, y + h);
+    ctx.lineTo(x + r, y + h);
+    ctx.quadraticCurveTo(x, y + h, x, y + h - r);
+    ctx.lineTo(x, y + r);
+    ctx.quadraticCurveTo(x, y, x + r, y);
+    ctx.closePath();
   }
 
   // ==================== Inventory Menu ====================

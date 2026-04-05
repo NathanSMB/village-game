@@ -1,7 +1,7 @@
 import * as ex from "excalibur";
 import type { CharacterAppearance } from "../types/character.ts";
 import { totalWeight, type InventoryState } from "../types/inventory.ts";
-import { EquipmentSlot, type Item } from "../types/item.ts";
+import { EquipmentSlot, RARITY_COLORS, type Item } from "../types/item.ts";
 import { isAlive } from "../types/vitals.ts";
 import { Player } from "../actors/player.ts";
 import { BerryBush } from "../actors/berry-bush.ts";
@@ -102,8 +102,8 @@ export class GameWorld extends ex.Scene<GameWorldData> {
   private itemPickerItems: Item[] = [];
   private itemPickerIndex = 0;
   private itemPickerTileKey = 0;
-  private itemPickerLabels: ex.Label[] = [];
-  private itemPickerBg: ex.Actor | null = null;
+  private itemPickerScroll = 0;
+  private itemPickerPanel: ex.ScreenElement | null = null;
 
   // Building system (tile-based: floors only)
   private buildings: Building[] = [];
@@ -612,12 +612,19 @@ export class GameWorld extends ex.Scene<GameWorldData> {
 
     // Item picker overlay input handling
     if (this.itemPickerOpen) {
+      const maxVis = this.PICKER_MAX_VISIBLE;
       if (wasActionPressed(kb, "moveUp")) {
         this.itemPickerIndex = Math.max(0, this.itemPickerIndex - 1);
+        if (this.itemPickerIndex < this.itemPickerScroll) {
+          this.itemPickerScroll = this.itemPickerIndex;
+        }
         this.updateItemPicker();
       }
       if (wasActionPressed(kb, "moveDown")) {
         this.itemPickerIndex = Math.min(this.itemPickerItems.length - 1, this.itemPickerIndex + 1);
+        if (this.itemPickerIndex >= this.itemPickerScroll + maxVis) {
+          this.itemPickerScroll = this.itemPickerIndex - maxVis + 1;
+        }
         this.updateItemPicker();
       }
       if (wasActionPressed(kb, "confirm") || wasActionPressed(kb, "action")) {
@@ -1517,16 +1524,21 @@ export class GameWorld extends ex.Scene<GameWorldData> {
 
   // ==================== Item Picker Overlay ====================
 
+  private readonly PICKER_PANEL_WIDTH = 200;
+  private readonly PICKER_LINE_HEIGHT = 22;
+  private readonly PICKER_MAX_VISIBLE = 8;
+
   private openItemPicker(
     stack: GroundItemStack,
     key: number,
-    worldX: number,
-    worldY: number,
+    _worldX: number,
+    _worldY: number,
   ): void {
     this.itemPickerOpen = true;
     this.itemPickerItems = stack.getItems();
     this.itemPickerIndex = 0;
     this.itemPickerTileKey = key;
+    this.itemPickerScroll = 0;
 
     // Lock player input while picker is open
     this.player?.lockInput();
@@ -1534,60 +1546,153 @@ export class GameWorld extends ex.Scene<GameWorldData> {
     // Hide action prompt
     if (this.actionPrompt) this.actionPrompt.graphics.visible = false;
 
-    // Create background
-    const bgHeight = Math.min(this.itemPickerItems.length, 5) * 20 + 12;
-    this.itemPickerBg = new ex.Actor({
-      pos: ex.vec(worldX, worldY - TILE_SIZE / 2 - bgHeight - 4),
-      width: 140,
-      height: bgHeight,
-      anchor: ex.vec(0.5, 0),
-      z: 100,
+    // Create ScreenElement panel (same pattern as build/cooking/storage menus)
+    this.itemPickerPanel = new ex.ScreenElement({
+      x: 8,
+      y: 40,
+      z: 200,
     });
-    this.itemPickerBg.graphics.use(
-      new ex.Rectangle({
-        width: 140,
-        height: bgHeight,
-        color: ex.Color.fromRGB(20, 20, 30, 0.9),
-      }),
-    );
-    this.add(this.itemPickerBg);
-
-    // Create item labels
-    const maxVisible = Math.min(this.itemPickerItems.length, 5);
-    for (let i = 0; i < maxVisible; i++) {
-      const label = new ex.Label({
-        text: "",
-        pos: ex.vec(worldX - 60, worldY - TILE_SIZE / 2 - bgHeight + i * 20 + 2),
-        z: 101,
-        font: new ex.Font({
-          family: "monospace",
-          size: 12,
-          color: ex.Color.White,
-          textAlign: ex.TextAlign.Left,
-          baseAlign: ex.BaseAlign.Top,
-        }),
-      });
-      this.add(label);
-      this.itemPickerLabels.push(label);
-    }
-
+    this.add(this.itemPickerPanel);
     this.updateItemPicker();
   }
 
   private updateItemPicker(): void {
-    const maxVisible = this.itemPickerLabels.length;
-    for (let i = 0; i < maxVisible; i++) {
-      const label = this.itemPickerLabels[i];
-      if (i < this.itemPickerItems.length) {
-        const item = this.itemPickerItems[i];
-        const selected = i === this.itemPickerIndex;
-        label.text = selected ? `> ${item.name}` : `  ${item.name}`;
-        label.color = selected ? ex.Color.fromHex("#f0c040") : ex.Color.White;
-        label.font.bold = selected;
-      } else {
-        label.text = "";
-      }
-    }
+    if (!this.itemPickerPanel) return;
+
+    const items = this.itemPickerItems;
+    const w = this.PICKER_PANEL_WIDTH;
+    const lh = this.PICKER_LINE_HEIGHT;
+    const maxVis = this.PICKER_MAX_VISIBLE;
+    const headerH = 28;
+    const hintH = 28;
+    const visibleCount = Math.min(items.length, maxVis);
+    const contentH = Math.max(1, visibleCount) * lh;
+    const h = headerH + contentH + hintH + 16;
+    const menuIdx = this.itemPickerIndex;
+    const scroll = this.itemPickerScroll;
+
+    const canvas = new ex.Canvas({
+      width: w,
+      height: h,
+      cache: false,
+      draw: (ctx) => {
+        ctx.imageSmoothingEnabled = false;
+
+        // Background with rounded corners
+        ctx.fillStyle = "rgba(10, 10, 20, 0.88)";
+        const r = 4;
+        ctx.beginPath();
+        ctx.moveTo(r, 0);
+        ctx.lineTo(w - r, 0);
+        ctx.arcTo(w, 0, w, r, r);
+        ctx.lineTo(w, h - r);
+        ctx.arcTo(w, h, w - r, h, r);
+        ctx.lineTo(r, h);
+        ctx.arcTo(0, h, 0, h - r, r);
+        ctx.lineTo(0, r);
+        ctx.arcTo(0, 0, r, 0, r);
+        ctx.closePath();
+        ctx.fill();
+
+        // Border (earthy green for ground items)
+        ctx.strokeStyle = "rgba(120, 180, 80, 0.35)";
+        ctx.lineWidth = 1;
+        ctx.stroke();
+
+        // Header
+        ctx.fillStyle = "#ffffff";
+        ctx.font = "bold 14px monospace";
+        ctx.textAlign = "center";
+        ctx.fillText("PICK UP", w / 2, 18);
+
+        // Divider
+        ctx.strokeStyle = "rgba(120, 180, 80, 0.25)";
+        ctx.beginPath();
+        ctx.moveTo(8, headerH);
+        ctx.lineTo(w - 8, headerH);
+        ctx.stroke();
+
+        // Item count badge (right side of header)
+        ctx.font = "9px monospace";
+        ctx.textAlign = "right";
+        ctx.fillStyle = "#888888";
+        ctx.fillText(`${items.length}`, w - 10, 18);
+
+        // Scroll-up indicator
+        if (scroll > 0) {
+          ctx.fillStyle = "#666666";
+          ctx.font = "9px monospace";
+          ctx.textAlign = "center";
+          ctx.fillText("\u25b2", w / 2, headerH + 8);
+        }
+
+        // Items list
+        const visStart = scroll;
+        const visEnd = Math.min(items.length, scroll + maxVis);
+
+        for (let vi = 0; vi < maxVis; vi++) {
+          const realIdx = visStart + vi;
+          if (realIdx >= visEnd) break;
+
+          const item = items[realIdx];
+          const selected = realIdx === menuIdx;
+          const y = headerH + 6 + vi * lh + lh / 2;
+
+          // Selection highlight bar
+          if (selected) {
+            ctx.fillStyle = "rgba(120, 180, 80, 0.12)";
+            ctx.fillRect(4, headerH + 4 + vi * lh, w - 8, lh);
+          }
+
+          // Item name with rarity color
+          const prefix = selected ? "> " : "  ";
+          ctx.textAlign = "left";
+          ctx.font = selected ? "bold 11px monospace" : "11px monospace";
+
+          if (selected) {
+            ctx.fillStyle = "#f0c040";
+          } else {
+            ctx.fillStyle = RARITY_COLORS[item.rarity] ?? "#cccccc";
+          }
+
+          let name = item.name;
+          if (name.length > 22) name = name.slice(0, 21) + "\u2026";
+          ctx.fillText(`${prefix}${name}`, 8, y + 1);
+        }
+
+        // Empty state
+        if (items.length === 0) {
+          ctx.textAlign = "center";
+          ctx.font = "11px monospace";
+          ctx.fillStyle = "#666666";
+          ctx.fillText("Nothing here", w / 2, headerH + lh / 2 + 6);
+        }
+
+        // Scroll-down indicator
+        if (visEnd < items.length) {
+          ctx.fillStyle = "#666666";
+          ctx.font = "9px monospace";
+          ctx.textAlign = "center";
+          ctx.fillText("\u25bc", w / 2, headerH + contentH + 4);
+        }
+
+        // Bottom divider
+        const bottomDivY = headerH + contentH + 8;
+        ctx.strokeStyle = "rgba(120, 180, 80, 0.25)";
+        ctx.beginPath();
+        ctx.moveTo(8, bottomDivY);
+        ctx.lineTo(w - 8, bottomDivY);
+        ctx.stroke();
+
+        // Hint text
+        ctx.textAlign = "center";
+        ctx.font = "9px monospace";
+        ctx.fillStyle = "#666666";
+        ctx.fillText("[E] Take  [Esc] Cancel", w / 2, bottomDivY + 14);
+      },
+    });
+
+    this.itemPickerPanel.graphics.use(canvas);
   }
 
   private pickItemFromPicker(): void {
@@ -1623,19 +1728,16 @@ export class GameWorld extends ex.Scene<GameWorldData> {
     this.itemPickerOpen = false;
     this.itemPickerItems = [];
     this.itemPickerIndex = 0;
+    this.itemPickerScroll = 0;
 
     // Unlock player input
     this.player?.unlockInput();
 
     // Clean up UI
-    if (this.itemPickerBg) {
-      this.remove(this.itemPickerBg);
-      this.itemPickerBg = null;
+    if (this.itemPickerPanel) {
+      this.remove(this.itemPickerPanel);
+      this.itemPickerPanel = null;
     }
-    for (const label of this.itemPickerLabels) {
-      this.remove(label);
-    }
-    this.itemPickerLabels = [];
   }
 
   // ==================== Ground Item Save/Load ====================

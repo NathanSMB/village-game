@@ -18,6 +18,10 @@ export interface LLMProviderConfig {
   endpointUrl: string;
   reasoningEffort: ReasoningEffort;
   providerSort: ProviderSort;
+  // Thinking (big) model — used for goal-setting and on-demand reasoning
+  thinkingModel: string;
+  thinkingReasoningEffort: ReasoningEffort;
+  thinkingProviderSort: ProviderSort;
 }
 
 export interface LLMMessage {
@@ -51,7 +55,7 @@ export const PROVIDER_LABELS: Record<LLMProviderType, string> = {
   custom: "OpenRouter",
 };
 
-export const PROVIDER_ORDER: LLMProviderType[] = ["custom", "claude", "openai", "ollama"];
+export const PROVIDER_ORDER: LLMProviderType[] = ["custom"];
 
 export function defaultConfig(): LLMProviderConfig {
   return {
@@ -61,6 +65,9 @@ export function defaultConfig(): LLMProviderConfig {
     endpointUrl: DEFAULT_ENDPOINTS.custom,
     reasoningEffort: "low",
     providerSort: "latency",
+    thinkingModel: "google/gemini-2.5-flash",
+    thinkingReasoningEffort: "high",
+    thinkingProviderSort: "latency",
   };
 }
 
@@ -88,6 +95,25 @@ export async function callLLM(
     if (signal?.aborted) return { text: "", error: "Request aborted" };
     return { text: "", error: err instanceof Error ? err.message : String(err) };
   }
+}
+
+/**
+ * Call the thinking (big) model. Uses the thinkingModel, thinkingReasoningEffort,
+ * and thinkingProviderSort from the config, with a higher max_tokens budget.
+ */
+export async function callThinkingLLM(
+  config: LLMProviderConfig,
+  messages: LLMMessage[],
+  signal?: AbortSignal,
+): Promise<LLMResponse> {
+  // Build a config override with the thinking model settings
+  const thinkingConfig: LLMProviderConfig = {
+    ...config,
+    model: config.thinkingModel || config.model,
+    reasoningEffort: config.thinkingReasoningEffort ?? "high",
+    providerSort: config.thinkingProviderSort ?? "latency",
+  };
+  return callLLM(thinkingConfig, messages, signal);
 }
 
 // ── Claude (Anthropic Messages API) ──────────────────────────────────
@@ -222,7 +248,7 @@ async function callOpenRouter(
     },
     body: JSON.stringify({
       model: config.model,
-      max_tokens: 512,
+      max_tokens: 2048,
       messages: messages.map((m) => ({ role: m.role, content: m.content })),
       reasoning: { effort: config.reasoningEffort || "low" },
       provider: {

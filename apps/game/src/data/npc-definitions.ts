@@ -5,7 +5,7 @@ export const NPC_DEFINITIONS: NPCDefinition[] = [
     npcId: "npc-maple",
     personality: {
       name: "Maple",
-      traits: "cautious, resourceful, loves gardening and cooking",
+      traits: "cautious, resourceful, loves herding and cooking",
       backstory:
         "A careful planner who believes preparation is the key to survival. She prefers to stockpile food and build a safe home before venturing far.",
     },

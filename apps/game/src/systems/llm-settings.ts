@@ -20,6 +20,9 @@ export async function loadLLMConfig(): Promise<LLMProviderConfig> {
     endpointUrl: saved.endpointUrl ?? DEFAULT_ENDPOINTS[saved.provider ?? "custom"],
     reasoningEffort: saved.reasoningEffort ?? "low",
     providerSort: saved.providerSort ?? "latency",
+    thinkingModel: saved.thinkingModel ?? "google/gemini-2.5-flash",
+    thinkingReasoningEffort: saved.thinkingReasoningEffort ?? "high",
+    thinkingProviderSort: saved.thinkingProviderSort ?? "latency",
   };
 }
 

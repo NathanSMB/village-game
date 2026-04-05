@@ -106,6 +106,18 @@ export class NPC extends ex.Actor {
   // Chat inbox — NEW messages heard since last LLM call, consumed by brain
   chatInbox: ChatMessage[] = [];
 
+  // Thinking history — last 5 exchanges with the reasoning model
+  thinkingHistory: { question: string; answer: string }[] = [];
+  private static readonly MAX_THINKING_HISTORY = 5;
+
+  /** Add a thinking exchange to history (keeps newest 5). */
+  pushThinkingHistory(question: string, answer: string): void {
+    this.thinkingHistory.push({ question, answer });
+    if (this.thinkingHistory.length > NPC.MAX_THINKING_HISTORY) {
+      this.thinkingHistory.splice(0, this.thinkingHistory.length - NPC.MAX_THINKING_HISTORY);
+    }
+  }
+
   // Chat history — rolling log of recent messages (sent + received), kept across LLM calls
   chatHistory: ChatMessage[] = [];
   private static readonly MAX_CHAT_HISTORY = 50;

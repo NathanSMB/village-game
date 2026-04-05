@@ -97,7 +97,12 @@ import type { NPCSaveState, EntityInfo } from "../types/npc.ts";
 import { NPC_DEFINITIONS } from "../data/npc-definitions.ts";
 import { type LLMProviderConfig, defaultConfig } from "../systems/llm-provider.ts";
 import { loadLLMConfig } from "../systems/llm-settings.ts";
-import { decideNextAction, buildWorldSnapshot } from "../systems/npc-brain.ts";
+import {
+  decideNextAction,
+  buildWorldSnapshot,
+  thinkAboutGoal,
+  thinkAboutQuestion,
+} from "../systems/npc-brain.ts";
 import { executeNPCAction, type GameWorldNPCInterface } from "../systems/npc-actions.ts";
 import { findPath } from "../systems/pathfinding.ts";
 import { NPCThoughtIndicator } from "../actors/npc-thought-indicator.ts";
@@ -5464,14 +5469,56 @@ export class GameWorld extends ex.Scene<GameWorldData> {
     const config = this.llmConfig;
 
     decideNextAction(npc, snapshot, config, abortController.signal)
-      .then((action) => {
-        this.npcInFlight.delete(npc.npcId);
-        npc.debugThinking = false;
-        if (npc.isDead) return;
+      .then(async (action) => {
+        if (npc.isDead) {
+          this.npcInFlight.delete(npc.npcId);
+          npc.debugThinking = false;
+          return;
+        }
 
         // Clear chat inbox since the brain has consumed them
         npc.chatInbox = [];
 
+        // Intercept set_goal → route through thinking model for strategy
+        if (action.action === "set_goal") {
+          npc.debugLastAction = JSON.stringify(action);
+          npc.debugLastResult = "⏳ Consulting thinking model...";
+          const goalWithStrategy = await thinkAboutGoal(
+            npc,
+            snapshot,
+            config,
+            abortController.signal,
+          );
+          npc.currentGoal = goalWithStrategy;
+          npc.debugLastResult = `✓ Goal: ${goalWithStrategy.slice(0, 80)}`;
+          npc.pushDebugHistory('{"action":"set_goal"}', `✓ ${goalWithStrategy.slice(0, 60)}`);
+          this.npcInFlight.delete(npc.npcId);
+          npc.debugThinking = false;
+          return;
+        }
+
+        // Intercept think → route through thinking model for ad-hoc question
+        if (action.action === "think") {
+          npc.debugLastAction = JSON.stringify(action);
+          npc.debugLastResult = "⏳ Thinking...";
+          const answer = await thinkAboutQuestion(
+            npc,
+            action.question,
+            snapshot,
+            config,
+            abortController.signal,
+          );
+          npc.debugLastResult = `✓ Thought: ${answer.slice(0, 80)}`;
+          npc.pushDebugHistory(
+            `{"action":"think","question":"${action.question.slice(0, 40)}"}`,
+            `✓ ${answer.slice(0, 60)}`,
+          );
+          this.npcInFlight.delete(npc.npcId);
+          npc.debugThinking = false;
+          return;
+        }
+
+        // All other actions — execute normally
         const result = executeNPCAction(npc, action, this.getNPCInterface());
         const actionJson = JSON.stringify(action);
         const resultStr = result.success
@@ -5479,6 +5526,8 @@ export class GameWorld extends ex.Scene<GameWorldData> {
           : `✗ ${result.reason ?? "failed"}`;
         npc.debugLastResult = resultStr;
         npc.pushDebugHistory(actionJson, resultStr);
+        this.npcInFlight.delete(npc.npcId);
+        npc.debugThinking = false;
       })
       .catch((err: unknown) => {
         this.npcInFlight.delete(npc.npcId);

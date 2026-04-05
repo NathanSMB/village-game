@@ -123,12 +123,15 @@ const KEYBIND_BUTTONS = ["Reset to Defaults", "Back"];
 const AI_BUTTONS = ["Test Connection", "Clear", "Back"];
 
 const AI_FIELD_LABELS = [
-  "Provider:",
-  "API Key:",
-  "Model:",
-  "Endpoint:",
-  "Reasoning:",
-  "Sort:",
+  "Provider:", // 0 — cycle
+  "API Key:", // 1 — text
+  "Model:", // 2 — text
+  "Endpoint:", // 3 — text
+  "Reasoning:", // 4 — cycle (OpenRouter only)
+  "Sort:", // 5 — cycle (OpenRouter only)
+  "Think Model:", // 6 — text  (OpenRouter only)
+  "Think Reason:", // 7 — cycle (OpenRouter only)
+  "Think Sort:", // 8 — cycle (OpenRouter only)
 ] as const;
 
 const FONT_VALUE = new ex.Font({
@@ -208,6 +211,9 @@ export class Settings extends ex.Scene<SettingsData> {
     endpointUrl: "",
     reasoningEffort: "low",
     providerSort: "latency",
+    thinkingModel: "",
+    thinkingReasoningEffort: "high",
+    thinkingProviderSort: "latency",
   };
   private aiTyping = false;
   private aiTypingField: number = -1; // 1=apiKey, 2=model, 3=endpoint
@@ -855,12 +861,12 @@ export class Settings extends ex.Scene<SettingsData> {
       valueLabel.on("pointerdown", () => {
         this.section = "content";
         this.aiContentRow = i;
-        if (i === 0) {
-          this.cycleProvider(1);
-        } else if (i === 4 || i === 5) {
-          // cycle selectors
-          if (i === 4) this.cycleReasoning(1);
-          else this.cycleSort(1);
+        if (this.isAICycleRow(i)) {
+          if (i === 0) this.cycleProvider(1);
+          else if (i === 4) this.cycleReasoning(1);
+          else if (i === 5) this.cycleSort(1);
+          else if (i === 7) this.cycleThinkingReasoning(1);
+          else if (i === 8) this.cycleThinkingSort(1);
         } else {
           this.startAITyping(i);
         }
@@ -908,7 +914,7 @@ export class Settings extends ex.Scene<SettingsData> {
   }
 
   private refreshAIValues(): void {
-    if (this.aiValueLabels.length < 6) return;
+    if (this.aiValueLabels.length < AI_FIELD_LABELS.length) return;
     this.aiValueLabels[0].text = `< ${PROVIDER_LABELS[this.aiConfig.provider]} >`;
     this.aiValueLabels[1].text = this.aiConfig.apiKey
       ? `${"*".repeat(Math.min(this.aiConfig.apiKey.length, 20))}`
@@ -917,18 +923,26 @@ export class Settings extends ex.Scene<SettingsData> {
     this.aiValueLabels[3].text = this.aiConfig.endpointUrl || "(not set)";
     this.aiValueLabels[4].text = `< ${this.aiConfig.reasoningEffort ?? "low"} >`;
     this.aiValueLabels[5].text = `< ${this.aiConfig.providerSort ?? "latency"} >`;
+    this.aiValueLabels[6].text = this.aiConfig.thinkingModel || "(not set)";
+    this.aiValueLabels[7].text = `< ${this.aiConfig.thinkingReasoningEffort ?? "high"} >`;
+    this.aiValueLabels[8].text = `< ${this.aiConfig.thinkingProviderSort ?? "latency"} >`;
 
-    // Reasoning + Sort rows are OpenRouter-only
-    const showExtra = this.aiConfig.provider === "custom";
-    for (const idx of [4, 5]) {
+    // Rows 4-8 are OpenRouter-only, and only when AI tab is active
+    const showExtra = this.aiConfig.provider === "custom" && this.activeTab === "AI";
+    for (const idx of [4, 5, 6, 7, 8]) {
       if (this.aiValueLabels[idx]) this.aiValueLabels[idx].graphics.visible = showExtra;
       if (this.aiRowLabels[idx]) this.aiRowLabels[idx].graphics.visible = showExtra;
     }
   }
 
-  /** The last navigable content row (3 for non-OpenRouter, 5 for OpenRouter). */
+  /** The last navigable content row (3 for non-OpenRouter, 8 for OpenRouter). */
   private get aiMaxContentRow(): number {
     return this.aiConfig.provider === "custom" ? AI_FIELD_LABELS.length - 1 : 3;
+  }
+
+  /** Whether a row is a cycle selector (vs text input). */
+  private isAICycleRow(row: number): boolean {
+    return row === 0 || row === 4 || row === 5 || row === 7 || row === 8;
   }
 
   private handleAIContentInput(kb: ex.Keyboard): void {
@@ -952,35 +966,21 @@ export class Settings extends ex.Scene<SettingsData> {
       return;
     }
 
-    if (this.aiContentRow === 0) {
-      // Provider row — cycle with left/right/enter
-      if (kb.wasPressed(ex.Keys.ArrowLeft) || kb.wasPressed(ex.Keys.A)) {
-        this.cycleProvider(-1);
-      }
-      if (
+    if (this.isAICycleRow(this.aiContentRow)) {
+      // Cycle selector rows
+      const left = kb.wasPressed(ex.Keys.ArrowLeft) || kb.wasPressed(ex.Keys.A);
+      const right =
         kb.wasPressed(ex.Keys.ArrowRight) ||
         kb.wasPressed(ex.Keys.D) ||
         kb.wasPressed(ex.Keys.Enter) ||
-        kb.wasPressed(ex.Keys.Space)
-      ) {
-        this.cycleProvider(1);
-      }
-    } else if (this.aiContentRow === 4 || this.aiContentRow === 5) {
-      // Cycle selectors: row 4 = reasoning, row 5 = sort
-      const cycleFn =
-        this.aiContentRow === 4
-          ? (d: number) => this.cycleReasoning(d)
-          : (d: number) => this.cycleSort(d);
-      if (kb.wasPressed(ex.Keys.ArrowLeft) || kb.wasPressed(ex.Keys.A)) {
-        cycleFn(-1);
-      }
-      if (
-        kb.wasPressed(ex.Keys.ArrowRight) ||
-        kb.wasPressed(ex.Keys.D) ||
-        kb.wasPressed(ex.Keys.Enter) ||
-        kb.wasPressed(ex.Keys.Space)
-      ) {
-        cycleFn(1);
+        kb.wasPressed(ex.Keys.Space);
+      const dir = left ? -1 : right ? 1 : 0;
+      if (dir !== 0) {
+        if (this.aiContentRow === 0) this.cycleProvider(dir);
+        else if (this.aiContentRow === 4) this.cycleReasoning(dir);
+        else if (this.aiContentRow === 5) this.cycleSort(dir);
+        else if (this.aiContentRow === 7) this.cycleThinkingReasoning(dir);
+        else if (this.aiContentRow === 8) this.cycleThinkingSort(dir);
       }
     } else {
       // Text input fields — enter to type
@@ -1047,6 +1047,28 @@ export class Settings extends ex.Scene<SettingsData> {
     void saveLLMConfig(this.aiConfig);
   }
 
+  private cycleThinkingReasoning(dir: number): void {
+    const idx = REASONING_EFFORT_ORDER.indexOf(this.aiConfig.thinkingReasoningEffort ?? "high");
+    const next =
+      REASONING_EFFORT_ORDER[
+        (idx + dir + REASONING_EFFORT_ORDER.length) % REASONING_EFFORT_ORDER.length
+      ];
+    this.aiConfig.thinkingReasoningEffort = next;
+    this.refreshAIValues();
+    this.updateSelection();
+    void saveLLMConfig(this.aiConfig);
+  }
+
+  private cycleThinkingSort(dir: number): void {
+    const idx = PROVIDER_SORT_ORDER.indexOf(this.aiConfig.thinkingProviderSort ?? "latency");
+    const next =
+      PROVIDER_SORT_ORDER[(idx + dir + PROVIDER_SORT_ORDER.length) % PROVIDER_SORT_ORDER.length];
+    this.aiConfig.thinkingProviderSort = next;
+    this.refreshAIValues();
+    this.updateSelection();
+    void saveLLMConfig(this.aiConfig);
+  }
+
   private startAITyping(row: number): void {
     this.aiTyping = true;
     this.aiTypingField = row;
@@ -1054,6 +1076,7 @@ export class Settings extends ex.Scene<SettingsData> {
     if (row === 1) this.aiTypingBuffer = this.aiConfig.apiKey;
     else if (row === 2) this.aiTypingBuffer = this.aiConfig.model;
     else if (row === 3) this.aiTypingBuffer = this.aiConfig.endpointUrl;
+    else if (row === 6) this.aiTypingBuffer = this.aiConfig.thinkingModel;
     this.updateAITypingDisplay();
 
     // Use native keydown + paste for all text input (Excalibur keys are enums, not chars)
@@ -1076,6 +1099,7 @@ export class Settings extends ex.Scene<SettingsData> {
         if (this.aiTypingField === 1) this.aiConfig.apiKey = this.aiTypingBuffer;
         else if (this.aiTypingField === 2) this.aiConfig.model = this.aiTypingBuffer;
         else if (this.aiTypingField === 3) this.aiConfig.endpointUrl = this.aiTypingBuffer;
+        else if (this.aiTypingField === 6) this.aiConfig.thinkingModel = this.aiTypingBuffer;
         this.stopAITyping();
         this.refreshAIValues();
         this.updateSelection();
@@ -1130,7 +1154,8 @@ export class Settings extends ex.Scene<SettingsData> {
   }
 
   private updateAITypingDisplay(): void {
-    if (this.aiTypingField < 1 || this.aiTypingField > 3) return;
+    const validTextRows = [1, 2, 3, 6];
+    if (!validTextRows.includes(this.aiTypingField)) return;
     const label = this.aiValueLabels[this.aiTypingField];
     if (this.aiTypingField === 1) {
       // API key — show masked

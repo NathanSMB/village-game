@@ -69,6 +69,10 @@ export function executeNPCAction(
     case "complete_goal":
       return execCompleteGoal(npc);
 
+    case "think":
+      // Handled specially by GameWorld — not executed here
+      return { success: true, reason: "Thinking..." };
+
     case "move_to":
       return execMoveTo(npc, action.x, action.y, world);
 

@@ -7,7 +7,7 @@ import type { NPC } from "../actors/npc.ts";
 import type { WorldSnapshot, NPCAction, EntityInfo } from "../types/npc.ts";
 import type { ChatMessage } from "../types/chat.ts";
 import type { LLMProviderConfig, LLMMessage } from "./llm-provider.ts";
-import { callLLM } from "./llm-provider.ts";
+import { callLLM, callThinkingLLM } from "./llm-provider.ts";
 import { getItemQuantity } from "../types/item.ts";
 import { RECIPES } from "../data/recipes.ts";
 
@@ -16,9 +16,10 @@ import { RECIPES } from "../data/recipes.ts";
 const ACTION_SCHEMA = `
 ACTIONS (respond with exactly ONE JSON object):
 
-Goals:
-  {"action":"set_goal","goal":"<description>"} — Set your current objective
+Goals & Thinking:
+  {"action":"set_goal","goal":"<description>"} — Set your current objective (auto-consults the thinking model for strategy)
   {"action":"complete_goal"} — Mark current goal as done (then set a new one!)
+  {"action":"think","question":"<question>"} — Ask your inner reasoning mind a question. Use this when you're unsure what to do, need to plan, or want advice. The answer will appear in your next prompt.
 
 Movement:
   {"action":"move_to","x":<num>,"y":<num>} — Walk to a tile (auto-pathfinds, use for ALL movement)
@@ -127,6 +128,12 @@ function buildSystemPrompt(npc: NPC, snapshot: WorldSnapshot): string {
       ? recentHistory.map((h) => `  ${h.action} => ${h.result}`).join("\n")
       : "  (none)";
 
+  // Thinking history (reasoning model conversations)
+  const thinkingLines =
+    npc.thinkingHistory.length > 0
+      ? npc.thinkingHistory.map((t) => `  Q: ${t.question}\n  A: ${t.answer}`).join("\n")
+      : "";
+
   // Goal section
   let goalSection: string;
   if (!npc.currentGoal) {
@@ -158,7 +165,7 @@ ${noteLines}
 
 RECENT ACTIONS:
 ${historyStr}
-
+${thinkingLines ? `\nTHINKING LOG (your reasoning model's advice):\n${thinkingLines}\n` : ""}
 ${ACTION_SCHEMA}
 
 RULES — READ CAREFULLY:
@@ -179,6 +186,7 @@ RULES — READ CAREFULLY:
 const VALID_ACTIONS = new Set([
   "set_goal",
   "complete_goal",
+  "think",
   "move_to",
   "pick_bush",
   "chop_tree",
@@ -332,9 +340,134 @@ export async function decideNextAction(
   return action;
 }
 
+// ── Thinking model calls ────────────────────────────────────────────
+
+/**
+ * Ask the thinking model to set a goal with a strategy.
+ * Returns the goal string (goal + strategy) to set on the NPC.
+ */
+export async function thinkAboutGoal(
+  npc: NPC,
+  snapshot: WorldSnapshot,
+  config: LLMProviderConfig,
+  signal?: AbortSignal,
+): Promise<string> {
+  const { personality, vitals, inventory } = npc;
+
+  const bagSummary = inventory.bag.map((i) => i.name).join(", ") || "empty";
+  const equipped =
+    Object.entries(inventory.equipment)
+      .filter(([, v]) => v)
+      .map(([k, v]) => `${k}:${v!.name}`)
+      .join(", ") || "nothing";
+
+  const visibleSummary = snapshot.entities
+    .slice(0, 15)
+    .map((e) => `(${e.x},${e.y}) ${e.type}: ${e.details}`)
+    .join("\n  ");
+
+  const notesSummary = npc.memory.notes.join("; ") || "none";
+
+  const prompt = `You are the strategic mind of ${personality.name}, a villager in a 64x64 survival game.
+Personality: ${personality.traits}. ${personality.backstory}
+
+Current state:
+- Position: (${npc.tileX}, ${npc.tileY})
+- Vitals: HP=${Math.round(vitals.health)} Food=${Math.round(vitals.hunger)} Water=${Math.round(vitals.thirst)} Energy=${Math.round(vitals.energy)}
+- Equipped: ${equipped}
+- Bag: ${bagSummary}
+- Notes: ${notesSummary}
+
+Nearby:
+  ${visibleSummary || "Nothing notable nearby"}
+
+Previous goal: ${npc.currentGoal || "(none)"}
+
+Set a NEW specific goal with a step-by-step strategy. Consider survival needs (food, water, tools), personality traits, and what's available nearby. Be concrete — name specific coordinates, items, and actions.
+
+Respond in this format:
+GOAL: <one sentence objective>
+STRATEGY: <2-4 numbered steps to accomplish it>`;
+
+  const messages: LLMMessage[] = [
+    { role: "system", content: prompt },
+    { role: "user", content: "What should your next goal and strategy be?" },
+  ];
+
+  console.group(`%c[THINK] ${npc.npcName} — Goal Planning`, "color:#ff88ff;font-weight:bold");
+
+  const t0 = performance.now();
+  const response = await callThinkingLLM(config, messages, signal);
+  const elapsed = Math.round(performance.now() - t0);
+
+  if (response.error) {
+    console.warn(`Thinking error (${elapsed}ms):`, response.error);
+    console.groupEnd();
+    return "Explore the area and find useful resources";
+  }
+
+  console.log(
+    `%c← Response (${elapsed}ms):%c ${response.text.slice(0, 300)}`,
+    "color:#888",
+    "color:inherit",
+  );
+  console.groupEnd();
+
+  // Store in thinking history
+  npc.pushThinkingHistory("What should my next goal be?", response.text.slice(0, 300));
+
+  return response.text.slice(0, 300);
+}
+
+/**
+ * Ask the thinking model an ad-hoc question from the small model.
+ */
+export async function thinkAboutQuestion(
+  npc: NPC,
+  question: string,
+  snapshot: WorldSnapshot,
+  config: LLMProviderConfig,
+  signal?: AbortSignal,
+): Promise<string> {
+  const visibleSummary = snapshot.entities
+    .slice(0, 10)
+    .map((e) => `(${e.x},${e.y}) ${e.type}: ${e.details}`)
+    .join("; ");
+
+  const prompt = `You are the strategic mind of ${npc.personality.name}, a villager in a survival game.
+Position: (${npc.tileX},${npc.tileY}). Current goal: "${npc.currentGoal || "none"}".
+Vitals: HP=${Math.round(npc.vitals.health)} Food=${Math.round(npc.vitals.hunger)} Water=${Math.round(npc.vitals.thirst)}.
+Nearby: ${visibleSummary || "nothing notable"}.
+Notes: ${npc.memory.notes.join("; ") || "none"}.
+
+Answer the following question concisely and practically. Give specific actionable advice.`;
+
+  const messages: LLMMessage[] = [
+    { role: "system", content: prompt },
+    { role: "user", content: question },
+  ];
+
+  console.group(`%c[THINK] ${npc.npcName} — "${question}"`, "color:#ff88ff;font-weight:bold");
+
+  const t0 = performance.now();
+  const response = await callThinkingLLM(config, messages, signal);
+  const elapsed = Math.round(performance.now() - t0);
+
+  if (response.error) {
+    console.warn(`Thinking error (${elapsed}ms):`, response.error);
+    console.groupEnd();
+    return "I couldn't think clearly about that right now.";
+  }
+
+  const answer = response.text.slice(0, 300);
+  console.log(`%c← Answer (${elapsed}ms):%c ${answer}`, "color:#888", "color:inherit");
+  console.groupEnd();
+
+  npc.pushThinkingHistory(question, answer);
+  return answer;
+}
+
 // ── World snapshot builder ───────────────────────────────────────────
-// This builds the WorldSnapshot from the GameWorld's exposed data.
-// Called by GameWorld.getWorldSnapshotForNPC() which provides the raw data.
 
 export function buildWorldSnapshot(
   entities: EntityInfo[],

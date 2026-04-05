@@ -6,6 +6,7 @@ import type { Item } from "../types/item.ts";
 import { buildingGraphic } from "../systems/building-sprites.ts";
 import { DamageFlash } from "./damage-flash.ts";
 import { FireEffect } from "./fire-effect.ts";
+import { HealthBar } from "./health-bar.ts";
 import type { BuildingSaveState } from "../systems/save-manager.ts";
 
 const TILE_SIZE = 32;
@@ -36,6 +37,7 @@ export class Building extends ex.Actor {
   private fireEffect: FireEffect | null = null;
 
   private damageFlash: DamageFlash;
+  private healthBar: HealthBar;
   private shakeTimer = 0;
   private baseX: number;
 
@@ -79,6 +81,13 @@ export class Building extends ex.Actor {
     }
 
     this.damageFlash = new DamageFlash(this, TILE_SIZE);
+    this.healthBar = new HealthBar({
+      barWidth: 24,
+      offsetY: -18,
+      getHealth: () => ({ current: this.hp, max: this.type.maxHp }),
+      shouldShow: () => this.state === "complete" && this.hp < this.type.maxHp,
+    });
+    this.addChild(this.healthBar);
     this.updateGraphic();
   }
 

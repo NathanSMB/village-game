@@ -114,11 +114,11 @@ export class Building extends ex.Actor {
       }
     }
 
-    // Hologram pulsing alpha
+    // Hologram pulsing alpha (skip when damage flash is controlling opacity)
     if (this.state === "hologram") {
       this.holoPhase += delta * 0.003;
       this.graphics.opacity = 0.35 + Math.sin(this.holoPhase) * 0.1;
-    } else {
+    } else if (!this.damageFlash.isActive()) {
       this.graphics.opacity = 1;
     }
 

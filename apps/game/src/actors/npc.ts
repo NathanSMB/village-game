@@ -103,6 +103,23 @@ export class NPC extends ex.Actor {
   // Goal system — the NPC's current objective, drives decision-making
   currentGoal = "";
 
+  // Object permanence — discovered resource locations persist across vision range
+  // Key format: "type:x,y" (e.g. "tree:30,25"), value: last known state
+  knownLocations: Record<string, string> = {};
+
+  /** Update known locations from visible entities. Called each decision cycle. */
+  updateKnownLocations(entities: { type: string; x: number; y: number; details: string }[]): void {
+    for (const e of entities) {
+      if (e.type === "tree" || e.type === "rock" || e.type === "bush") {
+        this.knownLocations[`${e.type}:${e.x},${e.y}`] = e.details;
+      }
+      // Water is reported as type "building" with "water" in details
+      if (e.details.includes("water") && e.details.includes("drinkable")) {
+        this.knownLocations[`water:${e.x},${e.y}`] = "water";
+      }
+    }
+  }
+
   // Chat inbox — NEW messages heard since last LLM call, consumed by brain
   chatInbox: ChatMessage[] = [];
 
@@ -178,6 +195,7 @@ export class NPC extends ex.Actor {
     if (saved?.facing) this.facing = saved.facing;
     if (saved?.sleeping) this.sleeping = saved.sleeping;
     if (saved?.currentGoal) this.currentGoal = saved.currentGoal;
+    if (saved?.knownLocations) this.knownLocations = { ...saved.knownLocations };
 
     // Vitals & inventory
     this.vitals = saved?.vitals ?? defaultVitals();
@@ -549,6 +567,7 @@ export class NPC extends ex.Actor {
       memory: serializeMemory(this.memory),
       sleeping: this.sleeping,
       currentGoal: this.currentGoal,
+      knownLocations: { ...this.knownLocations },
     };
   }
 }

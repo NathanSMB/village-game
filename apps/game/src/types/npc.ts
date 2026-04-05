@@ -55,6 +55,7 @@ export interface NPCSaveState {
   memory: NPCMemoryState;
   sleeping: boolean;
   currentGoal: string;
+  knownLocations: Record<string, string>;
 }
 
 // ── World Snapshot (what the NPC can see) ────────────────────────────

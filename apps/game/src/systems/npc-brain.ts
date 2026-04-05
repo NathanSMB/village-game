@@ -121,6 +121,21 @@ function buildSystemPrompt(npc: NPC, snapshot: WorldSnapshot): string {
       ? npc.memory.notes.map((n, i) => `  [${i}] ${n}`).join("\n")
       : "  None";
 
+  // Known locations (object permanence) — group by type
+  const locEntries = Object.entries(npc.knownLocations);
+  let knownLocStr = "";
+  if (locEntries.length > 0) {
+    const byType: Record<string, string[]> = {};
+    for (const [key, state] of locEntries) {
+      const [type, coords] = key.split(":");
+      if (!byType[type]) byType[type] = [];
+      byType[type].push(`(${coords}) ${state}`);
+    }
+    knownLocStr = Object.entries(byType)
+      .map(([type, locs]) => `  ${type}: ${locs.join(", ")}`)
+      .join("\n");
+  }
+
   // Recent action history (last 3) so the NPC knows what it's been doing
   const recentHistory = npc.debugHistory.slice(0, 3);
   const historyStr =
@@ -162,7 +177,7 @@ ${chatLines}${newMsgLines ? `\n\nNEW UNREAD MESSAGES:\n${newMsgLines}\n(You shou
 
 NOTES:
 ${noteLines}
-
+${knownLocStr ? `\nKNOWN LOCATIONS (places you've discovered — use these to navigate!):\n${knownLocStr}\n` : ""}
 RECENT ACTIONS:
 ${historyStr}
 ${thinkingLines ? `\nTHINKING LOG (your reasoning model's advice):\n${thinkingLines}\n` : ""}

@@ -786,7 +786,8 @@ export class GameWorld extends ex.Scene<GameWorldData> {
         this.spawnInitialCows();
       }
 
-      // NPCs: restore from save or spawn fresh
+      // NPCs: always clear old ones first, then restore or spawn fresh
+      this.clearAllNPCs();
       if (context.data.type === "load" && context.data.save.npcs) {
         this.restoreNPCStates(context.data.save.npcs);
       } else if (context.data.type === "new") {
@@ -5665,6 +5666,9 @@ export class GameWorld extends ex.Scene<GameWorldData> {
       }
     }
 
+    // Update NPC's object permanence with everything visible
+    npc.updateKnownLocations(entities);
+
     return buildWorldSnapshot(entities, [...npc.chatInbox]);
   }
 
@@ -5800,8 +5804,14 @@ export class GameWorld extends ex.Scene<GameWorldData> {
     return this.npcList.filter((n) => !n.isDead).map((n) => n.getState());
   }
 
-  private restoreNPCStates(states: NPCSaveState[]): void {
-    // Clear any existing NPCs
+  private clearAllNPCs(): void {
+    // Abort all in-flight LLM calls
+    for (const controller of this.npcInFlight.values()) {
+      controller.abort();
+    }
+    this.npcInFlight.clear();
+
+    // Remove all NPC actors from the scene
     for (const npc of this.npcList) {
       const key = tileKey(npc.tileX, npc.tileY);
       if (this.npcByTile.get(key) === npc) {
@@ -5813,7 +5823,9 @@ export class GameWorld extends ex.Scene<GameWorldData> {
     this.npcList = [];
     this.npcByTile.clear();
     this.npcRegisteredTile.clear();
+  }
 
+  private restoreNPCStates(states: NPCSaveState[]): void {
     for (const saved of states) {
       // Find matching definition for the NPC ID
       const def = NPC_DEFINITIONS.find((d) => d.npcId === saved.npcId);

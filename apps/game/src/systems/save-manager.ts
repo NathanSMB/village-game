@@ -14,6 +14,10 @@ export interface GroundItemSaveState {
   tileX: number;
   tileY: number;
   items: Item[];
+  /** Per-item age in ms (time on ground). Absent in old saves → 0. */
+  ages?: number[];
+  /** Per-item permanent flag. Absent in old saves → false. */
+  permanent?: boolean[];
 }
 
 export interface TreeSaveState {

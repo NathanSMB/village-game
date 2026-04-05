@@ -105,6 +105,8 @@ export class NPC extends ex.Actor {
 
   // Goal system — the NPC's current objective, drives decision-making
   todoList: NPCTodoItem[] = [];
+  /** Skip auto-check for N action cycles after a fresh plan to avoid instant re-planning. */
+  todoGracePeriod = 0;
 
   // Claimed bed — the NPC's assigned bed for sleeping
   claimedBed: { x: number; y: number } | null = null;
@@ -133,6 +135,13 @@ export class NPC extends ex.Actor {
    */
   autoCheckTodos(): void {
     if (this.todoList.length === 0) return;
+
+    // Grace period: skip auto-check for a few cycles after a fresh plan
+    // so already-met conditions don't instantly clear the new plan
+    if (this.todoGracePeriod > 0) {
+      this.todoGracePeriod--;
+      return;
+    }
 
     const bagItemNames = this.inventory.bag.map((i) => i.id);
     const equippedIds = Object.values(this.inventory.equipment)

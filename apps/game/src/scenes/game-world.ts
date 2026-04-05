@@ -5526,6 +5526,7 @@ export class GameWorld extends ex.Scene<GameWorldData> {
           npc.debugLastResult = "⏳ Planning...";
           const todos = await thinkAboutPlan(npc, snapshot, config, abortController.signal);
           npc.todoList = todos;
+          npc.todoGracePeriod = 3; // skip auto-check for 3 cycles so new plan isn't instantly cleared
           const summary = todos.map((t) => t.task).join(" → ");
           npc.debugLastResult = `✓ Plan: ${summary.slice(0, 80)}`;
           npc.pushDebugHistory('{"action":"plan"}', `✓ ${todos.length} todos`, worldChanges);

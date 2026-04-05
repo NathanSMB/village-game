@@ -77,6 +77,7 @@ export async function callLLM(
   config: LLMProviderConfig,
   messages: LLMMessage[],
   signal?: AbortSignal,
+  maxTokens?: number,
 ): Promise<LLMResponse> {
   try {
     switch (config.provider) {
@@ -87,7 +88,7 @@ export async function callLLM(
       case "ollama":
         return await callOllama(config, messages, signal);
       case "custom":
-        return await callOpenRouter(config, messages, signal);
+        return await callOpenRouter(config, messages, signal, maxTokens);
       default:
         return { text: "", error: `Unknown provider: ${String(config.provider)}` };
     }
@@ -113,7 +114,7 @@ export async function callThinkingLLM(
     reasoningEffort: config.thinkingReasoningEffort ?? "high",
     providerSort: config.thinkingProviderSort ?? "latency",
   };
-  return callLLM(thinkingConfig, messages, signal);
+  return callLLM(thinkingConfig, messages, signal, 16000);
 }
 
 // ── Claude (Anthropic Messages API) ──────────────────────────────────
@@ -239,6 +240,7 @@ async function callOpenRouter(
   config: LLMProviderConfig,
   messages: LLMMessage[],
   signal?: AbortSignal,
+  maxTokens?: number,
 ): Promise<LLMResponse> {
   const resp = await fetch(`${config.endpointUrl}/v1/chat/completions`, {
     method: "POST",
@@ -248,7 +250,7 @@ async function callOpenRouter(
     },
     body: JSON.stringify({
       model: config.model,
-      max_tokens: 2048,
+      max_tokens: maxTokens ?? 2048,
       messages: messages.map((m) => ({ role: m.role, content: m.content })),
       reasoning: { effort: config.reasoningEffort || "low" },
       provider: {

@@ -484,31 +484,26 @@ ${ctx.historyStr}
 
 ${ACTION_SCHEMA}
 
-Create a TODO LIST for this villager. Each item needs a specific task AND a completion condition — how to know it's done.
+PRIORITIES:
+1. Water < 20 or Food < 20 → fix this first
+2. No claimed bed and Energy < 500 → get a bed (bedroll = 1 cow_hide + 1 wool)
+3. No tools → craft a hammer (1 small_rock + 1 branch)
+4. Energy drains 1/sec, only recoverable by sleeping in YOUR bed
 
-RULES FOR GOOD TASKS:
-- BAD (too vague, NEVER): "Find food" / "Explore the area" / "Gather resources"
-- GOOD: specific action + specific target + clear done condition
-- Each task must name a SPECIFIC resource, item, or craft
-- Each task should map to 1-3 game actions (move_to, pick_bush, craft, etc.)
-- Don't include coordinates — the action model handles navigation from known locations
-- If the task produces an item on the ground (chopping, mining, killing), include picking it up as part of the completion condition
-- ALWAYS include "Equip X" tasks before tasks that need a tool. Hatchet for trees, pickaxe for rocks, hammer for building, best weapon for fighting. Tools massively increase efficiency.
+Create a 3-6 item todo list. Each item: {"task":"what to do","doneWhen":"how to verify it's done"}
+- Tasks must be SPECIFIC (name exact items/resources, not "gather resources")
+- Include equip steps before tool-dependent tasks
+- doneWhen must use one of these verifiable formats:
+  "Have X in bag" / "X is in bag or equipped" / "X is equipped" / "Thirst is above N" / "Hunger is above N" / "Have a claimed bed"
+- If a task drops items on the ground, include picking them up
 
-CRITICAL PRIORITIES (in order):
-1. Water < 20 or Food < 20 → first tasks MUST fix this immediately
-2. No claimed bed and Energy < 500 → plan must include getting/building a bed (bedroll needs 1 cow_hide + 1 wool)
-3. No tools → craft a hammer (1 small_rock + 1 branch) so you can build things
-4. Energy drains at 1/sec. The ONLY way to recover is sleeping in YOUR claimed bed. If energy hits 0, you die.
-
-doneWhen format: Use phrases like "Have X in bag", "X is in bag or equipped", "Thirst is above N", "Have a claimed bed". These are auto-checked against game state.
-
-Respond with ONLY a JSON array of objects with "task" and "doneWhen" fields:
-[{"task":"Equip hatchet for chopping","doneWhen":"Hatchet is equipped"},{"task":"Chop a tree and pick up branches","doneWhen":"Have at least 2 branch in bag"},{"task":"Craft a hammer","doneWhen":"Hammer is in bag or equipped"}]`;
+Output ONLY a JSON array, no other text:
+[{"task":"Go to water and drink","doneWhen":"Thirst is above 40"},{"task":"Pick berries from a bush","doneWhen":"Have berry in bag"},{"task":"Mine a rock and pick up the drops","doneWhen":"Have small_rock in bag"},{"task":"Chop a tree and pick up a branch","doneWhen":"Have branch in bag"},{"task":"Craft a hammer","doneWhen":"Hammer is in bag or equipped"}]`;
 
   const messages: LLMMessage[] = [
     { role: "system", content: prompt },
-    { role: "user", content: "Create a todo list for your next plan." },
+    { role: "user", content: "Output your todo list as a JSON array. Start with [" },
+    { role: "assistant", content: "[" },
   ];
 
   console.group(`%c[THINK] ${npc.npcName} — Planning`, "color:#ff88ff;font-weight:bold");
@@ -548,8 +543,9 @@ Respond with ONLY a JSON array of objects with "task" and "doneWhen" fields:
   );
   console.groupEnd();
 
-  // Parse JSON array from response
-  const todos = parseTodoList(response.text);
+  // Parse JSON array from response — prepend "[" since the assistant prefill starts with it
+  const fullResponse = response.text.startsWith("[") ? response.text : "[" + response.text;
+  const todos = parseTodoList(fullResponse);
 
   // Store in thinking history
   npc.pushThinkingHistory("Create a plan", todos.map((t) => t.task).join(" → "));
@@ -611,12 +607,16 @@ function parseTodoList(text: string): NPCTodoItem[] {
   const items = tryParseArray(jsonStr);
   if (items.length > 0) return items.slice(0, 8);
 
-  // Fallback: extract individual {task, doneWhen} objects via regex
-  const objectPattern = /\{\s*"task"\s*:\s*"([^"]+)"\s*,\s*"doneWhen"\s*:\s*"([^"]+)"\s*\}/g;
+  // Fallback: extract individual {task, doneWhen} objects via regex (either key order)
+  const objectPattern1 = /\{\s*"task"\s*:\s*"([^"]+)"\s*,\s*"doneWhen"\s*:\s*"([^"]+)"\s*\}/g;
+  const objectPattern2 = /\{\s*"doneWhen"\s*:\s*"([^"]+)"\s*,\s*"task"\s*:\s*"([^"]+)"\s*\}/g;
   const regexItems: NPCTodoItem[] = [];
   let match;
-  while ((match = objectPattern.exec(text)) !== null) {
+  while ((match = objectPattern1.exec(text)) !== null) {
     regexItems.push({ task: match[1].trim(), done: false, doneWhen: match[2].trim() });
+  }
+  while ((match = objectPattern2.exec(text)) !== null) {
+    regexItems.push({ task: match[2].trim(), done: false, doneWhen: match[1].trim() });
   }
   if (regexItems.length > 0) return regexItems.slice(0, 8);
 
@@ -628,7 +628,7 @@ function parseTodoList(text: string): NPCTodoItem[] {
   }
   if (taskItems.length > 0) return taskItems.slice(0, 8);
 
-  console.warn("[NPC Plan] Could not parse todo list from:", text.slice(0, 300));
+  console.warn("[NPC Plan] Could not parse todo list from:", text.slice(0, 500));
 
   return [
     { task: "Find and drink from a water source", done: false, doneWhen: "Thirst is above 40" },

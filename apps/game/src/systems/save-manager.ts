@@ -2,6 +2,7 @@ import type { CharacterAppearance } from "../types/character.ts";
 import type { Equipment } from "../types/inventory.ts";
 import type { Item } from "../types/item.ts";
 import type { VitalsState } from "../types/vitals.ts";
+import type { NPCSaveState } from "../types/npc.ts";
 
 export interface BerryBushSaveState {
   tileX: number;
@@ -112,6 +113,7 @@ export interface SaveData {
   edgeBuildings?: EdgeBuildingSaveState[];
   sheep?: SheepSaveState[];
   cows?: CowSaveState[];
+  npcs?: NPCSaveState[];
 }
 
 const DB_NAME = "village-game";

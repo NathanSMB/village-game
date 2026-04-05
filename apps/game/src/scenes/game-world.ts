@@ -86,10 +86,20 @@ import {
   type ChatMessage,
   type ChatMode,
   CHAT_MODE_ORDER,
+  CHAT_MODE_RADIUS,
   CHAT_EXPIRE_MS,
   CHAT_MODE_COLORS,
   CHAT_MODE_VERBS,
+  chebyshevDistance,
 } from "../types/chat.ts";
+import { NPC } from "../actors/npc.ts";
+import type { NPCSaveState, EntityInfo } from "../types/npc.ts";
+import { NPC_DEFINITIONS } from "../data/npc-definitions.ts";
+import { type LLMProviderConfig, defaultConfig } from "../systems/llm-provider.ts";
+import { loadLLMConfig } from "../systems/llm-settings.ts";
+import { decideNextAction, buildWorldSnapshot } from "../systems/npc-brain.ts";
+import { executeNPCAction, type GameWorldNPCInterface } from "../systems/npc-actions.ts";
+import { findPath } from "../systems/pathfinding.ts";
 
 const MAP_COLS = 64;
 const MAP_ROWS = 64;
@@ -218,6 +228,13 @@ export class GameWorld extends ex.Scene<GameWorldData> {
   private cowByTile = new Map<number, Cow>();
   private cowRegisteredTile = new Map<Cow, number>();
   private cowWildSpawnTimer = WILD_SPAWN_INTERVAL_MS;
+
+  // NPC system
+  private npcList: NPC[] = [];
+  private npcByTile = new Map<number, NPC>();
+  private npcRegisteredTile = new Map<NPC, number>();
+  private npcInFlight = new Map<string, AbortController>(); // in-flight LLM calls
+  private llmConfig: LLMProviderConfig = defaultConfig();
 
   // Sleeping state
   private playerSleeping = false;
@@ -757,6 +774,18 @@ export class GameWorld extends ex.Scene<GameWorldData> {
         this.spawnInitialCows();
       }
 
+      // NPCs: restore from save or spawn fresh
+      if (context.data.type === "load" && context.data.save.npcs) {
+        this.restoreNPCStates(context.data.save.npcs);
+      } else if (context.data.type === "new") {
+        this.spawnInitialNPCs();
+      }
+
+      // Load LLM config for NPC brains
+      void loadLLMConfig().then((config) => {
+        this.llmConfig = config;
+      });
+
       // Recalculate indoor lighting after restoring buildings
       this.recalculateIndoorLighting();
 
@@ -849,6 +878,7 @@ export class GameWorld extends ex.Scene<GameWorldData> {
     this.updateBreeding(delta);
     this.updateWildSpawn(delta);
     this.updateCowWildSpawn(delta);
+    this.updateNPCs(delta);
 
     // Death check while inventory is open (game keeps running)
     if (this.inventoryMenuOpen && this.player && !isAlive(this.player.vitals)) {
@@ -3380,9 +3410,8 @@ export class GameWorld extends ex.Scene<GameWorldData> {
     this.chatMessages.push(msg);
     this.chatLog?.scrollToBottom();
 
-    // In the future, distribute to nearby AI agents here:
-    // for each agent within CHAT_MODE_RADIUS[msg.mode] Chebyshev distance,
-    // push msg into that agent's personal chat log.
+    // Distribute to nearby NPC agents
+    this.distributeMessageToNPCs(msg, null);
 
     // Spawn speech bubble as a child of the player (auto-attaches via constructor)
     new SpeechBubble(msg.text, this.player, msg.mode);
@@ -5256,6 +5285,430 @@ export class GameWorld extends ex.Scene<GameWorldData> {
     for (const saved of states) {
       const cow = this.addCow(saved.tileX, saved.tileY);
       cow.restoreState(saved);
+    }
+  }
+
+  // ==================== NPC System ====================
+
+  private spawnInitialNPCs(): void {
+    const center = 32;
+    for (const def of NPC_DEFINITIONS) {
+      // Find a random walkable tile within 10 tiles of center
+      let tx = center;
+      let ty = center;
+      for (let attempts = 0; attempts < 50; attempts++) {
+        tx = center + Math.floor(Math.random() * 20) - 10;
+        ty = center + Math.floor(Math.random() * 20) - 10;
+        if (tx < 0 || tx >= MAP_COLS || ty < 0 || ty >= MAP_ROWS) continue;
+        const k = tileKey(tx, ty);
+        if (this.blockedTiles.has(k) || this.waterTiles.has(k)) continue;
+        break;
+      }
+      this.addNPC(tx, ty, def);
+    }
+  }
+
+  private addNPC(
+    tileX: number,
+    tileY: number,
+    def: (typeof NPC_DEFINITIONS)[0],
+    saved?: NPCSaveState,
+  ): NPC {
+    const npc = new NPC(tileX, tileY, def, saved ?? undefined);
+    npc.setBlockedCheck((fromX, fromY, toX, toY) => {
+      const toKey = tileKey(toX, toY);
+      if (this.blockedTiles.has(toKey)) return true;
+      const ek = edgeKeyBetween(fromX, fromY, toX, toY);
+      return ek !== null && this.blockedEdges.has(ek);
+    });
+    this.npcList.push(npc);
+    const key = tileKey(tileX, tileY);
+    this.npcByTile.set(key, npc);
+    this.npcRegisteredTile.set(npc, key);
+    this.blockedTiles.add(key);
+    this.add(npc);
+    return npc;
+  }
+
+  private removeNPC(npc: NPC): void {
+    const key = this.npcRegisteredTile.get(npc);
+    if (key !== undefined) {
+      if (this.npcByTile.get(key) === npc) {
+        this.npcByTile.delete(key);
+        this.blockedTiles.delete(key);
+      }
+      this.npcRegisteredTile.delete(npc);
+    }
+    this.npcList = this.npcList.filter((n) => n !== npc);
+    const controller = this.npcInFlight.get(npc.npcId);
+    if (controller) {
+      controller.abort();
+      this.npcInFlight.delete(npc.npcId);
+    }
+    this.remove(npc);
+  }
+
+  private updateNPCs(_delta: number): void {
+    for (const npc of this.npcList) {
+      if (npc.isDead) continue;
+
+      // Tile tracking reconciliation (same pattern as sheep)
+      const currentKey = tileKey(npc.tileX, npc.tileY);
+      const registeredKey = this.npcRegisteredTile.get(npc);
+      if (registeredKey !== currentKey) {
+        if (registeredKey !== undefined) {
+          if (this.npcByTile.get(registeredKey) === npc) {
+            this.npcByTile.delete(registeredKey);
+            this.blockedTiles.delete(registeredKey);
+          }
+        }
+        this.npcByTile.set(currentKey, npc);
+        this.blockedTiles.add(currentKey);
+        this.npcRegisteredTile.set(npc, currentKey);
+      }
+
+      // Death check
+      if (npc.vitals.health <= 0) {
+        npc.isDead = true;
+        // Drop inventory items on the ground
+        for (const item of npc.inventory.bag) {
+          this.dropResourceNear(npc.tileX, npc.tileY, item);
+        }
+        npc.inventory.bag = [];
+        this.removeNPC(npc);
+        continue;
+      }
+
+      // Decision trigger — only if NPC is idle and no in-flight LLM call
+      if (!npc.isBusy() && !this.npcInFlight.has(npc.npcId)) {
+        // Check for pending path from move_to
+        if (npc.pendingPath.length > 0) {
+          const nextDir = npc.pendingPath.shift()!;
+          const moved = npc.moveToTile(nextDir);
+          if (!moved) {
+            npc.pendingPath = []; // Path blocked, clear it
+          }
+          continue;
+        }
+
+        // No LLM config or no API key — random wander fallback
+        if (!this.llmConfig.apiKey && this.llmConfig.provider !== "ollama") {
+          this.npcFallbackWander(npc);
+          continue;
+        }
+
+        // Call the LLM brain
+        this.triggerNPCDecision(npc);
+      }
+    }
+  }
+
+  private npcFallbackWander(npc: NPC): void {
+    // Simple random wander (sheep-like)
+    if (Math.random() < 0.3) {
+      const dirs = ["up", "down", "left", "right"] as const;
+      npc.moveToTile(dirs[Math.floor(Math.random() * 4)]);
+    } else {
+      npc.startWaiting(2000 + Math.random() * 3000);
+    }
+  }
+
+  private triggerNPCDecision(npc: NPC): void {
+    const abortController = new AbortController();
+    this.npcInFlight.set(npc.npcId, abortController);
+
+    const snapshot = this.getWorldSnapshotForNPC(npc);
+    const config = this.llmConfig;
+
+    decideNextAction(npc, snapshot, config, abortController.signal)
+      .then((action) => {
+        this.npcInFlight.delete(npc.npcId);
+        if (npc.isDead) return;
+
+        // Clear chat inbox since the brain has consumed them
+        npc.chatInbox = [];
+
+        executeNPCAction(npc, action, this.getNPCInterface());
+      })
+      .catch(() => {
+        this.npcInFlight.delete(npc.npcId);
+      });
+  }
+
+  private getWorldSnapshotForNPC(npc: NPC): ReturnType<typeof buildWorldSnapshot> {
+    const entities: EntityInfo[] = [];
+    const cx = npc.tileX;
+    const cy = npc.tileY;
+
+    for (let dy = -6; dy <= 6; dy++) {
+      for (let dx = -6; dx <= 6; dx++) {
+        const tx = cx + dx;
+        const ty = cy + dy;
+        if (tx < 0 || tx >= MAP_COLS || ty < 0 || ty >= MAP_ROWS) continue;
+        const key = tileKey(tx, ty);
+
+        // Water
+        if (this.waterTiles.has(key)) {
+          entities.push({ type: "building", x: tx, y: ty, details: "water (drinkable)" });
+        }
+
+        // Berry bush
+        const bush = this.bushByTile.get(key);
+        if (bush) {
+          entities.push({
+            type: "bush",
+            x: tx,
+            y: ty,
+            details: bush.canPick() ? "berry bush (has berries)" : "berry bush (no berries)",
+          });
+        }
+
+        // Tree
+        const tree = this.treeByTile.get(key);
+        if (tree) {
+          entities.push({
+            type: "tree",
+            x: tx,
+            y: ty,
+            details: tree.isChoppedDown() ? "stump (regrowing)" : "tree (choppable)",
+          });
+        }
+
+        // Rock
+        const rock = this.rockByTile.get(key);
+        if (rock) {
+          entities.push({ type: "rock", x: tx, y: ty, details: "big rock" });
+        }
+
+        // Ground items
+        const stack = this.groundItems.get(key);
+        if (stack && !stack.isEmpty()) {
+          const items = stack.getItems();
+          const names = items.map((i) => i.name).join(", ");
+          entities.push({ type: "ground_items", x: tx, y: ty, details: names });
+        }
+
+        // Building
+        const building = this.buildingByTile.get(key);
+        if (building) {
+          let detail = `${building.type.name} (${building.state})`;
+          if (building.type.storage && building.storageSlots) {
+            const used = building.storageSlots.filter((s) => s !== null).length;
+            const total = building.storageSlots.length;
+            detail += ` [${used}/${total} items]`;
+          }
+          if (building.isBurning) detail += " [burning]";
+          entities.push({ type: "building", x: tx, y: ty, details: detail });
+        }
+
+        // Sheep
+        const sheep = this.sheepByTile.get(key);
+        if (sheep && !sheep.isDead) {
+          entities.push({
+            type: "sheep",
+            x: tx,
+            y: ty,
+            details: `sheep (HP: ${sheep.hp}/${sheep.maxHp})`,
+          });
+        }
+
+        // Cow
+        const cow = this.cowByTile.get(key);
+        if (cow && !cow.isDead) {
+          entities.push({
+            type: "cow",
+            x: tx,
+            y: ty,
+            details: `cow (HP: ${cow.hp}/${cow.maxHp})`,
+          });
+        }
+
+        // Other NPCs
+        const otherNpc = this.npcByTile.get(key);
+        if (otherNpc && otherNpc !== npc && !otherNpc.isDead) {
+          entities.push({
+            type: "npc",
+            x: tx,
+            y: ty,
+            details: `${otherNpc.npcName} facing ${otherNpc.facing}`,
+          });
+        }
+      }
+    }
+
+    // Player
+    if (this.player) {
+      const px = this.player.getTileX();
+      const py = this.player.getTileY();
+      if (chebyshevDistance(cx, cy, px, py) <= 6) {
+        entities.push({
+          type: "player",
+          x: px,
+          y: py,
+          details: `player "${this.playerName}" facing ${this.player.getFacing()}`,
+        });
+      }
+    }
+
+    // Edge buildings in vision (check all edges in the range)
+    for (const [edgeKey, edge] of this.edgeBuildings) {
+      const decoded = decodeEdgeKey(edgeKey);
+      if (!decoded) continue;
+      const { x: ex2, y: ey } = decoded;
+      if (chebyshevDistance(cx, cy, ex2, ey) <= 6) {
+        let detail = `${edge.type.name} (${edge.state})`;
+        if (edge.type.interactable) detail += edge.isOpen ? " [open]" : " [closed]";
+        entities.push({ type: "edge_building", x: ex2, y: ey, details: detail });
+      }
+    }
+
+    return buildWorldSnapshot(entities, [...npc.chatInbox]);
+  }
+
+  private getNPCInterface(): GameWorldNPCInterface {
+    return {
+      getBushAt: (x, y) => this.bushByTile.get(tileKey(x, y)),
+      getTreeAt: (x, y) => this.treeByTile.get(tileKey(x, y)),
+      getRockAt: (x, y) => this.rockByTile.get(tileKey(x, y)),
+      getGroundItemsAt: (x, y) => this.groundItems.get(tileKey(x, y)),
+      getBuildingAt: (x, y) => this.buildingByTile.get(tileKey(x, y)),
+      getEdgeBetween: (fromX, fromY, toX, toY) => {
+        const ek = edgeKeyBetween(fromX, fromY, toX, toY);
+        return ek != null ? this.edgeBuildings.get(ek) : undefined;
+      },
+      isWaterTile: (x, y) => this.waterTiles.has(tileKey(x, y)),
+      isBlockedTile: (x, y) => this.blockedTiles.has(tileKey(x, y)),
+      getPlayerInfo: () => {
+        if (!this.player) return null;
+        return {
+          tileX: this.player.getTileX(),
+          tileY: this.player.getTileY(),
+          name: this.playerName,
+        };
+      },
+      npcDropItem: (_npc, item, tx, ty) => {
+        this.dropItemAt(tx, ty, item, false);
+      },
+      npcToggleDoor: (edge) => {
+        edge.toggle();
+        const ek = this.findEdgeKey(edge);
+        if (ek !== null) {
+          if (edge.isSolid()) {
+            this.blockedEdges.add(ek);
+          } else {
+            this.blockedEdges.delete(ek);
+          }
+        }
+        this.recalculateIndoorLighting();
+      },
+      npcToggleTileDoor: (building) => {
+        building.toggle();
+        const k = tileKey(building.tileX, building.tileY);
+        if (building.isSolid()) {
+          this.blockedTiles.add(k);
+        } else {
+          this.blockedTiles.delete(k);
+        }
+      },
+      npcChat: (npc2, text, mode) => {
+        const msg: ChatMessage = {
+          sender: npc2.npcName,
+          text,
+          tileX: npc2.tileX,
+          tileY: npc2.tileY,
+          mode,
+          timestamp: Date.now(),
+        };
+        this.chatMessages.push(msg);
+        this.chatLog?.scrollToBottom();
+        new SpeechBubble(msg.text, npc2, msg.mode);
+        this.distributeMessageToNPCs(msg, npc2);
+      },
+      npcPlaceBuilding: (buildingId, x, y, rotation) => {
+        const buildType = BUILDING_TYPE_MAP[buildingId];
+        if (!buildType) return false;
+        const k = tileKey(x, y);
+        if (this.blockedTiles.has(k) || this.waterTiles.has(k)) return false;
+        if (this.buildingByTile.has(k)) return false;
+        const building = new Building(buildType, x, y, "hologram", rotation);
+        building.onDestroy = () => this.removeBuilding(building, k);
+        building.onFireStateChange = () => this.recalculateIndoorLighting();
+        this.buildings.push(building);
+        this.buildingByTile.set(k, building);
+        this.add(building);
+        return true;
+      },
+      dropResourceNear: (cx2, cy2, item) => {
+        this.dropResourceNear(cx2, cy2, item);
+      },
+      findPathDirections: (fromX, fromY, toX, toY) => {
+        const path = findPath(fromX, fromY, toX, toY, (fx, fy, tx, ty) => {
+          const k = tileKey(tx, ty);
+          if (this.blockedTiles.has(k)) return true;
+          const ek = edgeKeyBetween(fx, fy, tx, ty);
+          return ek !== null && this.blockedEdges.has(ek);
+        });
+        if (!path || path.length === 0) return null;
+        // Convert tile positions to directions
+        const dirs: import("../actors/player.ts").Direction[] = [];
+        let px = fromX;
+        let py = fromY;
+        for (const step of path) {
+          if (step.x < px) dirs.push("left");
+          else if (step.x > px) dirs.push("right");
+          else if (step.y < py) dirs.push("up");
+          else dirs.push("down");
+          px = step.x;
+          py = step.y;
+        }
+        return dirs;
+      },
+    };
+  }
+
+  private findEdgeKey(edge: EdgeBuilding): number | null {
+    for (const [key, e] of this.edgeBuildings) {
+      if (e === edge) return key;
+    }
+    return null;
+  }
+
+  private distributeMessageToNPCs(msg: ChatMessage, sender: NPC | null): void {
+    for (const npc of this.npcList) {
+      if (npc === sender) continue;
+      if (npc.isDead) continue;
+      const dist = chebyshevDistance(msg.tileX, msg.tileY, npc.tileX, npc.tileY);
+      if (dist <= CHAT_MODE_RADIUS[msg.mode]) {
+        npc.chatInbox.push(msg);
+      }
+    }
+  }
+
+  // ==================== NPC Save/Load ====================
+
+  getNPCStates(): NPCSaveState[] {
+    return this.npcList.filter((n) => !n.isDead).map((n) => n.getState());
+  }
+
+  private restoreNPCStates(states: NPCSaveState[]): void {
+    // Clear any existing NPCs
+    for (const npc of this.npcList) {
+      const key = tileKey(npc.tileX, npc.tileY);
+      if (this.npcByTile.get(key) === npc) {
+        this.npcByTile.delete(key);
+        this.blockedTiles.delete(key);
+      }
+      this.remove(npc);
+    }
+    this.npcList = [];
+    this.npcByTile.clear();
+    this.npcRegisteredTile.clear();
+
+    for (const saved of states) {
+      // Find matching definition for the NPC ID
+      const def = NPC_DEFINITIONS.find((d) => d.npcId === saved.npcId);
+      if (!def) continue;
+      this.addNPC(saved.tileX, saved.tileY, def, saved);
     }
   }
 }

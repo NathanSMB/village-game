@@ -79,7 +79,7 @@ import { IndoorDarknessOverlay, getIndoorTiles } from "../systems/indoor-lightin
 import { Sheep } from "../actors/sheep.ts";
 import { Cow } from "../actors/cow.ts";
 import { detectBreedingEnclosures } from "../systems/enclosure.ts";
-import { getUIScale } from "../systems/ui-scale.ts";
+import { getUIScale, UI_REF_HEIGHT } from "../systems/ui-scale.ts";
 import { SpeechBubble } from "../actors/speech-bubble.ts";
 import { ChatLog } from "../actors/chat-log.ts";
 import {
@@ -87,9 +87,8 @@ import {
   type ChatMode,
   CHAT_MODE_ORDER,
   CHAT_EXPIRE_MS,
-  CHAT_MODE_RADIUS,
   CHAT_MODE_COLORS,
-  CHAT_MODE_LABELS,
+  CHAT_MODE_VERBS,
 } from "../types/chat.ts";
 
 const MAP_COLS = 64;
@@ -307,7 +306,7 @@ export class GameWorld extends ex.Scene<GameWorldData> {
   // Chat state
   private chatMessages: ChatMessage[] = [];
   private chatOpen = false;
-  private chatPanel: ex.ScreenElement | null = null;
+  private chatInputPanel: ex.ScreenElement | null = null;
   private chatInputText = "";
   private chatMode: ChatMode = "talk";
   private chatLog: ChatLog | null = null;
@@ -681,11 +680,31 @@ export class GameWorld extends ex.Scene<GameWorldData> {
         this.remove(this.chatLog);
         this.chatLog = null;
       }
+      if (this.chatInputPanel) {
+        this.remove(this.chatInputPanel);
+        this.chatInputPanel = null;
+      }
       this.chatMessages = [];
+      this.chatOpen = false;
+      this.chatInputText = "";
       this.playerName = context.data.type === "load" ? context.data.save.name : "Player";
-      // Position chat log above the vitals hud (vitals is at y=8, height ~56px)
-      const chatLogY = this.engine.screen.resolution.height / this.uiScale - 8;
-      this.chatLog = new ChatLog(() => this.chatMessages, this.uiScale, chatLogY * this.uiScale);
+
+      // Chat input/hint panel sits at the very bottom-left.
+      // UI_REF_HEIGHT (600) is the design-unit screen height; multiplying by
+      // uiScale converts to ScreenElement pixel coordinates.
+      const inputPanelH = 20;
+      const inputY = (UI_REF_HEIGHT - 8) * this.uiScale; // 8 design-units from bottom
+      this.chatInputPanel = new ex.ScreenElement({
+        pos: ex.vec(8 * this.uiScale, inputY),
+        z: 100,
+        anchor: ex.vec(0, 1),
+      });
+      this.updateChatInputPanel();
+      this.add(this.chatInputPanel);
+
+      // Chat log sits above the input panel
+      const chatLogY = (UI_REF_HEIGHT - 8 - inputPanelH - 4) * this.uiScale;
+      this.chatLog = new ChatLog(() => this.chatMessages, this.uiScale, chatLogY);
       this.add(this.chatLog);
 
       // Restore berry bush states from save
@@ -3264,7 +3283,8 @@ export class GameWorld extends ex.Scene<GameWorldData> {
 
   // ==================== Chat System ====================
 
-  private readonly CHAT_PANEL_WIDTH = 280;
+  private readonly CHAT_INPUT_WIDTH = 280;
+  private readonly CHAT_INPUT_HEIGHT = 20;
   private readonly CHAT_MAX_INPUT = 80;
 
   private openChat(): void {
@@ -3273,34 +3293,15 @@ export class GameWorld extends ex.Scene<GameWorldData> {
     this.chatInputText = "";
     this.chatMode = "talk";
     this.player.lockInput();
-
-    const panelW = this.CHAT_PANEL_WIDTH;
-    const panelH = 62;
-    const screenW = this.engine.screen.resolution.width;
-    const screenH = this.engine.screen.resolution.height;
-
-    this.chatPanel = new ex.ScreenElement({
-      pos: ex.vec(
-        (screenW / 2) * this.uiScale - (panelW / 2) * this.uiScale,
-        screenH * this.uiScale - panelH * this.uiScale - 8 * this.uiScale,
-      ),
-      z: 200,
-      anchor: ex.vec(0, 0),
-    });
-
-    this.updateChatPanel();
-    this.add(this.chatPanel);
+    this.updateChatInputPanel();
   }
 
   private closeChat(): void {
     this.chatOpen = false;
-    if (this.chatPanel) {
-      this.remove(this.chatPanel);
-      this.chatPanel = null;
-    }
     if (this.player) {
       this.player.unlockInput();
     }
+    this.updateChatInputPanel();
   }
 
   private handleChatInput(kb: ex.Keyboard): void {
@@ -3308,7 +3309,7 @@ export class GameWorld extends ex.Scene<GameWorldData> {
     if (kb.wasPressed(ex.Keys.Tab)) {
       const idx = CHAT_MODE_ORDER.indexOf(this.chatMode);
       this.chatMode = CHAT_MODE_ORDER[(idx + 1) % CHAT_MODE_ORDER.length];
-      this.updateChatPanel();
+      this.updateChatInputPanel();
       return;
     }
 
@@ -3331,7 +3332,7 @@ export class GameWorld extends ex.Scene<GameWorldData> {
     if (kb.wasPressed(ex.Keys.Backspace)) {
       if (this.chatInputText.length > 0) {
         this.chatInputText = this.chatInputText.slice(0, -1);
-        this.updateChatPanel();
+        this.updateChatInputPanel();
       }
       return;
     }
@@ -3347,7 +3348,7 @@ export class GameWorld extends ex.Scene<GameWorldData> {
       const ch = chatKeyToChar(key, shift);
       if (ch !== null) {
         this.chatInputText += ch;
-        this.updateChatPanel();
+        this.updateChatInputPanel();
         return;
       }
     }
@@ -3375,11 +3376,17 @@ export class GameWorld extends ex.Scene<GameWorldData> {
     this.add(new SpeechBubble(msg.text, this.player, msg.mode));
   }
 
-  private updateChatPanel(): void {
-    if (!this.chatPanel) return;
+  /**
+   * Renders the bottom-left chat hint / text input panel.
+   * - When chat is closed: "Press [T] to chat" in dim text
+   * - When chat is open + empty: placeholder "Currently talking [Press tab to cycle]" in mode color
+   * - When chat is open + typing: user text in mode color with blinking cursor
+   */
+  private updateChatInputPanel(): void {
+    if (!this.chatInputPanel) return;
 
-    const panelW = this.CHAT_PANEL_WIDTH;
-    const panelH = 62;
+    const panelW = this.CHAT_INPUT_WIDTH;
+    const panelH = this.CHAT_INPUT_HEIGHT;
 
     const canvas = new ex.Canvas({
       width: Math.round(panelW * this.uiScale),
@@ -3389,71 +3396,66 @@ export class GameWorld extends ex.Scene<GameWorldData> {
         ctx.imageSmoothingEnabled = false;
         ctx.scale(this.uiScale, this.uiScale);
 
-        // Background
-        ctx.fillStyle = "rgba(10, 10, 20, 0.88)";
+        if (!this.chatOpen) {
+          // Idle hint: "Press [T] to chat"
+          ctx.font = "10px monospace";
+          ctx.textBaseline = "middle";
+          ctx.fillStyle = "#555555";
+          ctx.fillText("Press [T] to chat", 6, panelH / 2);
+          return;
+        }
+
+        // Active chat: draw text box background
+        ctx.fillStyle = "rgba(10, 10, 20, 0.82)";
         ctx.strokeStyle = "rgba(80, 200, 180, 0.35)";
-        ctx.lineWidth = 1.5;
-        this.drawRoundRect(ctx, 0, 0, panelW, panelH, 4);
+        ctx.lineWidth = 1;
+        this.drawRoundRect(ctx, 0, 0, panelW, panelH, 3);
         ctx.fill();
         ctx.stroke();
 
-        // Mode indicator
-        const modeLabel = CHAT_MODE_LABELS[this.chatMode];
         const modeColor = CHAT_MODE_COLORS[this.chatMode];
-        const radius = CHAT_MODE_RADIUS[this.chatMode];
-
-        ctx.font = "bold 10px monospace";
-        ctx.textBaseline = "top";
-        ctx.fillStyle = modeColor;
-        ctx.fillText(`[${modeLabel}]`, 8, 6);
-
-        // Radius hint
-        ctx.font = "9px monospace";
-        ctx.fillStyle = "#666666";
-        const radiusText = `(${radius} tile${radius > 1 ? "s" : ""})`;
-        ctx.fillText(radiusText, 8 + ctx.measureText(`[${modeLabel}]`).width + 6, 7);
-
-        // Divider line
-        ctx.strokeStyle = "rgba(80, 200, 180, 0.2)";
-        ctx.lineWidth = 1;
-        ctx.beginPath();
-        ctx.moveTo(8, 20);
-        ctx.lineTo(panelW - 8, 20);
-        ctx.stroke();
-
-        // Input area
         ctx.font = "10px monospace";
-        ctx.fillStyle = "#ffffff";
-        ctx.textBaseline = "top";
+        ctx.textBaseline = "middle";
+        const textY = panelH / 2;
 
-        const inputY = 25;
-        const maxInputW = panelW - 16;
-        let displayText = this.chatInputText;
-
-        // Truncate from the left if text is too long to fit
-        while (ctx.measureText(displayText + "_").width > maxInputW && displayText.length > 0) {
-          displayText = displayText.slice(1);
-        }
-
-        ctx.fillText(displayText, 8, inputY);
-
-        // Blinking cursor
-        const cursorOn = Math.floor(Date.now() / 500) % 2 === 0;
-        if (cursorOn) {
-          const cursorX = 8 + ctx.measureText(displayText).width;
+        if (this.chatInputText.length === 0) {
+          // Placeholder text in mode color (dimmed)
+          const verb = CHAT_MODE_VERBS[this.chatMode];
           ctx.fillStyle = modeColor;
-          ctx.fillRect(cursorX, inputY, 1, 11);
-        }
+          ctx.globalAlpha = 0.45;
+          ctx.fillText(`Currently ${verb} [Press tab to cycle]`, 6, textY);
+          ctx.globalAlpha = 1;
 
-        // Hint bar
-        ctx.font = "8px monospace";
-        ctx.fillStyle = "#555555";
-        ctx.textBaseline = "top";
-        ctx.fillText("[Tab] Mode  [Enter] Send  [Esc] Cancel", 8, panelH - 14);
+          // Blinking cursor at start
+          const cursorOn = Math.floor(Date.now() / 500) % 2 === 0;
+          if (cursorOn) {
+            ctx.fillStyle = modeColor;
+            ctx.fillRect(6, textY - 5, 1, 11);
+          }
+        } else {
+          // User text in mode color
+          const maxTextW = panelW - 12;
+          let displayText = this.chatInputText;
+
+          // Truncate from the left if text overflows
+          while (ctx.measureText(displayText + "_").width > maxTextW && displayText.length > 0) {
+            displayText = displayText.slice(1);
+          }
+
+          ctx.fillStyle = modeColor;
+          ctx.fillText(displayText, 6, textY);
+
+          // Blinking cursor after text
+          const cursorOn = Math.floor(Date.now() / 500) % 2 === 0;
+          if (cursorOn) {
+            const cursorX = 6 + ctx.measureText(displayText).width;
+            ctx.fillRect(cursorX, textY - 5, 1, 11);
+          }
+        }
       },
     });
 
-    this.chatPanel.graphics.use(canvas);
+    this.chatInputPanel.graphics.use(canvas);
   }
 
   private updateChatCleanup(): void {

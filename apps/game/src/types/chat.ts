@@ -30,6 +30,13 @@ export const CHAT_MODE_LABELS: Record<ChatMode, string> = {
   yell: "YELL",
 };
 
+/** Verb form for placeholder text: "Currently whispering" etc. */
+export const CHAT_MODE_VERBS: Record<ChatMode, string> = {
+  whisper: "whispering",
+  talk: "talking",
+  yell: "yelling",
+};
+
 export function chebyshevDistance(x1: number, y1: number, x2: number, y2: number): number {
   return Math.max(Math.abs(x1 - x2), Math.abs(y1 - y2));
 }

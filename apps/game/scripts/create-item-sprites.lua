@@ -4,7 +4,7 @@
 
 local W = 16
 local H = 16
-local TOTAL_FRAMES = 19
+local TOTAL_FRAMES = 21
 
 local scriptPath = app.params["script-path"] or "."
 local outputDir = app.fs.joinPath(app.fs.filePath(scriptPath), "..", "assets", "ground")
@@ -887,11 +887,103 @@ local function drawCookedBeef(img)
   px(img, 11, 8, CHAR)
 end
 
+-- ============================================================
+-- Frame 19: Bow (wooden recurve shape with string)
+-- ============================================================
+local function drawBow(img)
+  clearImg(img)
+  local WOOD = Color{ r = 140, g = 95, b = 50, a = 255 }
+  local WOOD_D = Color{ r = 100, g = 65, b = 32, a = 255 }
+  local WOOD_L = Color{ r = 175, g = 125, b = 70, a = 255 }
+  local STRING = Color{ r = 200, g = 190, b = 170, a = 255 }
+  local STRING_D = Color{ r = 160, g = 150, b = 130, a = 255 }
+
+  -- Bow limb (curved wood on left side)
+  -- Upper limb
+  px(img, 4, 1, WOOD_L)
+  px(img, 3, 2, WOOD)
+  px(img, 3, 3, WOOD)
+  px(img, 2, 4, WOOD)
+  px(img, 2, 5, WOOD)
+  px(img, 2, 6, WOOD_D)
+  px(img, 2, 7, WOOD)
+  -- Grip (middle)
+  px(img, 2, 8, WOOD_D)
+  px(img, 3, 7, WOOD_L)
+  px(img, 3, 8, WOOD)
+  -- Lower limb
+  px(img, 2, 9, WOOD)
+  px(img, 2, 10, WOOD)
+  px(img, 2, 11, WOOD_D)
+  px(img, 3, 12, WOOD)
+  px(img, 3, 13, WOOD)
+  px(img, 4, 14, WOOD_L)
+
+  -- Bowstring (right side, straight line)
+  px(img, 5, 1, STRING)
+  px(img, 5, 2, STRING)
+  px(img, 5, 3, STRING)
+  px(img, 5, 4, STRING)
+  px(img, 5, 5, STRING)
+  px(img, 5, 6, STRING_D)
+  px(img, 5, 7, STRING)
+  px(img, 5, 8, STRING_D)
+  px(img, 5, 9, STRING)
+  px(img, 5, 10, STRING)
+  px(img, 5, 11, STRING_D)
+  px(img, 5, 12, STRING)
+  px(img, 5, 13, STRING)
+  px(img, 5, 14, STRING)
+end
+
+-- ============================================================
+-- Frame 20: Arrow (stone tip, shaft, fletching)
+-- ============================================================
+local function drawArrow(img)
+  clearImg(img)
+  local SHAFT = Color{ r = 160, g = 120, b = 70, a = 255 }
+  local SHAFT_D = Color{ r = 120, g = 85, b = 45, a = 255 }
+  local TIP = Color{ r = 140, g = 135, b = 125, a = 255 }
+  local TIP_D = Color{ r = 100, g = 95, b = 85, a = 255 }
+  local FLETCH = Color{ r = 180, g = 50, b = 40, a = 255 }
+  local FLETCH_D = Color{ r = 140, g = 35, b = 28, a = 255 }
+
+  -- Stone arrowhead (top, pointing up)
+  px(img, 8, 1, TIP)
+  px(img, 7, 2, TIP_D)
+  px(img, 8, 2, TIP)
+  px(img, 9, 2, TIP)
+  px(img, 7, 3, TIP_D)
+  px(img, 8, 3, TIP)
+  px(img, 9, 3, TIP_D)
+
+  -- Shaft (vertical line down center)
+  px(img, 8, 4, SHAFT)
+  px(img, 8, 5, SHAFT)
+  px(img, 8, 6, SHAFT)
+  px(img, 8, 7, SHAFT_D)
+  px(img, 8, 8, SHAFT)
+  px(img, 8, 9, SHAFT)
+  px(img, 8, 10, SHAFT_D)
+  px(img, 8, 11, SHAFT)
+
+  -- Fletching (bottom, angled feathers)
+  px(img, 7, 12, FLETCH)
+  px(img, 8, 12, SHAFT)
+  px(img, 9, 12, FLETCH)
+  px(img, 7, 13, FLETCH_D)
+  px(img, 8, 13, SHAFT_D)
+  px(img, 9, 13, FLETCH_D)
+  px(img, 6, 13, FLETCH)
+  px(img, 10, 13, FLETCH)
+  px(img, 8, 14, SHAFT)
+end
+
 -- Generate frames
 local drawFuncs = { drawSmallRock, drawBerry, drawTunic, drawPants, drawBoots, drawBranch,
                     drawHammer, drawHatchet, drawPickaxe, drawSpear,
                     drawLargeStone, drawFlint, drawLog, drawMutton, drawWool, drawCookedMutton,
-                    drawCowHide, drawRawBeef, drawCookedBeef }
+                    drawCowHide, drawRawBeef, drawCookedBeef, drawBow, drawArrow }
 
 for i, drawFunc in ipairs(drawFuncs) do
   app.activeFrame = spr.frames[i]
@@ -901,4 +993,4 @@ for i, drawFunc in ipairs(drawFuncs) do
 end
 
 spr:saveAs(app.fs.joinPath(outputDir, "items.aseprite"))
-print("Created items.aseprite with " .. TOTAL_FRAMES .. " frames (16x16, including cow hide, raw beef, cooked beef)")
+print("Created items.aseprite with " .. TOTAL_FRAMES .. " frames (16x16, including bow and arrow)")

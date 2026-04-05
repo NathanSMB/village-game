@@ -14,6 +14,7 @@ import mainhandHammerPng from "../sprites/characters/equipment/mainhand/hammer.p
 import mainhandHatchetPng from "../sprites/characters/equipment/mainhand/hatchet.png";
 import mainhandPickaxePng from "../sprites/characters/equipment/mainhand/pickaxe.png";
 import mainhandSpearPng from "../sprites/characters/equipment/mainhand/spear.png";
+import mainhandBowPng from "../sprites/characters/equipment/mainhand/bow.png";
 
 export const grassImage = new ex.ImageSource(grassPng, {
   filtering: ex.ImageFiltering.Pixel,
@@ -235,6 +236,8 @@ const ITEM_SPRITE_MAP: Record<string, number> = {
   "cow-hide": 16,
   "raw-beef": 17,
   "cooked-beef": 18,
+  bow: 19,
+  arrow: 20,
 };
 
 function getItemsSheet(): ex.SpriteSheet {
@@ -243,7 +246,7 @@ function getItemsSheet(): ex.SpriteSheet {
       image: itemsImage,
       grid: {
         rows: 1,
-        columns: 19,
+        columns: 21,
         spriteWidth: 16,
         spriteHeight: 16,
       },
@@ -262,13 +265,14 @@ export function getItemSprite(itemSpriteId: string): ex.Sprite | null {
 
 // Weapon overlay sprites (64×64 frames for overflow beyond character tile)
 const WEAPON_FRAME_SIZE = 64;
-const WEAPON_FRAME_COUNT = 76;
+const WEAPON_FRAME_COUNT = 88;
 
 const WEAPON_IMAGES: Record<string, ex.ImageSource> = {
   hammer: new ex.ImageSource(mainhandHammerPng, { filtering: ex.ImageFiltering.Pixel }),
   hatchet: new ex.ImageSource(mainhandHatchetPng, { filtering: ex.ImageFiltering.Pixel }),
   pickaxe: new ex.ImageSource(mainhandPickaxePng, { filtering: ex.ImageFiltering.Pixel }),
   spear: new ex.ImageSource(mainhandSpearPng, { filtering: ex.ImageFiltering.Pixel }),
+  bow: new ex.ImageSource(mainhandBowPng, { filtering: ex.ImageFiltering.Pixel }),
 };
 
 const weaponSheetCache = new Map<string, ex.SpriteSheet>();

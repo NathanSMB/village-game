@@ -1,9 +1,12 @@
 import type { InventoryState } from "./inventory.ts";
 import { ITEMS, createItemCopy } from "../data/items.ts";
+import { addItemToBag } from "./inventory.ts";
 
 export interface RecipeIngredient {
   itemId: string;
   count: number;
+  /** Alternative item IDs that also satisfy this ingredient (e.g. any raw meat). */
+  alternatives?: string[];
 }
 
 export interface Recipe {
@@ -11,15 +14,18 @@ export interface Recipe {
   name: string;
   ingredients: RecipeIngredient[];
   resultId: string;
+  /** How many items the recipe produces (defaults to 1). Used for stackable outputs like arrows. */
+  resultQuantity?: number;
 }
 
 /**
- * Count how many of a given item ID exist in the inventory bag.
+ * Count how many of a given item ID (or its alternatives) exist in the inventory bag.
  */
-function countInBag(bag: { id: string }[], itemId: string): number {
+function countInBag(bag: { id: string }[], itemId: string, alternatives?: string[]): number {
+  const validIds = new Set([itemId, ...(alternatives ?? [])]);
   let count = 0;
   for (const item of bag) {
-    if (item.id === itemId) count++;
+    if (validIds.has(item.id)) count++;
   }
   return count;
 }
@@ -29,7 +35,7 @@ function countInBag(bag: { id: string }[], itemId: string): number {
  */
 export function canCraft(inventory: InventoryState, recipe: Recipe): boolean {
   for (const ingredient of recipe.ingredients) {
-    if (countInBag(inventory.bag, ingredient.itemId) < ingredient.count) {
+    if (countInBag(inventory.bag, ingredient.itemId, ingredient.alternatives) < ingredient.count) {
       return false;
     }
   }
@@ -43,11 +49,12 @@ export function canCraft(inventory: InventoryState, recipe: Recipe): boolean {
 export function craft(inventory: InventoryState, recipe: Recipe): boolean {
   if (!canCraft(inventory, recipe)) return false;
 
-  // Remove ingredients (greedy first-match)
+  // Remove ingredients (greedy first-match, respecting alternatives)
   for (const ingredient of recipe.ingredients) {
+    const validIds = new Set([ingredient.itemId, ...(ingredient.alternatives ?? [])]);
     let remaining = ingredient.count;
     for (let i = inventory.bag.length - 1; i >= 0 && remaining > 0; i--) {
-      if (inventory.bag[i].id === ingredient.itemId) {
+      if (validIds.has(inventory.bag[i].id)) {
         inventory.bag.splice(i, 1);
         remaining--;
       }
@@ -57,7 +64,12 @@ export function craft(inventory: InventoryState, recipe: Recipe): boolean {
   // Add result item (with durability stamped if applicable)
   const baseItem = ITEMS[recipe.resultId];
   if (baseItem) {
-    inventory.bag.push(createItemCopy(recipe.resultId));
+    const resultItem = createItemCopy(recipe.resultId);
+    const qty = recipe.resultQuantity ?? 1;
+    if (qty > 1 && resultItem.stackable) {
+      resultItem.quantity = qty;
+    }
+    addItemToBag(inventory, resultItem);
   }
 
   return true;

@@ -1,5 +1,5 @@
 import type { CharacterAppearance } from "./character.ts";
-import { EquipmentSlot, type Item } from "./item.ts";
+import { EquipmentSlot, type Item, getItemQuantity, isStackable } from "./item.ts";
 import type { VitalsState } from "./vitals.ts";
 import { clampVital } from "./vitals.ts";
 import { createStarterItem, DURABILITY_CONFIG, ITEMS } from "../data/items.ts";
@@ -44,12 +44,35 @@ export function defaultInventory(appearance: CharacterAppearance): InventoryStat
 export function totalWeight(state: InventoryState): number {
   let weight = 0;
   for (const item of Object.values(state.equipment)) {
-    if (item) weight += item.weight;
+    if (item) weight += item.weight * getItemQuantity(item);
   }
   for (const item of state.bag) {
-    weight += item.weight;
+    weight += item.weight * getItemQuantity(item);
   }
   return weight;
+}
+
+/**
+ * Add an item to the inventory bag, merging into existing stacks for stackable items.
+ */
+export function addItemToBag(state: InventoryState, item: Item): void {
+  if (isStackable(item)) {
+    const incoming = getItemQuantity(item);
+    const existing = state.bag.find(
+      (b) => b.id === item.id && isStackable(b) && getItemQuantity(b) < (b.maxStack ?? Infinity),
+    );
+    if (existing) {
+      const space = (existing.maxStack ?? Infinity) - getItemQuantity(existing);
+      const transfer = Math.min(incoming, space);
+      existing.quantity = getItemQuantity(existing) + transfer;
+      const remaining = incoming - transfer;
+      if (remaining > 0) {
+        state.bag.push({ ...item, quantity: remaining });
+      }
+      return;
+    }
+  }
+  state.bag.push(item);
 }
 
 export function equipItem(state: InventoryState, bagIndex: number): void {
@@ -59,7 +82,7 @@ export function equipItem(state: InventoryState, bagIndex: number): void {
   state.equipment[item.slot] = item;
   state.bag.splice(bagIndex, 1);
   if (current) {
-    state.bag.push(current);
+    addItemToBag(state, current);
   }
 }
 
@@ -92,7 +115,23 @@ export function unequipItem(state: InventoryState, slot: EquipmentSlot): void {
   const item = state.equipment[slot];
   if (!item) return;
   state.equipment[slot] = null;
-  state.bag.push(item);
+  addItemToBag(state, item);
+}
+
+/**
+ * Consume one arrow from the equipped OffHand slot.
+ * Returns true if an arrow was consumed, false if no arrows available.
+ */
+export function consumeArrow(state: InventoryState): boolean {
+  const offHand = state.equipment[EquipmentSlot.OffHand];
+  if (!offHand || offHand.id !== "arrow") return false;
+  const qty = getItemQuantity(offHand);
+  if (qty <= 1) {
+    state.equipment[EquipmentSlot.OffHand] = null;
+  } else {
+    offHand.quantity = qty - 1;
+  }
+  return true;
 }
 
 /**

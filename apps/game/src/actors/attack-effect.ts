@@ -3,7 +3,7 @@ import * as ex from "excalibur";
 const EFFECT_DURATION = 300; // ms
 const CANVAS_SIZE = 64; // larger than a tile so the effect doesn't clip at edges
 
-type AttackStyle = "swing" | "thrust";
+type AttackStyle = "swing" | "thrust" | "shoot";
 type Direction = "down" | "up" | "left" | "right";
 
 /**
@@ -46,8 +46,10 @@ export class AttackEffect extends ex.Actor {
 
     if (this.style === "swing") {
       this.drawSwingEffect(ctx, alpha, spread, t);
-    } else {
+    } else if (this.style === "thrust") {
       this.drawThrustEffect(ctx, alpha, spread, t);
+    } else {
+      this.drawShootEffect(ctx, alpha, spread, t);
     }
 
     ctx.restore();
@@ -126,6 +128,37 @@ export class AttackEffect extends ex.Actor {
     ctx.lineTo(3 + spread * 0.3, -2 - extension * 0.5);
     ctx.closePath();
     ctx.fill();
+  }
+
+  private drawShootEffect(
+    ctx: CanvasRenderingContext2D,
+    alpha: number,
+    _spread: number,
+    t: number,
+  ): void {
+    // Small string-release puff at the player's position
+    const rotations: Record<Direction, number> = {
+      up: 0,
+      right: Math.PI / 2,
+      down: Math.PI,
+      left: -Math.PI / 2,
+    };
+    ctx.rotate(rotations[this.dir]);
+
+    // Two small horizontal lines representing the bowstring snapping back
+    const snap = t * 6;
+    ctx.strokeStyle = `rgba(255, 255, 240, ${alpha * 0.8})`;
+    ctx.lineWidth = 1;
+    ctx.beginPath();
+    ctx.moveTo(-3 - snap, 2);
+    ctx.lineTo(3 + snap, 2);
+    ctx.stroke();
+
+    // Small puff particles
+    ctx.fillStyle = `rgba(255, 255, 255, ${alpha * 0.5})`;
+    ctx.fillRect(-1, -2 - t * 4, 2, 1);
+    ctx.fillRect(-2 - snap * 0.5, 1, 1, 1);
+    ctx.fillRect(2 + snap * 0.5, 1, 1, 1);
   }
 
   override onPreUpdate(_engine: ex.Engine, delta: number): void {

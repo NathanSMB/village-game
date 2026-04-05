@@ -6,7 +6,7 @@
 
 local W = 64
 local H = 64
-local FRAMES = 76
+local FRAMES = 88
 local OFFSET = 16 -- center the 32x32 character area within the 64x64 canvas
 
 local scriptPath = app.params["script-path"] or "."
@@ -532,6 +532,125 @@ local function getThrustHandPos(dir, thrustPose)
 end
 
 -- ============================================================
+-- Bow — curved limb with string, orient determines direction
+-- ============================================================
+
+local BOW_WOOD = Color{ r = 140, g = 95, b = 50, a = 255 }
+local BOW_WOOD_D = Color{ r = 100, g = 65, b = 32, a = 255 }
+local BOW_WOOD_L = Color{ r = 175, g = 125, b = 70, a = 255 }
+local BOW_STRING = Color{ r = 200, g = 190, b = 170, a = 255 }
+local BOW_STRING_D = Color{ r = 160, g = 150, b = 130, a = 255 }
+
+-- Helper to draw the bow upright at a hand position.
+-- stringDir: -1 means string is to the LEFT of wood, +1 means string is to the RIGHT.
+-- This controls which side the string faces so it always points toward the player.
+local function drawBowUpright(img, hx, hy, stringDir, bowLen)
+  bowLen = bowLen or 12
+  local woodOff = -stringDir  -- wood on opposite side of string
+  local strOff = stringDir
+
+  -- Curved wood limb
+  rect(img, hx + woodOff, hy - bowLen + 3, 1, bowLen, BOW_WOOD)
+  px(img, hx + woodOff * 2, hy - bowLen + 4, BOW_WOOD)
+  px(img, hx + woodOff * 2, hy + 2, BOW_WOOD)
+  px(img, hx + woodOff, hy - bowLen + 3, BOW_WOOD_L)
+  px(img, hx + woodOff, hy + 2, BOW_WOOD_D)
+  -- Grip wrap
+  px(img, hx + woodOff, hy, BIND)
+  px(img, hx + woodOff, hy - 1, BIND)
+  -- String (straight line)
+  rect(img, hx + strOff, hy - bowLen + 3, 1, bowLen, BOW_STRING)
+  px(img, hx + strOff, hy - bowLen + 3, BOW_STRING_D)
+end
+
+local function drawBow(img, hx, hy, orient)
+  -- Bow held vertically in hand for ALL poses — never rotates.
+  -- String always faces TOWARD the player's body.
+
+  if orient == "up" then
+    -- Behind body: just show tips of bow above, string toward body (right side)
+    rect(img, hx + 1, hy - 8, 1, 5, BOW_WOOD)
+    px(img, hx + 1, hy - 8, BOW_WOOD_L)
+    rect(img, hx - 1, hy - 8, 1, 5, BOW_STRING)
+    return
+  end
+
+  if orient == "up_reach" then
+    rect(img, hx + 1, hy - 10, 1, 8, BOW_WOOD)
+    px(img, hx + 1, hy - 10, BOW_WOOD_L)
+    rect(img, hx - 1, hy - 10, 1, 8, BOW_STRING)
+    return
+  end
+
+  -- For "down" and "right": hand is on the right side of body.
+  -- String should be to the LEFT of the wood (toward body center).
+  if orient == "down" or orient == "right"
+     or orient == "shoot_down" or orient == "shoot_right" then
+    drawBowUpright(img, hx, hy, -1)
+    return
+  end
+
+  -- For "left": hand is on the left side of body.
+  -- String should be to the RIGHT of the wood (toward body center).
+  if orient == "left"
+     or orient == "shoot_left" then
+    drawBowUpright(img, hx, hy, 1)
+    return
+  end
+
+  -- shoot_up / default: string to the left (toward body center)
+  if orient == "shoot_up" then
+    drawBowUpright(img, hx, hy, -1)
+    return
+  end
+
+  -- Fallback: string on left
+  drawBowUpright(img, hx, hy, -1)
+end
+
+-- Shoot attack hand positions (bow-draw animation, matching drawShootArms in create-body.lua)
+local function getShootHandPos(dir, shootPose)
+  if dir == 0 then
+    -- Down: left arm holds bow forward
+    if shootPose == 0 then
+      return bodyX - armW, 21, "shoot_down"
+    elseif shootPose == 1 then
+      return bodyX - armW, 23, "shoot_down"
+    elseif shootPose == 2 then
+      return bodyX - armW, 21, "shoot_down"
+    end
+  elseif dir == 1 then
+    -- Up: right arm holds bow forward (from behind)
+    if shootPose == 0 then
+      return bodyX + bodyW, 19, "shoot_up"
+    elseif shootPose == 1 then
+      return bodyX + bodyW, 14, "shoot_up"
+    elseif shootPose == 2 then
+      return bodyX + bodyW, 19, "shoot_up"
+    end
+  elseif dir == 2 then
+    -- Left: left arm extends left with bow
+    if shootPose == 0 then
+      return bodyX - 6, 16, "shoot_left"
+    elseif shootPose == 1 then
+      return bodyX - 8, 16, "shoot_left"
+    elseif shootPose == 2 then
+      return bodyX - 6, 16, "shoot_left"
+    end
+  elseif dir == 3 then
+    -- Right: right arm extends right with bow
+    if shootPose == 0 then
+      return bodyX + bodyW + 6, 16, "shoot_right"
+    elseif shootPose == 1 then
+      return bodyX + bodyW + 8, 16, "shoot_right"
+    elseif shootPose == 2 then
+      return bodyX + bodyW + 6, 16, "shoot_right"
+    end
+  end
+  return 0, 0, "shoot_down"
+end
+
+-- ============================================================
 -- Sprite generation
 -- ============================================================
 
@@ -540,6 +659,7 @@ local tools = {
   { name = "hatchet", draw = drawHatchet },
   { name = "pickaxe", draw = drawPickaxe },
   { name = "spear",   draw = drawSpear },
+  { name = "bow",     draw = drawBow },
 }
 
 for _, tool in ipairs(tools) do
@@ -618,6 +738,22 @@ for _, tool in ipairs(tools) do
       clearImg(cel.image)
       local hx, hy, orient = getThrustHandPos(dir, thrustPose)
       tool.draw(cel.image, hx, hy + OFFSET, orient)
+      spr.frames[frameIdx].duration = 0.2
+    end
+  end
+
+  -- Shoot (bow) attack frames (12): 4 directions x 3 shoot poses
+  -- Only the bow actually draws here; other weapons leave these empty
+  for dir = 0, 3 do
+    for shootPose = 0, 2 do
+      local frameIdx = 77 + dir * 3 + shootPose
+      app.activeFrame = spr.frames[frameIdx]
+      local cel = spr:newCel(spr.layers[1], frameIdx)
+      clearImg(cel.image)
+      if tool.name == "bow" then
+        local hx, hy, orient = getShootHandPos(dir, shootPose)
+        tool.draw(cel.image, hx, hy + OFFSET, orient)
+      end
       spr.frames[frameIdx].duration = 0.2
     end
   end

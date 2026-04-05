@@ -2687,21 +2687,14 @@ export class GameWorld extends ex.Scene<GameWorldData> {
           }
         }
       } else {
-        // Box → Bag: check weight limit
+        // Box → Bag
         const slotItem = slots[this.storageBoxIndex];
         if (slotItem) {
-          const currentWeight = totalWeight(this.player.inventory);
-          if (currentWeight + slotItem.weight <= this.player.inventory.maxWeight) {
-            slots[this.storageBoxIndex] = null;
-            bag.push(slotItem);
-            const worldX = this.storageBuilding.pos.x;
-            const worldY = this.storageBuilding.pos.y;
-            this.spawnPickupText(`+[${slotItem.name}]`, worldX, worldY);
-          } else {
-            const worldX = this.storageBuilding.pos.x;
-            const worldY = this.storageBuilding.pos.y;
-            this.spawnPickupText("Too Heavy!", worldX, worldY);
-          }
+          slots[this.storageBoxIndex] = null;
+          bag.push(slotItem);
+          const worldX = this.storageBuilding.pos.x;
+          const worldY = this.storageBuilding.pos.y;
+          this.spawnPickupText(`+[${slotItem.name}]`, worldX, worldY);
         }
       }
       this.updateStorageMenu();

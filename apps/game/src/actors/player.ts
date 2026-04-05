@@ -1,11 +1,12 @@
 import * as ex from "excalibur";
 import type { CharacterAppearance } from "../types/character.ts";
-import { type InventoryState, defaultInventory } from "../types/inventory.ts";
+import { type InventoryState, defaultInventory, totalWeight } from "../types/inventory.ts";
 import { type VitalsState, clampVital, defaultVitals, updateVitals } from "../types/vitals.ts";
 import { EquipmentSlot } from "../types/item.ts";
 import { isActionHeld, wasActionPressed } from "../systems/keybinds.ts";
 import { compositeCharacter } from "../systems/character-compositor.ts";
 import { getWeaponSpriteSheet } from "../systems/sprite-loader.ts";
+import { FloatingText } from "./floating-text.ts";
 
 const TILE_SIZE = 32;
 const MOVE_SPEED = 160;
@@ -21,6 +22,8 @@ const TURN_DELAY_MS = 120; // hold a direction key this long before walking
 const OUT_OF_COMBAT_MS = 5000;
 /** Passive health regen: 1 HP every this many ms when out of combat. */
 const REGEN_INTERVAL_MS = 5000;
+/** Minimum interval between "Too Heavy!" popup texts. */
+const ENCUMBERED_TEXT_COOLDOWN_MS = 2000;
 
 export type Direction = "down" | "up" | "left" | "right";
 
@@ -147,6 +150,9 @@ export class Player extends ex.Actor {
   // The first entry that is still held is the active direction.
   private directionStack: Direction[] = [];
   private turnTimer = 0;
+
+  // Over-encumbered popup cooldown so it doesn't spam every frame
+  private encumberedTextCooldown = 0;
 
   // Weapon overlay: separate child actor with 64×64 sprites that can extend
   // beyond the character's 32×32 tile (prevents clipping during attacks).
@@ -318,6 +324,11 @@ export class Player extends ex.Actor {
     return this.vitals.energy <= 0;
   }
 
+  /** Returns true when carrying more than max weight. */
+  isOverEncumbered(): boolean {
+    return totalWeight(this.inventory) > this.inventory.maxWeight;
+  }
+
   /**
    * Apply direct combat damage to the player (from hostile creatures, traps, etc.).
    * Resets the out-of-combat timer so passive health regen pauses.
@@ -350,6 +361,11 @@ export class Player extends ex.Actor {
 
   override onPreUpdate(engine: ex.Engine, delta: number): void {
     this.vitals = updateVitals(this.vitals, delta, this.sleeping);
+
+    // Tick down encumbered-text cooldown
+    if (this.encumberedTextCooldown > 0) {
+      this.encumberedTextCooldown -= delta;
+    }
 
     // Combat timer (capped to avoid growing forever)
     if (this.combatTimer < 10000) {
@@ -549,6 +565,15 @@ export class Player extends ex.Actor {
     // Count down the turn delay — don't walk until it expires
     if (this.turnTimer > 0) {
       this.turnTimer -= delta;
+      return;
+    }
+
+    // Cannot walk while over-encumbered
+    if (this.isOverEncumbered()) {
+      if (this.encumberedTextCooldown <= 0) {
+        this.scene?.add(new FloatingText("Too Heavy!", this.pos.x, this.pos.y - TILE_SIZE / 2));
+        this.encumberedTextCooldown = ENCUMBERED_TEXT_COOLDOWN_MS;
+      }
       return;
     }
 

@@ -6,6 +6,8 @@ import {
   unequipItem,
   consumeItem,
   repairItem,
+  consumeArrow,
+  addItemToBag,
   type InventoryState,
 } from "../types/inventory.ts";
 import {
@@ -14,6 +16,8 @@ import {
   ALL_EQUIPMENT_SLOTS,
   EQUIPMENT_SLOT_LABELS,
   isConsumable,
+  isStackable,
+  getItemQuantity,
   type Item,
 } from "../types/item.ts";
 import { isAlive } from "../types/vitals.ts";
@@ -24,9 +28,15 @@ import { Tree } from "../actors/tree.ts";
 import { GroundItemStack } from "../actors/ground-item-stack.ts";
 import { FloatingText } from "../actors/floating-text.ts";
 import { AttackEffect } from "../actors/attack-effect.ts";
+import { ArrowProjectile } from "../actors/arrow-projectile.ts";
 import { VitalsHud } from "../actors/vitals-hud.ts";
 import { wasActionPressed } from "../systems/keybinds.ts";
-import { ITEMS, DURABILITY_CONFIG, migrateItemDurability } from "../data/items.ts";
+import {
+  ITEMS,
+  DURABILITY_CONFIG,
+  migrateItemDurability,
+  migrateItemStacking,
+} from "../data/items.ts";
 import { BUILDING_TYPES, BUILDING_TYPE_MAP, type BuildingType } from "../data/buildings.ts";
 import { COOKING_RECIPES, COOKING_RECIPE_MAP } from "../data/cooking.ts";
 import { RECIPES } from "../data/recipes.ts";
@@ -552,12 +562,16 @@ export class GameWorld extends ex.Scene<GameWorldData> {
             bag: context.data.save.player.bag ?? [],
             maxWeight: context.data.save.player.maxWeight ?? 50,
           };
-          // Migrate durability for old saves
+          // Migrate durability and stacking for old saves
           for (const item of Object.values(inventory.equipment)) {
-            if (item) migrateItemDurability(item);
+            if (item) {
+              migrateItemDurability(item);
+              migrateItemStacking(item);
+            }
           }
           for (const item of inventory.bag) {
             migrateItemDurability(item);
+            migrateItemStacking(item);
           }
         }
       }
@@ -769,193 +783,280 @@ export class GameWorld extends ex.Scene<GameWorldData> {
       !this.player.isExhausted()
     ) {
       if (wasActionPressed(kb, "attack")) {
-        const style = this.player.startAttack();
-        const facing = this.player.getFacingTile();
-        const targetX = facing.x * TILE_SIZE + TILE_SIZE / 2;
-        const targetY = facing.y * TILE_SIZE + TILE_SIZE / 2;
-        // Position between player and facing tile center
-        const blend = style === "swing" ? 0.55 : 0.7;
-        const effectX = this.player.pos.x + (targetX - this.player.pos.x) * blend;
-        const effectY = this.player.pos.y + (targetY - this.player.pos.y) * blend;
-        this.add(new AttackEffect(effectX, effectY, style, this.player.getFacing()));
-
-        // Apply damage to resources on the facing tile
-        // Unarmed attacks deal 1 damage with no tool multipliers
-        const UNARMED_DAMAGE = 1;
         const weapon = this.player.inventory.equipment[EquipmentSlot.MainHand];
-        // Always look up the canonical item definition for stats and multipliers
-        // so that old saves with stale item copies still work correctly.
-        const canonical = weapon ? (ITEMS[weapon.id] ?? weapon) : null;
-        const baseDamage = canonical ? (canonical.stats.attack ?? 0) : UNARMED_DAMAGE;
-        const facingKey = tileKey(facing.x, facing.y);
 
-        // Rock mining
-        const rock = this.rockByTile.get(facingKey);
-        if (rock) {
-          const mult = canonical?.toolMultipliers?.mineable ?? 1;
-          const damage = baseDamage * mult;
-          const drops = rock.takeDamage(damage);
-          for (const drop of drops) {
-            this.dropResourceNear(rock.tileX, rock.tileY, drop);
-          }
-          if (damage > 0) {
-            this.spawnPickupText(`-${damage}`, targetX, targetY);
-          }
-        }
+        // ── Bow (ranged) attack ──────────────────────────────────
+        if (weapon?.id === "bow") {
+          // Check for arrows in OffHand
+          const offHand = this.player.inventory.equipment[EquipmentSlot.OffHand];
+          if (!offHand || offHand.id !== "arrow") {
+            this.spawnPickupText("No Arrows!", this.player.pos.x, this.player.pos.y - 16);
+          } else {
+            const style = this.player.startAttack();
+            const facing = this.player.getFacingTile();
+            const targetX = facing.x * TILE_SIZE + TILE_SIZE / 2;
+            const targetY = facing.y * TILE_SIZE + TILE_SIZE / 2;
+            // Shoot effect positioned closer to the player (bowstring snap)
+            const effectX = this.player.pos.x + (targetX - this.player.pos.x) * 0.3;
+            const effectY = this.player.pos.y + (targetY - this.player.pos.y) * 0.3;
+            this.add(new AttackEffect(effectX, effectY, style, this.player.getFacing()));
 
-        // Tree chopping
-        const tree = this.treeByTile.get(facingKey);
-        if (tree && !tree.isChoppedDown()) {
-          const mult = canonical?.toolMultipliers?.tree ?? 1;
-          const damage = baseDamage * mult;
-          const result = tree.takeDamage(damage);
-          for (const drop of result.drops) {
-            this.dropResourceNear(tree.tileX, tree.tileY, drop);
-          }
-          if (damage > 0) {
-            this.spawnPickupText(`-${damage}`, targetX, targetY);
-          }
-        }
+            // Consume one arrow (consumed even if blocked — you still shot)
+            consumeArrow(this.player.inventory);
 
-        // Sheep damage
-        const sheepTarget = this.sheepByTile.get(facingKey);
-        if (sheepTarget && !sheepTarget.isDead) {
-          const mult = canonical?.toolMultipliers?.creature ?? 1;
-          const damage = baseDamage * mult;
-          const drops = sheepTarget.takeDamage(damage);
-          for (const drop of drops) {
-            this.dropResourceNear(sheepTarget.tileX, sheepTarget.tileY, drop);
-          }
-          if (damage > 0) {
-            this.spawnPickupText(`-${damage}`, targetX, targetY);
-          }
-          if (sheepTarget.isDead) {
-            this.removeSheep(sheepTarget);
-          }
-        }
-
-        // Cow damage
-        const cowTarget = this.cowByTile.get(facingKey);
-        if (cowTarget && !cowTarget.isDead) {
-          const mult = canonical?.toolMultipliers?.creature ?? 1;
-          const damage = baseDamage * mult;
-          const drops = cowTarget.takeDamage(damage);
-          for (const drop of drops) {
-            this.dropResourceNear(cowTarget.tileX, cowTarget.tileY, drop);
-          }
-          if (damage > 0) {
-            this.spawnPickupText(`-${damage}`, targetX, targetY);
-          }
-          if (cowTarget.isDead) {
-            this.removeCow(cowTarget);
-          }
-        }
-
-        // Tile-based building construction / repair / damage (floors)
-        const building = this.buildingByTile.get(facingKey);
-        if (building) {
-          if (building.state === "hologram") {
-            if (weapon?.id === "hammer") {
-              const delivered = building.deliverMaterial(this.player!.inventory);
-              if (delivered) {
-                const itemName = ITEMS[delivered]?.name ?? delivered;
-                this.spawnPickupText(`+[${itemName}]`, targetX, targetY);
-                if ((building.state as string) === "complete") {
-                  this.spawnPickupText("Built!", targetX, targetY - 16);
-                  if (building.isSolid()) {
-                    this.blockedTiles.add(facingKey);
-                  }
-                  this.recalculateIndoorLighting();
+            // Check if a wall/fence blocks the arrow from even leaving
+            const bowPlayerTX = this.player!.getTileX();
+            const bowPlayerTY = this.player!.getTileY();
+            const bowEdgeKey = edgeKeyBetween(bowPlayerTX, bowPlayerTY, facing.x, facing.y);
+            const bowBlockedByEdge = bowEdgeKey != null && this.blockedEdges.has(bowEdgeKey);
+            if (bowBlockedByEdge) {
+              // Arrow hits the wall immediately — reduce bow durability but don't spawn projectile
+              if (weapon.durability != null) {
+                weapon.durability -= 1;
+                if (weapon.durability <= 0) {
+                  this.player!.inventory.equipment[EquipmentSlot.MainHand] = null;
+                  this.player!.refreshSprite();
+                  this.spawnPickupText(
+                    `${weapon.name} broke!`,
+                    this.player!.pos.x,
+                    this.player!.pos.y - 16,
+                  );
                 }
-              } else {
-                const nextReq = building.getNextRequired();
-                if (nextReq) {
-                  const reqName = ITEMS[nextReq]?.name ?? nextReq;
-                  this.spawnPickupText(`Need [${reqName}]!`, targetX, targetY);
+              }
+            } else {
+              // Canonical item definition for stats/multipliers
+              const canonical = ITEMS[weapon.id] ?? weapon;
+              const baseDamage = canonical.stats.attack ?? 0;
+
+              // Spawn the arrow projectile starting from the facing tile
+              const playerDir = this.player.getFacing();
+              const arrow = new ArrowProjectile({
+                startTileX: facing.x,
+                startTileY: facing.y,
+                direction: playerDir,
+                maxRange: 5,
+                onTileReached: (tx: number, ty: number) => {
+                  return this.applyArrowDamageAt(tx, ty, baseDamage, canonical);
+                },
+                isEdgeBlocked: (fromTX: number, fromTY: number, toTX: number, toTY: number) => {
+                  const ek = edgeKeyBetween(fromTX, fromTY, toTX, toTY);
+                  return ek !== null && this.blockedEdges.has(ek);
+                },
+              });
+              this.add(arrow);
+
+              // Bow durability loss
+              if (weapon.durability != null) {
+                weapon.durability -= 1;
+                if (weapon.durability <= 0) {
+                  this.player!.inventory.equipment[EquipmentSlot.MainHand] = null;
+                  this.player!.refreshSprite();
+                  this.spawnPickupText(
+                    `${weapon.name} broke!`,
+                    this.player!.pos.x,
+                    this.player!.pos.y - 16,
+                  );
                 }
               }
             }
-          } else {
-            if (weapon?.id === "hammer") {
-              const mult = canonical?.toolMultipliers?.building ?? 1;
-              const repairAmount = baseDamage * mult;
-              const repaired = building.repair(repairAmount);
-              if (repaired > 0) {
-                this.spawnPickupText(`+${repaired}`, targetX, targetY);
+          }
+        } else {
+          // ── Melee attack (swing / thrust) ────────────────────────
+          const style = this.player.startAttack();
+          const facing = this.player.getFacingTile();
+          const targetX = facing.x * TILE_SIZE + TILE_SIZE / 2;
+          const targetY = facing.y * TILE_SIZE + TILE_SIZE / 2;
+          // Position between player and facing tile center
+          const blend = style === "swing" ? 0.55 : 0.7;
+          const effectX = this.player.pos.x + (targetX - this.player.pos.x) * blend;
+          const effectY = this.player.pos.y + (targetY - this.player.pos.y) * blend;
+          this.add(new AttackEffect(effectX, effectY, style, this.player.getFacing()));
+
+          // Apply damage to resources on the facing tile
+          // Unarmed attacks deal 1 damage with no tool multipliers
+          const UNARMED_DAMAGE = 1;
+          // Always look up the canonical item definition for stats and multipliers
+          // so that old saves with stale item copies still work correctly.
+          const canonical = weapon ? (ITEMS[weapon.id] ?? weapon) : null;
+          const baseDamage = canonical ? (canonical.stats.attack ?? 0) : UNARMED_DAMAGE;
+          const facingKey = tileKey(facing.x, facing.y);
+
+          // Check if a wall/fence blocks melee from reaching the facing tile
+          const playerTX = this.player!.getTileX();
+          const playerTY = this.player!.getTileY();
+          const meleeEdgeKey = edgeKeyBetween(playerTX, playerTY, facing.x, facing.y);
+          const meleeBlockedByEdge = meleeEdgeKey != null && this.blockedEdges.has(meleeEdgeKey);
+
+          // Only damage entities on the facing tile if not blocked by a wall/fence
+          if (!meleeBlockedByEdge) {
+            // Rock mining
+            const rock = this.rockByTile.get(facingKey);
+            if (rock) {
+              const mult = canonical?.toolMultipliers?.mineable ?? 1;
+              const damage = baseDamage * mult;
+              const drops = rock.takeDamage(damage);
+              for (const drop of drops) {
+                this.dropResourceNear(rock.tileX, rock.tileY, drop);
               }
-            } else {
-              const damage = baseDamage;
-              const destroyed = building.takeBuildingDamage(damage);
               if (damage > 0) {
                 this.spawnPickupText(`-${damage}`, targetX, targetY);
               }
-              if (destroyed) {
-                this.removeBuilding(building, facingKey);
-              }
             }
-          }
-        }
 
-        // Edge-based building construction / repair / damage (walls, fences)
-        const playerTX = this.player!.getTileX();
-        const playerTY = this.player!.getTileY();
-        const facingEdgeKey = edgeKeyBetween(playerTX, playerTY, facing.x, facing.y);
-        const edgeBuilding =
-          facingEdgeKey != null ? this.edgeBuildings.get(facingEdgeKey) : undefined;
-        if (edgeBuilding) {
-          if (edgeBuilding.state === "hologram") {
-            if (weapon?.id === "hammer") {
-              const delivered = edgeBuilding.deliverMaterial(this.player!.inventory);
-              if (delivered) {
-                const itemName = ITEMS[delivered]?.name ?? delivered;
-                this.spawnPickupText(`+[${itemName}]`, targetX, targetY);
-                if ((edgeBuilding.state as string) === "complete") {
-                  this.spawnPickupText("Built!", targetX, targetY - 16);
-                  if (edgeBuilding.isSolid()) {
-                    this.blockedEdges.add(facingEdgeKey!);
-                  }
-                  this.recalculateIndoorLighting();
-                }
-              } else {
-                const nextReq = edgeBuilding.getNextRequired();
-                if (nextReq) {
-                  const reqName = ITEMS[nextReq]?.name ?? nextReq;
-                  this.spawnPickupText(`Need [${reqName}]!`, targetX, targetY);
-                }
+            // Tree chopping
+            const tree = this.treeByTile.get(facingKey);
+            if (tree && !tree.isChoppedDown()) {
+              const mult = canonical?.toolMultipliers?.tree ?? 1;
+              const damage = baseDamage * mult;
+              const result = tree.takeDamage(damage);
+              for (const drop of result.drops) {
+                this.dropResourceNear(tree.tileX, tree.tileY, drop);
               }
-            }
-          } else {
-            if (weapon?.id === "hammer") {
-              const mult = canonical?.toolMultipliers?.building ?? 1;
-              const repairAmount = baseDamage * mult;
-              const repaired = edgeBuilding.repair(repairAmount);
-              if (repaired > 0) {
-                this.spawnPickupText(`+${repaired}`, targetX, targetY);
-              }
-            } else {
-              const damage = baseDamage;
-              const destroyed = edgeBuilding.takeBuildingDamage(damage);
               if (damage > 0) {
                 this.spawnPickupText(`-${damage}`, targetX, targetY);
               }
-              if (destroyed) {
-                this.removeEdgeBuilding(edgeBuilding, facingEdgeKey!);
+            }
+
+            // Sheep damage
+            const sheepTarget = this.sheepByTile.get(facingKey);
+            if (sheepTarget && !sheepTarget.isDead) {
+              const mult = canonical?.toolMultipliers?.creature ?? 1;
+              const damage = baseDamage * mult;
+              const drops = sheepTarget.takeDamage(damage);
+              for (const drop of drops) {
+                this.dropResourceNear(sheepTarget.tileX, sheepTarget.tileY, drop);
+              }
+              if (damage > 0) {
+                this.spawnPickupText(`-${damage}`, targetX, targetY);
+              }
+              if (sheepTarget.isDead) {
+                this.removeSheep(sheepTarget);
+              }
+            }
+
+            // Cow damage
+            const cowTarget = this.cowByTile.get(facingKey);
+            if (cowTarget && !cowTarget.isDead) {
+              const mult = canonical?.toolMultipliers?.creature ?? 1;
+              const damage = baseDamage * mult;
+              const drops = cowTarget.takeDamage(damage);
+              for (const drop of drops) {
+                this.dropResourceNear(cowTarget.tileX, cowTarget.tileY, drop);
+              }
+              if (damage > 0) {
+                this.spawnPickupText(`-${damage}`, targetX, targetY);
+              }
+              if (cowTarget.isDead) {
+                this.removeCow(cowTarget);
+              }
+            }
+
+            // Tile-based building construction / repair / damage (floors)
+            const building = this.buildingByTile.get(facingKey);
+            if (building) {
+              if (building.state === "hologram") {
+                if (weapon?.id === "hammer") {
+                  const delivered = building.deliverMaterial(this.player!.inventory);
+                  if (delivered) {
+                    const itemName = ITEMS[delivered]?.name ?? delivered;
+                    this.spawnPickupText(`+[${itemName}]`, targetX, targetY);
+                    if ((building.state as string) === "complete") {
+                      this.spawnPickupText("Built!", targetX, targetY - 16);
+                      if (building.isSolid()) {
+                        this.blockedTiles.add(facingKey);
+                      }
+                      this.recalculateIndoorLighting();
+                    }
+                  } else {
+                    const nextReq = building.getNextRequired();
+                    if (nextReq) {
+                      const reqName = ITEMS[nextReq]?.name ?? nextReq;
+                      this.spawnPickupText(`Need [${reqName}]!`, targetX, targetY);
+                    }
+                  }
+                }
+              } else {
+                if (weapon?.id === "hammer") {
+                  const mult = canonical?.toolMultipliers?.building ?? 1;
+                  const repairAmount = baseDamage * mult;
+                  const repaired = building.repair(repairAmount);
+                  if (repaired > 0) {
+                    this.spawnPickupText(`+${repaired}`, targetX, targetY);
+                  }
+                } else {
+                  const damage = baseDamage;
+                  const destroyed = building.takeBuildingDamage(damage);
+                  if (damage > 0) {
+                    this.spawnPickupText(`-${damage}`, targetX, targetY);
+                  }
+                  if (destroyed) {
+                    this.removeBuilding(building, facingKey);
+                  }
+                }
+              }
+            }
+          } // end if (!meleeBlockedByEdge)
+
+          // Edge-based building construction / repair / damage (walls, fences)
+          // Always reachable — you can hit the wall/fence itself even when it blocks
+          const facingEdgeKey = edgeKeyBetween(playerTX, playerTY, facing.x, facing.y);
+          const edgeBuilding =
+            facingEdgeKey != null ? this.edgeBuildings.get(facingEdgeKey) : undefined;
+          if (edgeBuilding) {
+            if (edgeBuilding.state === "hologram") {
+              if (weapon?.id === "hammer") {
+                const delivered = edgeBuilding.deliverMaterial(this.player!.inventory);
+                if (delivered) {
+                  const itemName = ITEMS[delivered]?.name ?? delivered;
+                  this.spawnPickupText(`+[${itemName}]`, targetX, targetY);
+                  if ((edgeBuilding.state as string) === "complete") {
+                    this.spawnPickupText("Built!", targetX, targetY - 16);
+                    if (edgeBuilding.isSolid()) {
+                      this.blockedEdges.add(facingEdgeKey!);
+                    }
+                    this.recalculateIndoorLighting();
+                  }
+                } else {
+                  const nextReq = edgeBuilding.getNextRequired();
+                  if (nextReq) {
+                    const reqName = ITEMS[nextReq]?.name ?? nextReq;
+                    this.spawnPickupText(`Need [${reqName}]!`, targetX, targetY);
+                  }
+                }
+              }
+            } else {
+              if (weapon?.id === "hammer") {
+                const mult = canonical?.toolMultipliers?.building ?? 1;
+                const repairAmount = baseDamage * mult;
+                const repaired = edgeBuilding.repair(repairAmount);
+                if (repaired > 0) {
+                  this.spawnPickupText(`+${repaired}`, targetX, targetY);
+                }
+              } else {
+                const damage = baseDamage;
+                const destroyed = edgeBuilding.takeBuildingDamage(damage);
+                if (damage > 0) {
+                  this.spawnPickupText(`-${damage}`, targetX, targetY);
+                }
+                if (destroyed) {
+                  this.removeEdgeBuilding(edgeBuilding, facingEdgeKey!);
+                }
               }
             }
           }
-        }
 
-        // Weapon durability loss: -1 per attack
-        if (weapon && weapon.durability != null) {
-          weapon.durability -= 1;
-          if (weapon.durability <= 0) {
-            this.player!.inventory.equipment[EquipmentSlot.MainHand] = null;
-            this.player!.refreshSprite();
-            this.spawnPickupText(
-              `${weapon.name} broke!`,
-              this.player!.pos.x,
-              this.player!.pos.y - 16,
-            );
+          // Weapon durability loss: -1 per attack
+          if (weapon && weapon.durability != null) {
+            weapon.durability -= 1;
+            if (weapon.durability <= 0) {
+              this.player!.inventory.equipment[EquipmentSlot.MainHand] = null;
+              this.player!.refreshSprite();
+              this.spawnPickupText(
+                `${weapon.name} broke!`,
+                this.player!.pos.x,
+                this.player!.pos.y - 16,
+              );
+            }
           }
         }
       }
@@ -1397,6 +1498,102 @@ export class GameWorld extends ex.Scene<GameWorldData> {
     };
   }
 
+  /**
+   * Apply arrow damage at a tile. Returns true if the arrow hit something and should stop.
+   */
+  private applyArrowDamageAt(tx: number, ty: number, baseDamage: number, canonical: Item): boolean {
+    const key = tileKey(tx, ty);
+    const worldX = tx * TILE_SIZE + TILE_SIZE / 2;
+    const worldY = ty * TILE_SIZE + TILE_SIZE / 2;
+
+    // Rock
+    const rock = this.rockByTile.get(key);
+    if (rock) {
+      const mult = canonical.toolMultipliers?.mineable ?? 1;
+      const damage = baseDamage * mult;
+      const drops = rock.takeDamage(damage);
+      for (const drop of drops) {
+        this.dropResourceNear(rock.tileX, rock.tileY, drop);
+      }
+      if (damage > 0) {
+        this.spawnPickupText(`-${damage}`, worldX, worldY);
+      }
+      return true;
+    }
+
+    // Tree
+    const tree = this.treeByTile.get(key);
+    if (tree && !tree.isChoppedDown()) {
+      const mult = canonical.toolMultipliers?.tree ?? 1;
+      const damage = baseDamage * mult;
+      const result = tree.takeDamage(damage);
+      for (const drop of result.drops) {
+        this.dropResourceNear(tree.tileX, tree.tileY, drop);
+      }
+      if (damage > 0) {
+        this.spawnPickupText(`-${damage}`, worldX, worldY);
+      }
+      return true;
+    }
+
+    // Sheep
+    const sheepTarget = this.sheepByTile.get(key);
+    if (sheepTarget && !sheepTarget.isDead) {
+      const mult = canonical.toolMultipliers?.creature ?? 1;
+      const damage = baseDamage * mult;
+      const drops = sheepTarget.takeDamage(damage);
+      for (const drop of drops) {
+        this.dropResourceNear(sheepTarget.tileX, sheepTarget.tileY, drop);
+      }
+      if (damage > 0) {
+        this.spawnPickupText(`-${damage}`, worldX, worldY);
+      }
+      if (sheepTarget.isDead) {
+        this.removeSheep(sheepTarget);
+      }
+      return true;
+    }
+
+    // Cow
+    const cowTarget = this.cowByTile.get(key);
+    if (cowTarget && !cowTarget.isDead) {
+      const mult = canonical.toolMultipliers?.creature ?? 1;
+      const damage = baseDamage * mult;
+      const drops = cowTarget.takeDamage(damage);
+      for (const drop of drops) {
+        this.dropResourceNear(cowTarget.tileX, cowTarget.tileY, drop);
+      }
+      if (damage > 0) {
+        this.spawnPickupText(`-${damage}`, worldX, worldY);
+      }
+      if (cowTarget.isDead) {
+        this.removeCow(cowTarget);
+      }
+      return true;
+    }
+
+    // Tile-based building (floors) — arrows damage but don't construct/repair
+    const building = this.buildingByTile.get(key);
+    if (building && building.state !== "hologram") {
+      const damage = baseDamage;
+      const destroyed = building.takeBuildingDamage(damage);
+      if (damage > 0) {
+        this.spawnPickupText(`-${damage}`, worldX, worldY);
+      }
+      if (destroyed) {
+        this.removeBuilding(building, key);
+      }
+      return true;
+    }
+
+    // Blocked tiles (solid buildings like furnaces) stop the arrow even as holograms
+    if (this.blockedTiles.has(key)) {
+      return true;
+    }
+
+    return false;
+  }
+
   private spawnPickupText(text: string, x: number, y: number): void {
     this.add(new FloatingText(text, x, y - TILE_SIZE / 2));
   }
@@ -1583,7 +1780,7 @@ export class GameWorld extends ex.Scene<GameWorldData> {
     setTimeout(() => {
       const item = this.removeGroundItem(currentKey, 0);
       if (item) {
-        currentPlayer.inventory.bag.push(item);
+        addItemToBag(currentPlayer.inventory, item);
         this.spawnPickupText(`+[${item.name}]`, worldX, worldY);
       }
     }, 700); // Slightly before animation ends
@@ -1722,7 +1919,7 @@ export class GameWorld extends ex.Scene<GameWorldData> {
             ctx.fillStyle = RARITY_COLORS[item.rarity] ?? "#cccccc";
           }
 
-          let name = item.name;
+          let name = isStackable(item) ? `${item.name} x${getItemQuantity(item)}` : item.name;
           if (name.length > 22) name = name.slice(0, 21) + "\u2026";
           ctx.fillText(`${prefix}${name}`, 8, y + 1);
         }
@@ -1785,7 +1982,7 @@ export class GameWorld extends ex.Scene<GameWorldData> {
     setTimeout(() => {
       const item = this.removeGroundItem(currentKey, pickIndex);
       if (item) {
-        currentPlayer.inventory.bag.push(item);
+        addItemToBag(currentPlayer.inventory, item);
         this.spawnPickupText(`+[${item.name}]`, worldX, worldY);
       }
     }, 700);
@@ -1838,6 +2035,7 @@ export class GameWorld extends ex.Scene<GameWorldData> {
       for (let i = 0; i < saved.items.length; i++) {
         const item = saved.items[i];
         migrateItemDurability(item);
+        migrateItemStacking(item);
         const age = saved.ages?.[i] ?? 0;
         const perm = saved.permanent?.[i] ?? false;
         const key = tileKey(saved.tileX, saved.tileY);
@@ -2486,7 +2684,7 @@ export class GameWorld extends ex.Scene<GameWorldData> {
           // Add the cooked item
           const cookedItem = ITEMS[entry.recipe.outputId];
           if (cookedItem) {
-            this.player.inventory.bag.push({ ...cookedItem });
+            addItemToBag(this.player.inventory, { ...cookedItem });
             const worldX = this.cookingBuilding.pos.x;
             const worldY = this.cookingBuilding.pos.y;
             this.spawnPickupText(`+[${cookedItem.name}]`, worldX, worldY);
@@ -2862,7 +3060,7 @@ export class GameWorld extends ex.Scene<GameWorldData> {
             ctx.fillStyle = selected ? "#f0c040" : "#cccccc";
 
             // Truncate long names to fit column
-            let name = item.name;
+            let name = isStackable(item) ? `${item.name} x${getItemQuantity(item)}` : item.name;
             if (name.length > 18) name = name.slice(0, 17) + "…";
             ctx.fillText(`${prefix}${name}`, leftX, y);
           }
@@ -2904,7 +3102,7 @@ export class GameWorld extends ex.Scene<GameWorldData> {
             const prefix = selected ? "> " : "  ";
             ctx.font = selected ? "bold 11px monospace" : "11px monospace";
             ctx.fillStyle = selected ? "#f0c040" : "#cccccc";
-            let name = item.name;
+            let name = isStackable(item) ? `${item.name} x${getItemQuantity(item)}` : item.name;
             if (name.length > 15) name = name.slice(0, 14) + "…";
             ctx.fillText(`${prefix}${slotNum}${name}`, rightX, y);
           } else {
@@ -3792,6 +3990,9 @@ export class GameWorld extends ex.Scene<GameWorldData> {
                 ctx.font = selected ? "bold 11px monospace" : "11px monospace";
                 ctx.fillStyle = selected ? "#f0c040" : (RARITY_COLORS[item.rarity] ?? "#ffffff");
                 let displayName = item.name;
+                if (isStackable(item)) {
+                  displayName += ` x${getItemQuantity(item)}`;
+                }
                 if (item.durability != null && item.maxDurability != null) {
                   displayName += ` [${item.durability}/${item.maxDurability}]`;
                 }
@@ -3899,13 +4100,19 @@ export class GameWorld extends ex.Scene<GameWorldData> {
             ctx.textAlign = "left";
             ctx.font = selected ? "bold 11px monospace" : "11px monospace";
             ctx.fillStyle = selected ? "#f0c040" : (RARITY_COLORS[entry.item.rarity] ?? "#cccccc");
-            ctx.fillText(`${prefix}${entry.item.name}`, 8, y);
+            const bagDisplayName = isStackable(entry.item)
+              ? `${entry.item.name} x${getItemQuantity(entry.item)}`
+              : entry.item.name;
+            ctx.fillText(`${prefix}${bagDisplayName}`, 8, y);
 
-            // Weight right-aligned
+            // Weight right-aligned (multiply by quantity for stacks)
             ctx.textAlign = "right";
             ctx.font = "9px monospace";
             ctx.fillStyle = selected ? "#f0c040" : "#666666";
-            ctx.fillText(`${entry.item.weight}`, pw - 8, y);
+            const displayWeight = isStackable(entry.item)
+              ? (entry.item.weight * getItemQuantity(entry.item)).toFixed(1)
+              : `${entry.item.weight}`;
+            ctx.fillText(displayWeight, pw - 8, y);
           }
 
           // Scroll-down indicator
@@ -3989,11 +4196,16 @@ export class GameWorld extends ex.Scene<GameWorldData> {
             }
             ctx.fillText(`${prefix}${recipe.name}`, 8, y);
 
-            // Cost right-aligned
+            // Cost right-aligned (show alternatives separated by "/")
             const costStr = recipe.ingredients
               .map((ing) => {
-                const n = ITEMS[ing.itemId]?.name ?? ing.itemId;
-                return `${ing.count}x${n}`;
+                const names = [ITEMS[ing.itemId]?.name ?? ing.itemId];
+                if (ing.alternatives) {
+                  for (const alt of ing.alternatives) {
+                    names.push(ITEMS[alt]?.name ?? alt);
+                  }
+                }
+                return `${ing.count}x${names.join("/")}`;
               })
               .join(" ");
             ctx.textAlign = "right";

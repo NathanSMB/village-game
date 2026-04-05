@@ -55,4 +55,23 @@ export const RECIPES: Recipe[] = [
     ingredients: [{ itemId: "cow_hide", count: 1 }],
     resultId: "starter_boots",
   },
+  {
+    id: "bow",
+    name: "Bow",
+    ingredients: [
+      { itemId: "branch", count: 1 },
+      { itemId: "mutton", count: 1, alternatives: ["raw_beef"] },
+    ],
+    resultId: "bow",
+  },
+  {
+    id: "arrow",
+    name: "Arrows (5)",
+    ingredients: [
+      { itemId: "small_rock", count: 2 },
+      { itemId: "branch", count: 1 },
+    ],
+    resultId: "arrow",
+    resultQuantity: 5,
+  },
 ];

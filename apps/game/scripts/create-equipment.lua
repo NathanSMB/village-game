@@ -8,7 +8,7 @@
 
 local W = 32
 local H = 32
-local FRAMES = 76
+local FRAMES = 88
 
 local scriptPath = app.params["script-path"] or "."
 local baseDir = app.fs.joinPath(app.fs.filePath(scriptPath), "..", "assets", "characters", "equipment")
@@ -662,6 +662,63 @@ local function drawThrustSleeves(img, dir, thrustPose)
   end
 end
 
+-- Shoot (bow) attack sleeves (follow shoot arm positions from create-body.lua)
+local function drawShootSleeves(img, dir, shootPose)
+  if dir == 0 then
+    if shootPose == 0 then
+      rect(img, bodyX - armW, 14, armW, 4, CLOTH)
+      px(img, bodyX - armW, 14, CLOTH_SHADOW)
+      rect(img, bodyX + bodyW, 14, armW, 4, CLOTH)
+      px(img, bodyX + bodyW + armW - 1, 14, CLOTH_SHADOW)
+    elseif shootPose == 1 then
+      rect(img, bodyX - armW, 14, armW, 5, CLOTH)
+      px(img, bodyX - armW, 14, CLOTH_SHADOW)
+      rect(img, bodyX + bodyW, 15, armW, 3, CLOTH)
+      px(img, bodyX + bodyW + armW - 1, 15, CLOTH_SHADOW)
+    elseif shootPose == 2 then
+      rect(img, bodyX - armW, 14, armW, 4, CLOTH)
+      px(img, bodyX - armW, 14, CLOTH_SHADOW)
+      rect(img, bodyX + bodyW, 14, armW, 4, CLOTH)
+      px(img, bodyX + bodyW + armW - 1, 14, CLOTH_SHADOW)
+    end
+  elseif dir == 1 then
+    if shootPose == 0 then
+      rect(img, bodyX - armW, 14, armW, 4, CLOTH)
+      rect(img, bodyX + bodyW, 14, armW, 4, CLOTH)
+    elseif shootPose == 1 then
+      rect(img, bodyX - armW, 15, armW, 3, CLOTH)
+      rect(img, bodyX + bodyW, 14, armW, 5, CLOTH)
+    elseif shootPose == 2 then
+      rect(img, bodyX - armW, 14, armW, 4, CLOTH)
+      rect(img, bodyX + bodyW, 14, armW, 4, CLOTH)
+    end
+  elseif dir == 2 then
+    if shootPose == 0 then
+      rect(img, bodyX - 3, 16, 3, armW, CLOTH)
+      rect(img, bodyX + bodyW, 14, armW, 4, CLOTH)
+    elseif shootPose == 1 then
+      rect(img, bodyX - 4, 16, 4, armW, CLOTH)
+      px(img, bodyX - 4, 16, CLOTH_SHADOW)
+      rect(img, bodyX + bodyW, 15, armW, 3, CLOTH)
+    elseif shootPose == 2 then
+      rect(img, bodyX - 3, 16, 3, armW, CLOTH)
+      rect(img, bodyX + bodyW, 14, armW, 4, CLOTH)
+    end
+  elseif dir == 3 then
+    if shootPose == 0 then
+      rect(img, bodyX - armW, 14, armW, 4, CLOTH)
+      rect(img, bodyX + bodyW, 16, 3, armW, CLOTH)
+    elseif shootPose == 1 then
+      rect(img, bodyX - armW, 15, armW, 3, CLOTH)
+      rect(img, bodyX + bodyW, 16, 4, armW, CLOTH)
+      px(img, bodyX + bodyW + 3, 16, CLOTH_SHADOW)
+    elseif shootPose == 2 then
+      rect(img, bodyX - armW, 14, armW, 4, CLOTH)
+      rect(img, bodyX + bodyW, 16, 3, armW, CLOTH)
+    end
+  end
+end
+
 local function createSprite(filename, drawFunc, hasPickSleeves, drinkDrawFunc, pickupItemDrawFunc)
   local spr = Sprite{ width = W, height = H, colorMode = ColorMode.RGB }
   for i = 2, FRAMES do
@@ -744,6 +801,22 @@ local function createSprite(filename, drawFunc, hasPickSleeves, drinkDrawFunc, p
       if hasPickSleeves then
         drawFunc(cel.image, dir, 0, true) -- tunic body without sleeves
         drawThrustSleeves(cel.image, dir, thrustPose)
+      else
+        drawFunc(cel.image, dir, 0) -- pants/boots idle
+      end
+      spr.frames[frameIdx].duration = 0.2
+    end
+  end
+
+  -- Shoot (bow) attack frames (12): 4 directions x 3 shoot poses
+  for dir = 0, 3 do
+    for shootPose = 0, 2 do
+      local frameIdx = 77 + dir * 3 + shootPose
+      app.activeFrame = spr.frames[frameIdx]
+      local cel = spr:newCel(spr.layers[1], frameIdx)
+      if hasPickSleeves then
+        drawFunc(cel.image, dir, 0, true) -- tunic body without sleeves
+        drawShootSleeves(cel.image, dir, shootPose)
       else
         drawFunc(cel.image, dir, 0) -- pants/boots idle
       end

@@ -7,6 +7,7 @@ export const DURABILITY_CONFIG: Record<string, { maxDurability: number; repairIt
   hatchet: { maxDurability: 75, repairItemId: "small_rock" },
   pickaxe: { maxDurability: 75, repairItemId: "small_rock" },
   spear: { maxDurability: 75, repairItemId: "small_rock" },
+  bow: { maxDurability: 75, repairItemId: "branch" },
   starter_tunic: { maxDurability: 50, repairItemId: "wool" },
   starter_pants: { maxDurability: 50, repairItemId: "wool" },
   starter_boots: { maxDurability: 100, repairItemId: "cow_hide" },
@@ -203,6 +204,28 @@ export const ITEMS: Record<string, Item> = {
     consumable: { hungerRestore: 30 },
     itemSprite: "cooked-beef",
   },
+  bow: {
+    id: "bow",
+    name: "Bow",
+    description: "A simple wooden bow strung with sinew. Requires arrows.",
+    rarity: Rarity.Uncommon,
+    stats: { attack: 3 },
+    weight: 2,
+    slot: EquipmentSlot.MainHand,
+    itemSprite: "bow",
+  },
+  arrow: {
+    id: "arrow",
+    name: "Arrow",
+    description: "A stone-tipped arrow. Stackable ammunition for bows.",
+    rarity: Rarity.Common,
+    stats: {},
+    weight: 0.1,
+    slot: EquipmentSlot.OffHand,
+    itemSprite: "arrow",
+    stackable: true,
+    maxStack: 50,
+  },
 };
 
 export function createStarterItem(baseId: string, colorIndex: number): Item {
@@ -244,5 +267,18 @@ export function migrateItemDurability(item: Item): void {
   if (config && item.maxDurability == null) {
     item.maxDurability = config.maxDurability;
     item.durability = config.maxDurability;
+  }
+}
+
+/**
+ * Ensure an item from a loaded save has stacking fields if applicable.
+ * Old saves may have stackable items without the stackable/maxStack/quantity fields.
+ */
+export function migrateItemStacking(item: Item): void {
+  const canonical = ITEMS[item.id];
+  if (canonical?.stackable && item.stackable == null) {
+    item.stackable = canonical.stackable;
+    item.maxStack = canonical.maxStack;
+    item.quantity = item.quantity ?? 1;
   }
 }

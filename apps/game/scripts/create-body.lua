@@ -9,7 +9,7 @@
 
 local W = 32
 local H = 32
-local FRAMES = 76
+local FRAMES = 88
 
 local scriptPath = app.params["script-path"] or "."
 local outputDir = app.fs.joinPath(app.fs.filePath(scriptPath), "..", "assets", "characters", "body")
@@ -794,6 +794,92 @@ local function drawThrustArms(img, dir, thrustPose)
   end
 end
 
+-- Draw shoot (bow) attack arms
+-- shootPose: 0=draw (pulling string back), 1=fully drawn, 2=release (follow-through)
+local function drawShootArms(img, dir, shootPose)
+  if dir == 0 then
+    -- Down-facing: left arm holds bow forward, right arm pulls string
+    if shootPose == 0 then
+      -- Drawing: left arm extended, right arm pulling back
+      rect(img, bodyX - armW, 14, armW, 8, SKIN)
+      px(img, bodyX - armW, 14, SKIN_SHADOW)
+      rect(img, bodyX + bodyW, 14, armW, 6, SKIN)
+      px(img, bodyX + bodyW + armW - 1, 14, SKIN_SHADOW)
+    elseif shootPose == 1 then
+      -- Fully drawn: left arm extended more, right arm at chest
+      rect(img, bodyX - armW, 14, armW, 10, SKIN)
+      px(img, bodyX - armW, 14, SKIN_SHADOW)
+      rect(img, bodyX + bodyW, 15, armW, 4, SKIN)
+      px(img, bodyX + bodyW + armW - 1, 15, SKIN_SHADOW)
+    elseif shootPose == 2 then
+      -- Release: left arm extended, right arm springs forward
+      rect(img, bodyX - armW, 14, armW, 8, SKIN)
+      px(img, bodyX - armW, 14, SKIN_SHADOW)
+      rect(img, bodyX + bodyW, 14, armW, 8, SKIN)
+      px(img, bodyX + bodyW + armW - 1, 14, SKIN_SHADOW)
+    end
+
+  elseif dir == 1 then
+    -- Up-facing: arms from behind
+    if shootPose == 0 then
+      rect(img, bodyX - armW, 14, armW, 6, SKIN)
+      px(img, bodyX - armW, 14, SKIN_SHADOW)
+      rect(img, bodyX + bodyW, 14, armW, 8, SKIN)
+      px(img, bodyX + bodyW + armW - 1, 14, SKIN_SHADOW)
+    elseif shootPose == 1 then
+      rect(img, bodyX - armW, 15, armW, 4, SKIN)
+      px(img, bodyX - armW, 15, SKIN_SHADOW)
+      rect(img, bodyX + bodyW, 14, armW, 10, SKIN)
+      px(img, bodyX + bodyW + armW - 1, 14, SKIN_SHADOW)
+    elseif shootPose == 2 then
+      rect(img, bodyX - armW, 14, armW, 8, SKIN)
+      px(img, bodyX - armW, 14, SKIN_SHADOW)
+      rect(img, bodyX + bodyW, 14, armW, 8, SKIN)
+      px(img, bodyX + bodyW + armW - 1, 14, SKIN_SHADOW)
+    end
+
+  elseif dir == 2 then
+    -- Left-facing: front arm (left) extends left holding bow, right arm pulls
+    if shootPose == 0 then
+      rect(img, bodyX - 6, 16, 6, armW, SKIN)
+      px(img, bodyX - 6, 16, SKIN_SHADOW)
+      rect(img, bodyX + bodyW, 14, armW, 6, SKIN)
+      px(img, bodyX + bodyW + armW - 1, 14, SKIN_SHADOW)
+    elseif shootPose == 1 then
+      rect(img, bodyX - 8, 16, 8, armW, SKIN)
+      px(img, bodyX - 8, 16, SKIN_HIGHLIGHT)
+      px(img, bodyX - 8, 17, SKIN_HIGHLIGHT)
+      rect(img, bodyX + bodyW, 15, armW, 4, SKIN)
+      px(img, bodyX + bodyW + armW - 1, 15, SKIN_SHADOW)
+    elseif shootPose == 2 then
+      rect(img, bodyX - 6, 16, 6, armW, SKIN)
+      px(img, bodyX - 6, 16, SKIN_SHADOW)
+      rect(img, bodyX + bodyW, 14, armW, 8, SKIN)
+      px(img, bodyX + bodyW + armW - 1, 14, SKIN_SHADOW)
+    end
+
+  elseif dir == 3 then
+    -- Right-facing: front arm (right) extends right holding bow, left arm pulls
+    if shootPose == 0 then
+      rect(img, bodyX - armW, 14, armW, 6, SKIN)
+      px(img, bodyX - armW, 14, SKIN_SHADOW)
+      rect(img, bodyX + bodyW, 16, 6, armW, SKIN)
+      px(img, bodyX + bodyW + 5, 16, SKIN_SHADOW)
+    elseif shootPose == 1 then
+      rect(img, bodyX - armW, 15, armW, 4, SKIN)
+      px(img, bodyX - armW, 15, SKIN_SHADOW)
+      rect(img, bodyX + bodyW, 16, 8, armW, SKIN)
+      px(img, bodyX + bodyW + 7, 16, SKIN_HIGHLIGHT)
+      px(img, bodyX + bodyW + 7, 17, SKIN_HIGHLIGHT)
+    elseif shootPose == 2 then
+      rect(img, bodyX - armW, 14, armW, 8, SKIN)
+      px(img, bodyX - armW, 14, SKIN_SHADOW)
+      rect(img, bodyX + bodyW, 16, 6, armW, SKIN)
+      px(img, bodyX + bodyW + 5, 16, SKIN_SHADOW)
+    end
+  end
+end
+
 local function createBodySprite(filename, isFemale)
   local spr = Sprite{ width = W, height = H, colorMode = ColorMode.RGB }
   for i = 2, FRAMES do
@@ -865,6 +951,18 @@ local function createBodySprite(filename, isFemale)
       local cel = spr:newCel(spr.layers[1], frameIdx)
       drawBody(cel.image, dir, 0, isFemale, true) -- idle body, skip arms
       drawThrustArms(cel.image, dir, thrustPose)
+      spr.frames[frameIdx].duration = 0.2
+    end
+  end
+
+  -- Shoot (bow) attack frames (12): 4 directions x 3 shoot poses
+  for dir = 0, 3 do
+    for shootPose = 0, 2 do
+      local frameIdx = 77 + dir * 3 + shootPose
+      app.activeFrame = spr.frames[frameIdx]
+      local cel = spr:newCel(spr.layers[1], frameIdx)
+      drawBody(cel.image, dir, 0, isFemale, true) -- idle body, skip arms
+      drawShootArms(cel.image, dir, shootPose)
       spr.frames[frameIdx].duration = 0.2
     end
   end

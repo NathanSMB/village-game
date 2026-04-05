@@ -80,6 +80,12 @@ export interface Item {
   durability?: number;
   /** Maximum durability this item can have. */
   maxDurability?: number;
+  /** Whether this item type can stack in inventory (e.g. arrows). */
+  stackable?: boolean;
+  /** Maximum number of items per stack (only meaningful when stackable is true). */
+  maxStack?: number;
+  /** Current quantity in this stack (defaults to 1 for non-stackable items). */
+  quantity?: number;
 }
 
 export function isConsumable(item: Item): boolean {
@@ -92,4 +98,14 @@ export function isEquipment(item: Item): boolean {
 
 export function hasDurability(item: Item): boolean {
   return item.maxDurability != null && item.maxDurability > 0;
+}
+
+/** Get the current quantity for an item (defaults to 1 for non-stackable items). */
+export function getItemQuantity(item: Item): number {
+  return item.quantity ?? 1;
+}
+
+/** Whether this item is a stackable type. */
+export function isStackable(item: Item): boolean {
+  return item.stackable === true;
 }

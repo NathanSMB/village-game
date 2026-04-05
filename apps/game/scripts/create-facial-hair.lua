@@ -6,7 +6,7 @@
 
 local W = 32
 local H = 32
-local FRAMES = 76
+local FRAMES = 88
 
 local scriptPath = app.params["script-path"] or "."
 local outputDir = app.fs.joinPath(app.fs.filePath(scriptPath), "..", "assets", "characters", "facial-hair")
@@ -291,6 +291,17 @@ local function createSprite(filename, drawFunc, drinkDrawFunc, pickupDrawFunc)
   for dir = 0, 3 do
     for thrustPose = 0, 2 do
       local frameIdx = 65 + dir * 3 + thrustPose
+      app.activeFrame = spr.frames[frameIdx]
+      local cel = spr:newCel(spr.layers[1], frameIdx)
+      drawFunc(cel.image, dir, 0)
+      spr.frames[frameIdx].duration = 0.2
+    end
+  end
+
+  -- Shoot (bow) attack frames (12): facial hair same as idle
+  for dir = 0, 3 do
+    for shootPose = 0, 2 do
+      local frameIdx = 77 + dir * 3 + shootPose
       app.activeFrame = spr.frames[frameIdx]
       local cel = spr:newCel(spr.layers[1], frameIdx)
       drawFunc(cel.image, dir, 0)

@@ -87,10 +87,20 @@ const THRUST_DIR_OFFSET: Record<Direction, number> = {
   right: 73,
 };
 
-export type AttackStyle = "swing" | "thrust";
+// Shoot attack frame offsets: frames 76-87 (4 dirs × 3 shoot poses)
+const SHOOT_DIR_OFFSET: Record<Direction, number> = {
+  down: 76,
+  up: 79,
+  left: 82,
+  right: 85,
+};
+
+export type AttackStyle = "swing" | "thrust" | "shoot";
 
 // Items that use thrust animation (spear). Everything else uses swing.
 const THRUST_ITEM_IDS = new Set(["spear"]);
+// Items that use shoot animation (bow).
+const SHOOT_ITEM_IDS = new Set(["bow"]);
 
 function tileCenter(tile: number): number {
   return tile * TILE_SIZE + TILE_SIZE / 2;
@@ -289,18 +299,30 @@ export class Player extends ex.Actor {
   }
 
   /**
-   * Start an attack animation. Auto-detects swing vs thrust from equipped MainHand weapon.
+   * Start an attack animation. Auto-detects swing / thrust / shoot from equipped MainHand weapon.
    * When no weapon is equipped, performs an unarmed swing attack.
    */
   startAttack(): AttackStyle {
     const mainHand = this.inventory.equipment[EquipmentSlot.MainHand];
-    const style: AttackStyle = mainHand && THRUST_ITEM_IDS.has(mainHand.id) ? "thrust" : "swing";
+    let style: AttackStyle;
+    if (mainHand && SHOOT_ITEM_IDS.has(mainHand.id)) {
+      style = "shoot";
+    } else if (mainHand && THRUST_ITEM_IDS.has(mainHand.id)) {
+      style = "thrust";
+    } else {
+      style = "swing";
+    }
     this.stopMovement();
     this.attacking = true;
     this.attackStyle = style;
     this.attackTimer = ATTACK_DURATION_MS;
 
-    const offsets = style === "swing" ? SWING_DIR_OFFSET : THRUST_DIR_OFFSET;
+    const offsets =
+      style === "shoot"
+        ? SHOOT_DIR_OFFSET
+        : style === "thrust"
+          ? THRUST_DIR_OFFSET
+          : SWING_DIR_OFFSET;
     this.showFrame(offsets[this.facing]);
 
     return style;
@@ -501,7 +523,12 @@ export class Player extends ex.Actor {
       this.attackTimer -= delta;
       const thirdDuration = ATTACK_DURATION_MS / 3;
 
-      const offsets = this.attackStyle === "swing" ? SWING_DIR_OFFSET : THRUST_DIR_OFFSET;
+      const offsets =
+        this.attackStyle === "shoot"
+          ? SHOOT_DIR_OFFSET
+          : this.attackStyle === "thrust"
+            ? THRUST_DIR_OFFSET
+            : SWING_DIR_OFFSET;
       const base = offsets[this.facing];
       let poseIdx: number;
       if (this.attackTimer > thirdDuration * 2) {

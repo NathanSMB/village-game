@@ -702,8 +702,8 @@ export class GameWorld extends ex.Scene<GameWorldData> {
       this.updateChatInputPanel();
       this.add(this.chatInputPanel);
 
-      // Chat log sits above the input panel
-      const chatLogY = (UI_REF_HEIGHT - 8 - inputPanelH - 4) * this.uiScale;
+      // Chat log sits just above the input panel (2 design-unit gap)
+      const chatLogY = (UI_REF_HEIGHT - 8 - inputPanelH - 2) * this.uiScale;
       this.chatLog = new ChatLog(() => this.chatMessages, this.uiScale, chatLogY);
       this.add(this.chatLog);
 
@@ -3396,21 +3396,24 @@ export class GameWorld extends ex.Scene<GameWorldData> {
         ctx.imageSmoothingEnabled = false;
         ctx.scale(this.uiScale, this.uiScale);
 
+        // Background (shared by both idle hint and active input)
+        ctx.fillStyle = "rgba(10, 10, 20, 0.6)";
+        this.drawRoundRect(ctx, 0, 0, panelW, panelH, 3);
+        ctx.fill();
+
         if (!this.chatOpen) {
           // Idle hint: "Press [T] to chat"
           ctx.font = "10px monospace";
           ctx.textBaseline = "middle";
-          ctx.fillStyle = "#555555";
+          ctx.fillStyle = "#888888";
           ctx.fillText("Press [T] to chat", 6, panelH / 2);
           return;
         }
 
-        // Active chat: draw text box background
-        ctx.fillStyle = "rgba(10, 10, 20, 0.82)";
+        // Active chat: add teal border on top of shared background
         ctx.strokeStyle = "rgba(80, 200, 180, 0.35)";
         ctx.lineWidth = 1;
         this.drawRoundRect(ctx, 0, 0, panelW, panelH, 3);
-        ctx.fill();
         ctx.stroke();
 
         const modeColor = CHAT_MODE_COLORS[this.chatMode];

@@ -6,7 +6,6 @@ import { GameWorld } from "./scenes/game-world.ts";
 import { PauseMenu } from "./scenes/pause-menu.ts";
 import { SaveGame } from "./scenes/save-game.ts";
 import { LoadGame } from "./scenes/load-game.ts";
-import { InventoryScene } from "./scenes/inventory-scene.ts";
 import { GameOver } from "./scenes/game-over.ts";
 import { initDB } from "./systems/save-manager.ts";
 import { loadKeybinds } from "./systems/keybinds.ts";
@@ -33,7 +32,6 @@ engine.addScene("game-world", new GameWorld());
 engine.addScene("pause-menu", new PauseMenu());
 engine.addScene("save-game", new SaveGame());
 engine.addScene("load-game", new LoadGame());
-engine.addScene("inventory", new InventoryScene());
 engine.addScene("game-over", new GameOver());
 
 const loader = new ex.Loader(getAllImageSources());

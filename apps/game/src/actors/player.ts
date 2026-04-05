@@ -333,13 +333,41 @@ export class Player extends ex.Actor {
    * Apply direct combat damage to the player (from hostile creatures, traps, etc.).
    * Resets the out-of-combat timer so passive health regen pauses.
    */
-  takeCombatDamage(amount: number): void {
+  takeCombatDamage(amount: number): { brokenItems: string[] } {
     this.vitals = {
       ...this.vitals,
       health: clampVital(this.vitals.health - amount),
     };
     this.combatTimer = 0;
     this.regenAccum = 0;
+
+    // Reduce durability on all worn equipment (not MainHand — weapons degrade on attack)
+    const brokenItems: string[] = [];
+    const armorSlots: (typeof EquipmentSlot)[keyof typeof EquipmentSlot][] = [
+      EquipmentSlot.Head,
+      EquipmentSlot.Torso,
+      EquipmentSlot.Hands,
+      EquipmentSlot.Legs,
+      EquipmentSlot.Feet,
+      EquipmentSlot.OffHand,
+    ];
+
+    for (const slot of armorSlots) {
+      const item = this.inventory.equipment[slot];
+      if (item && item.durability != null) {
+        item.durability -= 1;
+        if (item.durability <= 0) {
+          brokenItems.push(item.name);
+          this.inventory.equipment[slot] = null;
+        }
+      }
+    }
+
+    if (brokenItems.length > 0) {
+      this.refreshSprite();
+    }
+
+    return { brokenItems };
   }
 
   /** Returns true if the player has not taken combat damage recently. */

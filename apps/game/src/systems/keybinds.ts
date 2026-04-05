@@ -15,7 +15,8 @@ export type ActionName =
   | "drop"
   | "attack"
   | "build"
-  | "rotate";
+  | "rotate"
+  | "repair";
 
 export interface KeyBinding {
   slot1: Keys | null;
@@ -38,6 +39,7 @@ export const ALL_ACTIONS: ActionName[] = [
   "attack",
   "build",
   "rotate",
+  "repair",
 ];
 
 export const ACTION_LABELS: Record<ActionName, string> = {
@@ -54,6 +56,7 @@ export const ACTION_LABELS: Record<ActionName, string> = {
   attack: "Attack",
   build: "Build",
   rotate: "Rotate",
+  repair: "Repair",
 };
 
 function makeDefaults(): KeyBindings {
@@ -71,6 +74,7 @@ function makeDefaults(): KeyBindings {
     attack: { slot1: Keys.KeyF, slot2: null },
     build: { slot1: Keys.KeyB, slot2: null },
     rotate: { slot1: Keys.KeyR, slot2: null },
+    repair: { slot1: Keys.KeyV, slot2: null },
   };
 }
 

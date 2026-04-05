@@ -1,6 +1,17 @@
 import { EquipmentSlot, Rarity, type Item } from "../types/item.ts";
 import { CLOTHING_COLORS } from "./character-options.ts";
 
+/** Durability and repair configuration for each equipment item ID. */
+export const DURABILITY_CONFIG: Record<string, { maxDurability: number; repairItemId: string }> = {
+  hammer: { maxDurability: 75, repairItemId: "small_rock" },
+  hatchet: { maxDurability: 75, repairItemId: "small_rock" },
+  pickaxe: { maxDurability: 75, repairItemId: "small_rock" },
+  spear: { maxDurability: 75, repairItemId: "small_rock" },
+  starter_tunic: { maxDurability: 50, repairItemId: "wool" },
+  starter_pants: { maxDurability: 50, repairItemId: "wool" },
+  starter_boots: { maxDurability: 100, repairItemId: "cow_hide" },
+};
+
 export const ITEMS: Record<string, Item> = {
   starter_tunic: {
     id: "starter_tunic",
@@ -197,5 +208,41 @@ export const ITEMS: Record<string, Item> = {
 export function createStarterItem(baseId: string, colorIndex: number): Item {
   const base = ITEMS[baseId];
   const dye = CLOTHING_COLORS[colorIndex]?.name;
+  const config = DURABILITY_CONFIG[baseId];
+  if (config) {
+    return {
+      ...base,
+      colorIndex,
+      dye,
+      durability: config.maxDurability,
+      maxDurability: config.maxDurability,
+    };
+  }
   return { ...base, colorIndex, dye };
+}
+
+/** Create a copy of an item from the registry, stamping durability if applicable. */
+export function createItemCopy(baseId: string): Item {
+  const base = ITEMS[baseId];
+  const config = DURABILITY_CONFIG[baseId];
+  if (config) {
+    return {
+      ...base,
+      durability: config.maxDurability,
+      maxDurability: config.maxDurability,
+    };
+  }
+  return { ...base };
+}
+
+/**
+ * Ensure an item from a loaded save has durability fields.
+ * Old saves won't have them — missing durability defaults to max (fully repaired).
+ */
+export function migrateItemDurability(item: Item): void {
+  const config = DURABILITY_CONFIG[item.id];
+  if (config && item.maxDurability == null) {
+    item.maxDurability = config.maxDurability;
+    item.durability = config.maxDurability;
+  }
 }

@@ -1,5 +1,5 @@
 import type { InventoryState } from "./inventory.ts";
-import { ITEMS } from "../data/items.ts";
+import { ITEMS, createItemCopy } from "../data/items.ts";
 
 export interface RecipeIngredient {
   itemId: string;
@@ -54,10 +54,10 @@ export function craft(inventory: InventoryState, recipe: Recipe): boolean {
     }
   }
 
-  // Add result item
+  // Add result item (with durability stamped if applicable)
   const baseItem = ITEMS[recipe.resultId];
   if (baseItem) {
-    inventory.bag.push({ ...baseItem });
+    inventory.bag.push(createItemCopy(recipe.resultId));
   }
 
   return true;

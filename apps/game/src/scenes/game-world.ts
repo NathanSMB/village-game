@@ -5,6 +5,7 @@ import {
   equipItem,
   unequipItem,
   consumeItem,
+  repairItem,
   type InventoryState,
 } from "../types/inventory.ts";
 import {
@@ -25,7 +26,7 @@ import { FloatingText } from "../actors/floating-text.ts";
 import { AttackEffect } from "../actors/attack-effect.ts";
 import { VitalsHud } from "../actors/vitals-hud.ts";
 import { wasActionPressed } from "../systems/keybinds.ts";
-import { ITEMS } from "../data/items.ts";
+import { ITEMS, DURABILITY_CONFIG, migrateItemDurability } from "../data/items.ts";
 import { BUILDING_TYPES, BUILDING_TYPE_MAP, type BuildingType } from "../data/buildings.ts";
 import { COOKING_RECIPES, COOKING_RECIPE_MAP } from "../data/cooking.ts";
 import { RECIPES } from "../data/recipes.ts";
@@ -550,6 +551,13 @@ export class GameWorld extends ex.Scene<GameWorldData> {
             bag: context.data.save.player.bag ?? [],
             maxWeight: context.data.save.player.maxWeight ?? 50,
           };
+          // Migrate durability for old saves
+          for (const item of Object.values(inventory.equipment)) {
+            if (item) migrateItemDurability(item);
+          }
+          for (const item of inventory.bag) {
+            migrateItemDurability(item);
+          }
         }
       }
 
@@ -930,6 +938,20 @@ export class GameWorld extends ex.Scene<GameWorldData> {
                 this.removeEdgeBuilding(edgeBuilding, facingEdgeKey!);
               }
             }
+          }
+        }
+
+        // Weapon durability loss: -1 per attack
+        if (weapon && weapon.durability != null) {
+          weapon.durability -= 1;
+          if (weapon.durability <= 0) {
+            this.player!.inventory.equipment[EquipmentSlot.MainHand] = null;
+            this.player!.refreshSprite();
+            this.spawnPickupText(
+              `${weapon.name} broke!`,
+              this.player!.pos.x,
+              this.player!.pos.y - 16,
+            );
           }
         }
       }
@@ -1817,6 +1839,7 @@ export class GameWorld extends ex.Scene<GameWorldData> {
     // Restore saved ground items
     for (const saved of states) {
       for (const item of saved.items) {
+        migrateItemDurability(item);
         this.dropItemAt(saved.tileX, saved.tileY, item);
       }
     }
@@ -3037,6 +3060,26 @@ export class GameWorld extends ex.Scene<GameWorldData> {
     if (wasActionPressed(kb, "confirm") || wasActionPressed(kb, "action")) {
       this.openEquipSubmenu();
     }
+    if (wasActionPressed(kb, "repair")) {
+      const slot = ALL_EQUIPMENT_SLOTS[this.inventoryEquipIndex];
+      const item = this.player.inventory.equipment[slot];
+      const repaired = repairItem(this.player.inventory, slot);
+      if (repaired) {
+        this.spawnPickupText(
+          `Repaired with ${repaired}!`,
+          this.player.pos.x,
+          this.player.pos.y - 16,
+        );
+        this.rebuildInventoryViewBag();
+      } else if (item && item.durability != null && item.durability < (item.maxDurability ?? 0)) {
+        const config = DURABILITY_CONFIG[item.id];
+        if (config) {
+          const matName = ITEMS[config.repairItemId]?.name ?? config.repairItemId;
+          this.spawnPickupText(`Need ${matName}!`, this.player.pos.x, this.player.pos.y - 16);
+        }
+      }
+      this.updateInventoryMenu();
+    }
   }
 
   private openEquipSubmenu(): void {
@@ -3462,6 +3505,23 @@ export class GameWorld extends ex.Scene<GameWorldData> {
       }
     }
 
+    // Durability
+    if (item.durability != null && item.maxDurability != null) {
+      const durRatio = item.durability / item.maxDurability;
+      ctx.fillStyle = durRatio > 0.25 ? "#66cc66" : "#ff6666";
+      ctx.fillText(`Durability: ${item.durability}/${item.maxDurability}`, leftX, y);
+      y += dlh;
+
+      // Repair material
+      const durConfig = DURABILITY_CONFIG[item.id];
+      if (durConfig) {
+        const repairName = ITEMS[durConfig.repairItemId]?.name ?? durConfig.repairItemId;
+        ctx.fillStyle = "#888888";
+        ctx.fillText(`Repair: ${repairName}`, leftX, y);
+        y += dlh;
+      }
+    }
+
     // Weight
     ctx.fillStyle = "#888888";
     ctx.fillText(`Weight: ${canonical.weight}`, leftX, y);
@@ -3724,7 +3784,11 @@ export class GameWorld extends ex.Scene<GameWorldData> {
               if (item) {
                 ctx.font = selected ? "bold 11px monospace" : "11px monospace";
                 ctx.fillStyle = selected ? "#f0c040" : (RARITY_COLORS[item.rarity] ?? "#ffffff");
-                ctx.fillText(item.name, 8 + labelWidth, y);
+                let displayName = item.name;
+                if (item.durability != null && item.maxDurability != null) {
+                  displayName += ` [${item.durability}/${item.maxDurability}]`;
+                }
+                ctx.fillText(displayName, 8 + labelWidth, y);
 
                 const canonical = ITEMS[item.id] ?? item;
                 const sp: string[] = [];
@@ -3999,7 +4063,18 @@ export class GameWorld extends ex.Scene<GameWorldData> {
               ctx.fillText("[E] Unequip  [Esc] Back", pw / 2, hintY);
             }
           } else {
-            ctx.fillText("[E] Select  [\u2190\u2192] Tab  [I] Close", pw / 2, hintY);
+            const selSlotForHint = ALL_EQUIPMENT_SLOTS[equipIdx];
+            const selItemForHint = inv.equipment[selSlotForHint];
+            if (
+              selItemForHint &&
+              selItemForHint.durability != null &&
+              selItemForHint.maxDurability != null &&
+              selItemForHint.durability < selItemForHint.maxDurability
+            ) {
+              ctx.fillText("[E] Select  [V] Repair  [I] Close", pw / 2, hintY);
+            } else {
+              ctx.fillText("[E] Select  [\u2190\u2192] Tab  [I] Close", pw / 2, hintY);
+            }
           }
         } else if (tab === "bag") {
           if (filterActive) {

@@ -24,6 +24,8 @@ export interface NPCMemoryState {
 export interface NPCTodoItem {
   task: string;
   done: boolean;
+  /** How to know this task is complete — a concrete observable condition. */
+  doneWhen: string;
 }
 
 // ── Action State ─────────────────────────────────────────────────────

@@ -126,6 +126,84 @@ export class NPC extends ex.Actor {
     }
   }
 
+  /**
+   * Auto-check todo completion conditions against current state.
+   * Marks items as done if their doneWhen condition is satisfied.
+   * Called before each LLM decision to prevent redundant actions.
+   */
+  autoCheckTodos(): void {
+    if (this.todoList.length === 0) return;
+
+    const bagItemNames = this.inventory.bag.map((i) => i.id);
+    const equippedIds = Object.values(this.inventory.equipment)
+      .filter((i) => i != null)
+      .map((i) => i.id);
+    const allItems = [...bagItemNames, ...equippedIds];
+
+    for (const todo of this.todoList) {
+      if (todo.done) continue;
+      const cond = todo.doneWhen.toLowerCase();
+
+      // Check "have X in bag" or "X is in bag"
+      const bagMatch = cond.match(/have (?:at least \d+ )?(\w+) in bag|(\w+) is in bag/);
+      if (bagMatch) {
+        const itemName = (bagMatch[1] ?? bagMatch[2]).toLowerCase();
+        if (allItems.some((id) => id.toLowerCase().includes(itemName))) {
+          todo.done = true;
+          continue;
+        }
+      }
+
+      // Check "X in bag or equipped"
+      const bagOrEquipMatch = cond.match(/(\w+).*in bag or equipped/);
+      if (bagOrEquipMatch) {
+        const itemName = bagOrEquipMatch[1].toLowerCase();
+        if (allItems.some((id) => id.toLowerCase().includes(itemName))) {
+          todo.done = true;
+          continue;
+        }
+      }
+
+      // Check "X is equipped" (only equipped, not bag)
+      const equipOnlyMatch = cond.match(/(\w+)\s+is equipped/);
+      if (equipOnlyMatch && !cond.includes("in bag")) {
+        const itemName = equipOnlyMatch[1].toLowerCase();
+        if (equippedIds.some((id) => id.toLowerCase().includes(itemName))) {
+          todo.done = true;
+          continue;
+        }
+      }
+
+      // Check vital thresholds: "thirst is above 40" / "hunger above 30"
+      const vitalMatch = cond.match(/(thirst|hunger|health|energy)\s*(?:is\s*)?above\s*(\d+)/);
+      if (vitalMatch) {
+        const vital = vitalMatch[1] as keyof typeof this.vitals;
+        const threshold = Number(vitalMatch[2]);
+        if (vital in this.vitals && this.vitals[vital] > threshold) {
+          todo.done = true;
+          continue;
+        }
+      }
+
+      // Check "have a claimed bed" / "bed is claimed"
+      if (
+        cond.includes("claimed bed") ||
+        cond.includes("bed is claimed") ||
+        cond.includes("have a bed")
+      ) {
+        if (this.claimedBed) {
+          todo.done = true;
+          continue;
+        }
+      }
+    }
+
+    // If all done, clear the list so the NPC will plan again
+    if (this.todoList.length > 0 && this.todoList.every((t) => t.done)) {
+      this.todoList = [];
+    }
+  }
+
   // Chat inbox — NEW messages heard since last LLM call, consumed by brain
   chatInbox: ChatMessage[] = [];
 
@@ -159,11 +237,49 @@ export class NPC extends ex.Actor {
   /** Whether the last action succeeded. */
   debugLastResult = "";
   /** Circular buffer of recent actions (newest first, max 10). */
-  debugHistory: { action: string; result: string; time: number }[] = [];
+  debugHistory: { action: string; result: string; time: number; changes: string }[] = [];
+  /** Previous visible entity states, keyed by "type:x,y" → details string. */
+  private prevVisibleEntities = new Map<string, string>();
+
+  /**
+   * Diff current visible entities against previous snapshot.
+   * Returns a compact string of changes (HP drops, state changes, new/gone entities).
+   */
+  diffVisibleEntities(entities: { type: string; x: number; y: number; details: string }[]): string {
+    const curr = new Map<string, string>();
+    for (const e of entities) {
+      curr.set(`${e.type}:${e.x},${e.y}`, e.details);
+    }
+
+    const diffs: string[] = [];
+
+    // Changed or new
+    for (const [key, details] of curr) {
+      const prev = this.prevVisibleEntities.get(key);
+      if (prev == null) {
+        // Only note truly interesting new things, skip ground tiles
+        if (!details.includes("water") && !details.includes("grass")) {
+          diffs.push(`NEW ${key} ${details}`);
+        }
+      } else if (prev !== details) {
+        diffs.push(`${key}: ${prev} → ${details}`);
+      }
+    }
+
+    // Gone from vision
+    for (const [key] of this.prevVisibleEntities) {
+      if (!curr.has(key)) {
+        diffs.push(`GONE ${key}`);
+      }
+    }
+
+    this.prevVisibleEntities = curr;
+    return diffs.length > 0 ? diffs.slice(0, 6).join("; ") : "";
+  }
 
   /** Push an entry into the action history (keeps newest 10). */
-  pushDebugHistory(action: string, result: string): void {
-    this.debugHistory.unshift({ action, result, time: Date.now() });
+  pushDebugHistory(action: string, result: string, changes = ""): void {
+    this.debugHistory.unshift({ action, result, time: Date.now(), changes });
     if (this.debugHistory.length > 10) this.debugHistory.length = 10;
   }
 

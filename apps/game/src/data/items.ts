@@ -81,7 +81,8 @@ export const ITEMS: Record<string, Item> = {
   hammer: {
     id: "hammer",
     name: "Hammer",
-    description: "A crude stone hammer. Good for building.",
+    description:
+      "A crude stone hammer. Required for constructing and repairing buildings. Hitting a building hologram with a hammer delivers materials. Hitting a damaged building repairs it.",
     rarity: Rarity.Uncommon,
     stats: { attack: 2 },
     weight: 2,

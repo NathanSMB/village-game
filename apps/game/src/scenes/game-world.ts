@@ -5503,6 +5503,10 @@ export class GameWorld extends ex.Scene<GameWorldData> {
     npc.debugThinking = true;
 
     const snapshot = this.getWorldSnapshotForNPC(npc);
+    // Auto-complete todos whose conditions are already met
+    npc.autoCheckTodos();
+    // Diff visible entity states (HP changes, bush picked, etc.)
+    const worldChanges = npc.diffVisibleEntities(snapshot.entities);
     const config = this.llmConfig;
 
     decideNextAction(npc, snapshot, config, abortController.signal)
@@ -5524,7 +5528,7 @@ export class GameWorld extends ex.Scene<GameWorldData> {
           npc.todoList = todos;
           const summary = todos.map((t) => t.task).join(" → ");
           npc.debugLastResult = `✓ Plan: ${summary.slice(0, 80)}`;
-          npc.pushDebugHistory('{"action":"plan"}', `✓ ${todos.length} todos`);
+          npc.pushDebugHistory('{"action":"plan"}', `✓ ${todos.length} todos`, worldChanges);
           this.npcInFlight.delete(npc.npcId);
           npc.debugThinking = false;
           return;
@@ -5536,7 +5540,7 @@ export class GameWorld extends ex.Scene<GameWorldData> {
           npc.debugLastResult = "⏳ Thinking...";
           const answer = await thinkAboutQuestion(npc, snapshot, config, abortController.signal);
           npc.debugLastResult = `✓ Thought: ${answer.slice(0, 80)}`;
-          npc.pushDebugHistory('{"action":"think"}', `✓ ${answer.slice(0, 60)}`);
+          npc.pushDebugHistory('{"action":"think"}', `✓ ${answer.slice(0, 60)}`, worldChanges);
           this.npcInFlight.delete(npc.npcId);
           npc.debugThinking = false;
           return;
@@ -5549,7 +5553,7 @@ export class GameWorld extends ex.Scene<GameWorldData> {
           ? `✓ ${result.reason ?? "ok"}`
           : `✗ ${result.reason ?? "failed"}`;
         npc.debugLastResult = resultStr;
-        npc.pushDebugHistory(actionJson, resultStr);
+        npc.pushDebugHistory(actionJson, resultStr, worldChanges);
         this.npcInFlight.delete(npc.npcId);
         npc.debugThinking = false;
       })
@@ -5567,8 +5571,8 @@ export class GameWorld extends ex.Scene<GameWorldData> {
     const cx = npc.tileX;
     const cy = npc.tileY;
 
-    for (let dy = -6; dy <= 6; dy++) {
-      for (let dx = -6; dx <= 6; dx++) {
+    for (let dy = -10; dy <= 10; dy++) {
+      for (let dx = -10; dx <= 10; dx++) {
         const tx = cx + dx;
         const ty = cy + dy;
         if (tx < 0 || tx >= MAP_COLS || ty < 0 || ty >= MAP_ROWS) continue;
@@ -5688,7 +5692,7 @@ export class GameWorld extends ex.Scene<GameWorldData> {
     if (this.player) {
       const px = this.player.getTileX();
       const py = this.player.getTileY();
-      if (chebyshevDistance(cx, cy, px, py) <= 6) {
+      if (chebyshevDistance(cx, cy, px, py) <= 10) {
         entities.push({
           type: "player",
           x: px,
@@ -5703,7 +5707,7 @@ export class GameWorld extends ex.Scene<GameWorldData> {
       const decoded = decodeEdgeKey(edgeKey);
       if (!decoded) continue;
       const { x: ex2, y: ey } = decoded;
-      if (chebyshevDistance(cx, cy, ex2, ey) <= 6) {
+      if (chebyshevDistance(cx, cy, ex2, ey) <= 10) {
         let detail = `${edge.type.name} (${edge.state})`;
         if (edge.type.interactable) detail += edge.isOpen ? " [open]" : " [closed]";
         entities.push({ type: "edge_building", x: ex2, y: ey, details: detail });

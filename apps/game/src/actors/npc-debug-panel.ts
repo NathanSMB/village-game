@@ -174,15 +174,18 @@ export class NPCDebugPanel extends ex.ScreenElement {
       y += LINE - 1;
     } else {
       ctx.font = "9px monospace";
-      for (let i = 0; i < Math.min(4, npc.todoList.length); i++) {
+      for (let i = 0; i < Math.min(3, npc.todoList.length); i++) {
         const t = npc.todoList[i];
         ctx.fillStyle = t.done ? DIM_COLOR : "#ffdd66";
         ctx.fillText(`${t.done ? "✓" : "○"} [${i}] ${truncate(t.task, 36)}`, PAD, y);
         y += LINE - 2;
+        ctx.fillStyle = t.done ? DIM_COLOR : "#88aacc";
+        ctx.fillText(`     ↳ ${truncate(t.doneWhen, 33)}`, PAD, y);
+        y += LINE - 2;
       }
-      if (npc.todoList.length > 4) {
+      if (npc.todoList.length > 3) {
         ctx.fillStyle = DIM_COLOR;
-        ctx.fillText(`  +${npc.todoList.length - 4} more`, PAD, y);
+        ctx.fillText(`  +${npc.todoList.length - 3} more`, PAD, y);
         y += LINE - 2;
       }
     }

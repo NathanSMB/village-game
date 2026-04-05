@@ -12,6 +12,7 @@ import { getItemQuantity } from "../types/item.ts";
 import { RECIPES } from "../data/recipes.ts";
 import { BUILDING_TYPES } from "../data/buildings.ts";
 import { COOKING_RECIPES } from "../data/cooking.ts";
+import { ITEMS } from "../data/items.ts";
 
 // ── Action schema (included in the system prompt) ────────────────────
 
@@ -31,10 +32,31 @@ Gathering:
   {"action":"chop_tree","direction":"<dir>"} — Chop adjacent tree → drops: branch (per hit), 6x log (when felled). Hatchet is much faster.
   {"action":"mine_rock","direction":"<dir>"} — Mine adjacent rock → drops: small_rock (40%), large_stone (40%), flint (20%). Pickaxe is much faster.
   {"action":"drink_water","direction":"<dir>"} — Drink from adjacent water tile → +25 thirst
-  {"action":"pick_up_item","direction":"<dir>"} — Pick up item from adjacent ground
+  {"action":"pick_up_item","direction":"<dir>"} — Pick up item from ADJACENT tile (you must stand NEXT TO the item, not on top of it!)
 
 Combat:
   {"action":"attack","direction":"<dir>"} — Attack creature. Sheep drops: mutton+wool. Cow drops: raw_beef+cow_hide.
+
+ITEM REFERENCE:
+${Object.values(ITEMS)
+  .map((item) => {
+    const parts = [`${item.id}: ${item.description}`];
+    if (item.stats.attack) parts.push(`ATK:${item.stats.attack}`);
+    if (item.stats.defense) parts.push(`DEF:${item.stats.defense}`);
+    if (item.slot) parts.push(`equip:${item.slot}`);
+    if (item.consumable?.hungerRestore) parts.push(`+${item.consumable.hungerRestore} food`);
+    if (item.consumable?.thirstRestore) parts.push(`+${item.consumable.thirstRestore} water`);
+    if (item.consumable?.healthRestore) parts.push(`+${item.consumable.healthRestore} HP`);
+    if (item.toolMultipliers)
+      parts.push(
+        `effective vs: ${Object.entries(item.toolMultipliers)
+          .map(([k, v]) => `${k}(${v}x ${k === "building" ? "build/repair speed" : "damage"})`)
+          .join(", ")}`,
+      );
+    if (item.weight) parts.push(`wt:${item.weight}`);
+    return `  ${parts.join(" | ")}`;
+  })
+  .join("\n")}
 
 Crafting recipes: ${RECIPES.map((r) => `${r.id}(${r.ingredients.map((i) => `${i.count}x ${i.itemId}`).join("+")} -> ${r.name}${r.resultQuantity ? ` x${r.resultQuantity}` : ""})`).join(", ")}
   {"action":"craft","recipeId":"<id>"} — Craft if you have the materials
@@ -64,7 +86,7 @@ Interaction:
   {"action":"store_item","direction":"<dir>","bagIndex":<num>} / {"action":"retrieve_item","direction":"<dir>","slotIndex":<num>}
 
 Communication:
-  {"action":"chat","text":"<msg>","mode":"whisper|talk|yell"} — Speak (whisper=1tile, talk=3, yell=6)
+  {"action":"chat","text":"<msg>","mode":"whisper|talk|yell"} — Speak (whisper=1tile, talk=5, yell=10)
 
 Memory:
   {"action":"remember","note":"<text>"} — Save a note (max 20)
@@ -156,11 +178,17 @@ function buildNPCContext(npc: NPC, snapshot: WorldSnapshot): NPCContext {
       .join("\n");
   }
 
-  // Recent action history
+  // Recent action history with world state changes
   const recentHistory = npc.debugHistory.slice(0, 3);
   const historyStr =
     recentHistory.length > 0
-      ? recentHistory.map((h) => `  ${h.action} => ${h.result}`).join("\n")
+      ? recentHistory
+          .map((h) => {
+            let line = `  ${h.action} => ${h.result}`;
+            if (h.changes) line += `\n    world: ${h.changes}`;
+            return line;
+          })
+          .join("\n")
       : "  (none)";
 
   // Thinking history
@@ -191,13 +219,21 @@ function buildSystemPrompt(npc: NPC, snapshot: WorldSnapshot): string {
   // Todo list section
   let planSection: string;
   if (npc.todoList.length === 0) {
-    planSection = `NO PLAN — You MUST use {"action":"plan"} to create a todo list before doing anything else.`;
+    planSection = `NO PLAN — Your ONLY valid action right now is {"action":"plan"}. You CANNOT do anything else until you have a plan. Output: {"action":"plan"}`;
   } else {
     const todoLines = npc.todoList
-      .map((t, i) => `  [${i}] ${t.done ? "DONE" : "TODO"}: ${t.task}`)
+      .map(
+        (t, i) =>
+          `  [${i}] ${t.done ? "DONE" : "TODO"}: ${t.task}\n       Done when: ${t.doneWhen}`,
+      )
       .join("\n");
     const nextTodo = npc.todoList.findIndex((t) => !t.done);
-    planSection = `YOUR TODO LIST:\n${todoLines}\n${nextTodo >= 0 ? `→ Work on item [${nextTodo}]. Take the actions needed to accomplish it. Only use complete_todo AFTER you've actually done it.` : 'All items done! Use {"action":"plan"} for a new plan.'}`;
+    if (nextTodo >= 0) {
+      const next = npc.todoList[nextTodo];
+      planSection = `YOUR TODO LIST:\n${todoLines}\n→ FOCUS: item [${nextTodo}] — "${next.task}"\n  Complete it when: ${next.doneWhen}\n  Use complete_todo ONLY when the condition above is met. Check your bag/vitals to verify.`;
+    } else {
+      planSection = `YOUR TODO LIST:\n${todoLines}\nAll items done! Use {"action":"plan"} for a new plan.`;
+    }
   }
 
   // Bed info
@@ -216,7 +252,7 @@ Bed: ${bedStr}
 
 ${planSection}
 
-VISIBLE (6-tile radius):
+VISIBLE (10-tile radius):
 ${ctx.entityLines || "  Nothing here — you should EXPLORE by moving!"}
 
 CONVERSATION LOG (last 5 min):
@@ -232,16 +268,18 @@ ${ACTION_SCHEMA}
 
 RULES — READ CAREFULLY:
 1. Output ONLY one JSON object. No text, no markdown.
-2. Directions: "up"=north "down"=south "left"=west "right"=east. You interact with the tile 1 step in that direction.
-3. ALWAYS have a plan. No todo list? Your action MUST be "plan". Work through your todos in order.
-4. SURVIVAL: Water<20 or Food<20? Find water/food IMMEDIATELY.
-5. ENERGY IS CRITICAL: Energy drains at 1/sec while awake. The ONLY way to recover energy is sleeping in a bed you own. If energy reaches 0, you die. You MUST build or find a bed, claim it with "claim_bed", and sleep periodically to restore energy.
-6. BED PRIORITY: If you have no claimed bed and energy < 500, your top priority should be building an indoor room with a bed, or finding an unclaimed bed.
-7. BE ACTIVE: Move, gather, craft, explore, talk. The world is large (64x64) with resources spread everywhere.
-8. NEVER wait if there's something useful you could do instead. Only use "wait" if you truly have nothing to do.
-9. DON'T CAMP: If a resource is depleted, MOVE ON. Don't wait for respawns.
-10. EXPLORE: If you don't see what you need, use "move_to" to walk somewhere new.
-11. BE SOCIAL: If someone sent you an unread message, RESPOND with "chat". Don't repeat greetings.`;
+2. Directions: "up"=north "down"=south "left"=west "right"=east.
+3. ADJACENCY: All interactions (pick_bush, chop_tree, mine_rock, drink_water, pick_up_item, attack, sleep, claim_bed, open_door, store_item, retrieve_item) target the tile 1 step in the given direction. You must stand NEXT TO the target, NOT on top of it. To interact with something at (30,25), move_to an adjacent tile like (29,25) then use direction "right", or (30,24) then use direction "down".
+4. ALWAYS have a plan. No todo list? Your ONLY action must be "plan". You CANNOT skip this.
+5. SURVIVAL: Water<20 or Food<20? Find water/food IMMEDIATELY.
+6. ENERGY IS CRITICAL: Energy drains at 1/sec while awake. The ONLY way to recover energy is sleeping in a bed you own. If energy reaches 0, you die. You MUST build or find a bed, claim it with "claim_bed", and sleep periodically to restore energy.
+7. BED PRIORITY: If you have no claimed bed and energy < 500, your top priority should be building an indoor room with a bed, or finding an unclaimed bed.
+8. EQUIP YOUR TOOLS: Before chopping trees, equip a hatchet. Before mining rocks, equip a pickaxe. Before fighting, equip your best weapon (spear > hammer > unarmed). Before building, equip a hammer. Use "equip" with the bag index. Tools make a HUGE difference in damage.
+9. BE ACTIVE: Move, gather, craft, explore, talk. The world is large (64x64) with resources spread everywhere.
+10. NEVER wait if there's something useful you could do instead. Only use "wait" if you truly have nothing to do.
+11. DON'T CAMP: If a resource is depleted, MOVE ON. Don't wait for respawns.
+12. EXPLORE: If you don't see what you need, use "move_to" to walk somewhere new.
+13. BE SOCIAL: If someone sent you an unread message, RESPOND with "chat". Don't repeat greetings.`;
 }
 
 // ── Response parser ──────────────────────────────────────────────────
@@ -432,7 +470,7 @@ Equipped: ${ctx.equipStr}
 Bag: ${ctx.bagStr}
 Bed: ${bedStr}
 
-VISIBLE (6-tile radius):
+VISIBLE (10-tile radius):
 ${ctx.entityLines || "  Nothing notable nearby"}
 ${ctx.knownLocStr ? `\nKNOWN LOCATIONS (all discovered resources):\n${ctx.knownLocStr}\n` : ""}
 NOTES:
@@ -446,13 +484,16 @@ ${ctx.historyStr}
 
 ${ACTION_SCHEMA}
 
-Create a TODO LIST for this villager. Each item must be SPECIFIC and ACTIONABLE — name the resource type, item, or action clearly. Don't include coordinates — the action model knows where things are from its known locations.
+Create a TODO LIST for this villager. Each item needs a specific task AND a completion condition — how to know it's done.
 
 RULES FOR GOOD TASKS:
-- BAD: "Find food" / "Explore the area" / "Gather resources"
-- GOOD: "Find a berry bush that has berries and pick them" / "Go to water and drink" / "Mine a rock to get small_rock" / "Explore north to discover new resources"
+- BAD (too vague, NEVER): "Find food" / "Explore the area" / "Gather resources"
+- GOOD: specific action + specific target + clear done condition
+- Each task must name a SPECIFIC resource, item, or craft
 - Each task should map to 1-3 game actions (move_to, pick_bush, craft, etc.)
-- Be specific about WHAT to do and WHY, not WHERE (the action model handles navigation)
+- Don't include coordinates — the action model handles navigation from known locations
+- If the task produces an item on the ground (chopping, mining, killing), include picking it up as part of the completion condition
+- ALWAYS include "Equip X" tasks before tasks that need a tool. Hatchet for trees, pickaxe for rocks, hammer for building, best weapon for fighting. Tools massively increase efficiency.
 
 CRITICAL PRIORITIES (in order):
 1. Water < 20 or Food < 20 → first tasks MUST fix this immediately
@@ -460,8 +501,10 @@ CRITICAL PRIORITIES (in order):
 3. No tools → craft a hammer (1 small_rock + 1 branch) so you can build things
 4. Energy drains at 1/sec. The ONLY way to recover is sleeping in YOUR claimed bed. If energy hits 0, you die.
 
-Respond with ONLY a JSON array of 3-6 task strings:
-["Go to water and drink to restore thirst", "Find a berry bush with berries and pick them for food", "Craft a hammer using 1 small_rock + 1 branch"]`;
+doneWhen format: Use phrases like "Have X in bag", "X is in bag or equipped", "Thirst is above N", "Have a claimed bed". These are auto-checked against game state.
+
+Respond with ONLY a JSON array of objects with "task" and "doneWhen" fields:
+[{"task":"Equip hatchet for chopping","doneWhen":"Hatchet is equipped"},{"task":"Chop a tree and pick up branches","doneWhen":"Have at least 2 branch in bag"},{"task":"Craft a hammer","doneWhen":"Hammer is in bag or equipped"}]`;
 
   const messages: LLMMessage[] = [
     { role: "system", content: prompt },
@@ -477,7 +520,25 @@ Respond with ONLY a JSON array of 3-6 task strings:
   if (response.error) {
     console.warn(`Planning error (${elapsed}ms):`, response.error);
     console.groupEnd();
-    return [{ task: "Walk to a new area to find water, bushes, and rocks", done: false }];
+    return [
+      { task: "Find and drink from a water source", done: false, doneWhen: "Thirst is above 40" },
+      {
+        task: "Find a berry bush with berries and pick them",
+        done: false,
+        doneWhen: "Have berry in bag",
+      },
+      { task: "Chop a tree and pick up a branch", done: false, doneWhen: "Have branch in bag" },
+      {
+        task: "Mine a rock and pick up the small_rock",
+        done: false,
+        doneWhen: "Have small_rock in bag",
+      },
+      {
+        task: "Craft a hammer using 1 small_rock + 1 branch",
+        done: false,
+        doneWhen: "Hammer is in bag or equipped",
+      },
+    ];
   }
 
   console.log(
@@ -496,7 +557,29 @@ Respond with ONLY a JSON array of 3-6 task strings:
   return todos;
 }
 
-/** Parse a JSON array of strings from the thinking model's response into todo items. */
+/** Parse a JSON array of {task, doneWhen} from the thinking model's response. */
+function tryParseArray(jsonStr: string): NPCTodoItem[] {
+  try {
+    const parsed = JSON.parse(jsonStr);
+    if (!Array.isArray(parsed)) return [];
+    const items: NPCTodoItem[] = [];
+    for (const item of parsed) {
+      if (typeof item === "object" && item !== null && typeof item.task === "string") {
+        items.push({
+          task: item.task.trim(),
+          done: false,
+          doneWhen: typeof item.doneWhen === "string" ? item.doneWhen.trim() : "Task is completed",
+        });
+      } else if (typeof item === "string" && item.trim().length > 0) {
+        items.push({ task: item.trim(), done: false, doneWhen: "Task is completed" });
+      }
+    }
+    return items;
+  } catch {
+    return [];
+  }
+}
+
 function parseTodoList(text: string): NPCTodoItem[] {
   let jsonStr = text.trim();
 
@@ -504,33 +587,72 @@ function parseTodoList(text: string): NPCTodoItem[] {
   const fenceMatch = jsonStr.match(/```(?:json)?\s*([\s\S]*?)```/);
   if (fenceMatch) jsonStr = fenceMatch[1].trim();
 
-  // Find the array
+  // Find the array brackets
   const bracketStart = jsonStr.indexOf("[");
-  const bracketEnd = jsonStr.lastIndexOf("]");
-  if (bracketStart !== -1 && bracketEnd > bracketStart) {
-    jsonStr = jsonStr.substring(bracketStart, bracketEnd + 1);
+  if (bracketStart !== -1) {
+    jsonStr = jsonStr.substring(bracketStart);
   }
 
-  try {
-    const parsed = JSON.parse(jsonStr);
-    if (Array.isArray(parsed)) {
-      return parsed
-        .filter((item): item is string => typeof item === "string" && item.trim().length > 0)
-        .slice(0, 8)
-        .map((task) => ({ task: task.trim(), done: false }));
+  // If the array is truncated (no closing bracket), try to close it
+  if (jsonStr.startsWith("[") && !jsonStr.includes("]")) {
+    // Truncated response — find the last complete object and close the array
+    const lastBrace = jsonStr.lastIndexOf("}");
+    if (lastBrace > 0) {
+      jsonStr = jsonStr.substring(0, lastBrace + 1) + "]";
     }
-  } catch {
-    // Try line-by-line fallback (numbered list)
-    const lines = text
-      .split("\n")
-      .map((l) => l.replace(/^\d+[.)]\s*/, "").trim())
-      .filter((l) => l.length > 5 && !l.startsWith("[") && !l.startsWith("{"));
-    if (lines.length > 0) {
-      return lines.slice(0, 8).map((task) => ({ task, done: false }));
+  } else {
+    const bracketEnd = jsonStr.lastIndexOf("]");
+    if (bracketEnd > 0) {
+      jsonStr = jsonStr.substring(0, bracketEnd + 1);
     }
   }
 
-  return [{ task: "Walk to a new area to find water, bushes, and rocks", done: false }];
+  // Try parsing as a full JSON array
+  const items = tryParseArray(jsonStr);
+  if (items.length > 0) return items.slice(0, 8);
+
+  // Fallback: extract individual {task, doneWhen} objects via regex
+  const objectPattern = /\{\s*"task"\s*:\s*"([^"]+)"\s*,\s*"doneWhen"\s*:\s*"([^"]+)"\s*\}/g;
+  const regexItems: NPCTodoItem[] = [];
+  let match;
+  while ((match = objectPattern.exec(text)) !== null) {
+    regexItems.push({ task: match[1].trim(), done: false, doneWhen: match[2].trim() });
+  }
+  if (regexItems.length > 0) return regexItems.slice(0, 8);
+
+  // Fallback: try extracting just task fields
+  const taskOnlyPattern = /"task"\s*:\s*"([^"]+)"/g;
+  const taskItems: NPCTodoItem[] = [];
+  while ((match = taskOnlyPattern.exec(text)) !== null) {
+    taskItems.push({ task: match[1].trim(), done: false, doneWhen: "Task is completed" });
+  }
+  if (taskItems.length > 0) return taskItems.slice(0, 8);
+
+  console.warn("[NPC Plan] Could not parse todo list from:", text.slice(0, 300));
+
+  return [
+    { task: "Find and drink from a water source", done: false, doneWhen: "Thirst is above 40" },
+    {
+      task: "Find a berry bush with berries and pick them",
+      done: false,
+      doneWhen: "Have berry in bag",
+    },
+    {
+      task: "Chop a tree and pick up a branch",
+      done: false,
+      doneWhen: "Have branch in bag",
+    },
+    {
+      task: "Mine a rock and pick up the small_rock",
+      done: false,
+      doneWhen: "Have small_rock in bag",
+    },
+    {
+      task: "Craft a hammer using 1 small_rock + 1 branch",
+      done: false,
+      doneWhen: "Hammer is in bag or equipped",
+    },
+  ];
 }
 
 /**
@@ -559,7 +681,7 @@ Bag: ${ctx.bagStr}
 Bed: ${bedStr}
 Todo list: ${npc.todoList.length > 0 ? npc.todoList.map((t, i) => `[${i}]${t.done ? "DONE" : "TODO"}: ${t.task}`).join(", ") : "(none)"}
 
-VISIBLE (6-tile radius):
+VISIBLE (10-tile radius):
 ${ctx.entityLines || "  Nothing notable nearby"}
 ${ctx.knownLocStr ? `\nKNOWN LOCATIONS:\n${ctx.knownLocStr}\n` : ""}
 CONVERSATION LOG:

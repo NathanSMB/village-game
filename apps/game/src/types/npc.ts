@@ -54,6 +54,7 @@ export interface NPCSaveState {
   personality: NPCPersonality;
   memory: NPCMemoryState;
   sleeping: boolean;
+  currentGoal: string;
 }
 
 // ── World Snapshot (what the NPC can see) ────────────────────────────
@@ -89,6 +90,8 @@ export interface WorldSnapshot {
 // ── NPC Actions (discriminated union) ────────────────────────────────
 
 export type NPCAction =
+  | { action: "set_goal"; goal: string }
+  | { action: "complete_goal" }
   | { action: "move"; direction: Direction }
   | { action: "move_to"; x: number; y: number }
   | { action: "pick_bush"; direction: Direction }

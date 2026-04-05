@@ -70,7 +70,7 @@ export async function callLLM(
       case "ollama":
         return await callOllama(config, messages, signal);
       case "custom":
-        return await callOpenAI(config, messages, signal); // custom uses OpenAI format
+        return await callOpenRouter(config, messages, signal);
       default:
         return { text: "", error: `Unknown provider: ${String(config.provider)}` };
     }
@@ -195,4 +195,47 @@ async function callOllama(
 
   const data = (await resp.json()) as { message?: { content?: string } };
   return { text: data.message?.content ?? "" };
+}
+
+// ── OpenRouter (OpenAI-compatible + provider sorting) ────────────────
+
+async function callOpenRouter(
+  config: LLMProviderConfig,
+  messages: LLMMessage[],
+  signal?: AbortSignal,
+): Promise<LLMResponse> {
+  const resp = await fetch(`${config.endpointUrl}/v1/chat/completions`, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      Authorization: `Bearer ${config.apiKey}`,
+    },
+    body: JSON.stringify({
+      model: config.model,
+      max_tokens: 256,
+      messages: messages.map((m) => ({ role: m.role, content: m.content })),
+      provider: {
+        sort: "throughput",
+      },
+    }),
+    signal,
+  });
+
+  if (!resp.ok) {
+    const errText = await resp.text().catch(() => resp.statusText);
+    return { text: "", error: `OpenRouter ${resp.status}: ${errText}` };
+  }
+
+  const data = (await resp.json()) as {
+    choices?: { message?: { content?: string | null }; finish_reason?: string }[];
+    error?: { message: string; type: string; code?: string };
+  };
+  if (data.error) {
+    return { text: "", error: `OpenRouter error: ${data.error.message}` };
+  }
+  const content = data.choices?.[0]?.message?.content;
+  if (!content) {
+    console.warn("[LLM] OpenRouter returned no content:", JSON.stringify(data));
+  }
+  return { text: content ?? "" };
 }

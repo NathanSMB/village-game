@@ -14,52 +14,54 @@ import { RECIPES } from "../data/recipes.ts";
 // ── Action schema (included in the system prompt) ────────────────────
 
 const ACTION_SCHEMA = `
-Available actions (respond with ONE as JSON):
+ACTIONS (respond with exactly ONE JSON object):
+
+Goals:
+  {"action":"set_goal","goal":"<description>"} — Set your current objective
+  {"action":"complete_goal"} — Mark current goal as done (then set a new one!)
 
 Movement:
-  {"action":"move","direction":"up|down|left|right"} - Move 1 tile
-  {"action":"move_to","x":<num>,"y":<num>} - Pathfind to a tile (multi-step)
+  {"action":"move","direction":"up|down|left|right"} — Move 1 tile
+  {"action":"move_to","x":<num>,"y":<num>} — Walk to a tile (auto-pathfinds)
 
 Gathering:
-  {"action":"pick_bush","direction":"<dir>"} - Pick berries from adjacent bush
-  {"action":"chop_tree","direction":"<dir>"} - Chop adjacent tree
-  {"action":"mine_rock","direction":"<dir>"} - Mine adjacent rock
-  {"action":"drink_water","direction":"<dir>"} - Drink from adjacent water
-  {"action":"pick_up_item","direction":"<dir>"} - Pick up item from ground
+  {"action":"pick_bush","direction":"<dir>"} — Pick berries from adjacent bush
+  {"action":"chop_tree","direction":"<dir>"} — Chop adjacent tree (need hatchet for efficiency)
+  {"action":"mine_rock","direction":"<dir>"} — Mine adjacent rock (need pickaxe for efficiency)
+  {"action":"drink_water","direction":"<dir>"} — Drink from adjacent water tile
+  {"action":"pick_up_item","direction":"<dir>"} — Pick up item from adjacent ground
 
 Combat:
-  {"action":"attack","direction":"<dir>"} - Attack in a direction
+  {"action":"attack","direction":"<dir>"} — Attack creature/entity in that direction
 
-Crafting & Cooking:
-  {"action":"craft","recipeId":"<id>"} - Craft an item (recipes: ${RECIPES.map((r) => `${r.id}: ${r.ingredients.map((i) => `${i.count}x ${i.itemId}`).join(", ")} -> ${r.name}`).join("; ")})
-  {"action":"cook","direction":"<dir>","inputItemId":"<id>"} - Cook at adjacent burning fire
+Crafting: ${RECIPES.map((r) => `${r.id}(${r.ingredients.map((i) => `${i.count}x ${i.itemId}`).join("+")})`).join(", ")}
+  {"action":"craft","recipeId":"<id>"} — Craft if you have the materials
+  {"action":"cook","direction":"<dir>","inputItemId":"<id>"} — Cook raw meat at adjacent burning fire
 
 Building:
-  {"action":"build_plan","buildingId":"<id>","x":<num>,"y":<num>} - Place a building blueprint
+  {"action":"build_plan","buildingId":"<id>","x":<num>,"y":<num>} — Place a building blueprint at a tile
 
 Inventory:
-  {"action":"equip","bagIndex":<num>} - Equip item from bag
-  {"action":"unequip","slot":"<slot>"} - Unequip (slots: head,torso,hands,legs,feet,mainHand,offHand)
-  {"action":"consume","bagIndex":<num>} - Eat/drink consumable from bag
-  {"action":"drop_item","bagIndex":<num>} - Drop item on ground
+  {"action":"equip","bagIndex":<num>} — Equip item from bag
+  {"action":"unequip","slot":"<slot>"} — Unequip (head/torso/hands/legs/feet/mainHand/offHand)
+  {"action":"consume","bagIndex":<num>} — Eat/drink a consumable
+  {"action":"drop_item","bagIndex":<num>} — Drop item on ground
 
 Interaction:
-  {"action":"open_door","direction":"<dir>"} - Open adjacent door/gate
-  {"action":"close_door","direction":"<dir>"} - Close adjacent door/gate
-  {"action":"sleep","direction":"<dir>"} - Sleep in adjacent bed
-  {"action":"wake_up"} - Wake up from sleep
-  {"action":"store_item","direction":"<dir>","bagIndex":<num>} - Store item in adjacent storage
-  {"action":"retrieve_item","direction":"<dir>","slotIndex":<num>} - Take item from storage
+  {"action":"open_door","direction":"<dir>"} / {"action":"close_door","direction":"<dir>"}
+  {"action":"sleep","direction":"<dir>"} — Sleep in adjacent bed
+  {"action":"wake_up"}
+  {"action":"store_item","direction":"<dir>","bagIndex":<num>} / {"action":"retrieve_item","direction":"<dir>","slotIndex":<num>}
 
 Communication:
-  {"action":"chat","text":"<message>","mode":"whisper|talk|yell"} - Say something (whisper=1 tile, talk=3 tiles, yell=6 tiles)
+  {"action":"chat","text":"<msg>","mode":"whisper|talk|yell"} — Speak (whisper=1tile, talk=3, yell=6)
 
 Memory:
-  {"action":"remember","note":"<text>"} - Save a note for yourself (max 20)
-  {"action":"forget","noteIndex":<num>} - Delete a note by index
+  {"action":"remember","note":"<text>"} — Save a note (max 20)
+  {"action":"forget","noteIndex":<num>} — Delete a note
 
 Wait:
-  {"action":"wait","durationMs":<1000-30000>} - Do nothing for a while
+  {"action":"wait","durationMs":<1000-30000>} — Pause before next decision
 `.trim();
 
 // ── System prompt builder ────────────────────────────────────────────
@@ -106,39 +108,59 @@ function buildSystemPrompt(npc: NPC, snapshot: WorldSnapshot): string {
       ? npc.memory.notes.map((n, i) => `  [${i}] ${n}`).join("\n")
       : "  None";
 
-  return `You are ${personality.name}, a villager in a survival game. ${personality.backstory}
-Your personality traits: ${personality.traits}
+  // Last action context
+  const lastActionStr = npc.debugLastAction
+    ? `Last action: ${npc.debugLastAction} => ${npc.debugLastResult}`
+    : "No previous action";
 
-Current state:
-- Position: (${tileX}, ${tileY}), facing ${facing}
-- Vitals: health=${Math.round(vitals.health)}/100, hunger=${Math.round(vitals.hunger)}/100, thirst=${Math.round(vitals.thirst)}/100, energy=${Math.round(vitals.energy)}/1000
-- Equipped: ${equipStr}
-- Bag: ${bagStr}
+  // Goal section
+  const goalSection = npc.currentGoal
+    ? `CURRENT GOAL: "${npc.currentGoal}"
+You are actively working toward this goal. Choose your next action to make progress on it.
+If the goal is done, use "complete_goal" and then "set_goal" with a new objective.`
+    : `You have NO GOAL set. You MUST use "set_goal" as your next action.
+Choose a meaningful objective like: gather food, craft a tool, explore the area, find water, build a shelter, talk to someone nearby, etc.`;
 
-What you see (6-tile radius):
+  return `You are ${personality.name}, a villager surviving in a wilderness. ${personality.backstory}
+Personality: ${personality.traits}
+
+=== YOUR SITUATION ===
+Position: (${tileX}, ${tileY}), facing ${facing}
+Vitals: HP=${Math.round(vitals.health)}/100  Food=${Math.round(vitals.hunger)}/100  Water=${Math.round(vitals.thirst)}/100  Energy=${Math.round(vitals.energy)}/1000
+Equipped: ${equipStr}
+Bag: ${bagStr}
+${lastActionStr}
+
+=== ${goalSection} ===
+
+=== WHAT YOU SEE (6-tile radius) ===
 ${entityLines || "  Nothing notable nearby"}
 
-Messages you heard:
+=== MESSAGES HEARD ===
 ${msgLines}
 
-Your notes:
+=== YOUR NOTES ===
 ${noteLines}
 
 ${ACTION_SCHEMA}
 
-IMPORTANT RULES:
-- Respond with EXACTLY ONE JSON action, nothing else.
-- Direction must be relative to YOUR position ("up"=north, "down"=south, "left"=west, "right"=east).
-- If thirst < 20, prioritize finding water! If hunger < 20, find food!
-- You can only interact with things on tiles ADJACENT to you (1 tile away in the direction you specify).
-- Use "remember" to save important information (locations, names, plans).
-- Use "chat" to communicate with nearby players/NPCs. Be natural and in-character.
-- Use "wait" when you have nothing urgent to do (don't spam actions needlessly).`;
+RULES:
+1. Respond with EXACTLY ONE JSON action object. No explanation, no markdown, just the JSON.
+2. Direction values: "up"=north, "down"=south, "left"=west, "right"=east.
+3. You can only interact with things ADJACENT to you (1 tile away in a direction).
+4. SURVIVAL PRIORITY: If Water < 15 or Food < 15, drop everything and find water/food.
+5. GOAL SYSTEM: Always have a goal. Use "set_goal" if you have none. Work toward your goal with each action.
+6. Use "remember" to save locations you discover (e.g. "Water pond at (25,30)").
+7. Use "chat" with mode "talk" when you see a player or NPC nearby. Be friendly and in-character.
+8. Use "wait" (5000-15000ms) after completing a sequence, NOT between every action.
+9. When moving toward something far away, use "move_to" with the target coordinates rather than single "move" steps.`;
 }
 
 // ── Response parser ──────────────────────────────────────────────────
 
 const VALID_ACTIONS = new Set([
+  "set_goal",
+  "complete_goal",
   "move",
   "move_to",
   "pick_bush",
@@ -233,9 +255,12 @@ export async function decideNextAction(
 
   console.group(label, style);
   console.log(
-    `%cPosition%c (${npc.tileX},${npc.tileY}) facing ${npc.facing} | ` +
+    `%cGoal%c ${npc.currentGoal || "(none)"} | ` +
+      `%cPos%c (${npc.tileX},${npc.tileY}) ${npc.facing} | ` +
       `%cVitals%c H:${Math.round(npc.vitals.health)} F:${Math.round(npc.vitals.hunger)} ` +
       `T:${Math.round(npc.vitals.thirst)} E:${Math.round(npc.vitals.energy)}`,
+    "color:#ffdd66;font-weight:bold",
+    "color:inherit",
     "color:#aaa",
     "color:inherit",
     "color:#aaa",

@@ -159,6 +159,16 @@ export class NPCDebugPanel extends ex.ScreenElement {
       W / 2,
       y,
     );
+    y += LINE + 2;
+
+    // Current goal
+    ctx.textAlign = "left";
+    ctx.font = "bold 10px monospace";
+    ctx.fillStyle = LABEL_COLOR;
+    ctx.fillText("GOAL", PAD, y);
+    ctx.font = "10px monospace";
+    ctx.fillStyle = npc.currentGoal ? "#ffdd66" : ERR_COLOR;
+    ctx.fillText(truncate(npc.currentGoal || "(no goal set)", 30), PAD + 40, y);
     y += LINE;
 
     // Divider

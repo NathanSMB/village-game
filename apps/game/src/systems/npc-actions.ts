@@ -63,6 +63,12 @@ export function executeNPCAction(
   world: GameWorldNPCInterface,
 ): ActionResult {
   switch (action.action) {
+    case "set_goal":
+      return execSetGoal(npc, action.goal);
+
+    case "complete_goal":
+      return execCompleteGoal(npc);
+
     case "move":
       return execMove(npc, action.direction);
 
@@ -147,6 +153,19 @@ function execMove(npc: NPC, direction: Direction): ActionResult {
   const moved = npc.moveToTile(direction);
   if (!moved) return { success: false, reason: "Tile is blocked" };
   return { success: true };
+}
+
+function execSetGoal(npc: NPC, goal: string): ActionResult {
+  if (!goal || goal.trim().length === 0) return { success: false, reason: "Goal cannot be empty" };
+  npc.currentGoal = goal.trim();
+  return { success: true, reason: `Goal: ${npc.currentGoal}` };
+}
+
+function execCompleteGoal(npc: NPC): ActionResult {
+  if (!npc.currentGoal) return { success: false, reason: "No goal to complete" };
+  const completed = npc.currentGoal;
+  npc.currentGoal = "";
+  return { success: true, reason: `Completed: ${completed}` };
 }
 
 function execMoveTo(npc: NPC, x: number, y: number, world: GameWorldNPCInterface): ActionResult {

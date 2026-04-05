@@ -100,6 +100,9 @@ export class NPC extends ex.Actor {
   // Memory
   memory: NPCMemoryState;
 
+  // Goal system — the NPC's current objective, drives decision-making
+  currentGoal = "";
+
   // Chat inbox — messages heard since last LLM call, consumed by brain
   chatInbox: ChatMessage[] = [];
 
@@ -150,6 +153,7 @@ export class NPC extends ex.Actor {
 
     if (saved?.facing) this.facing = saved.facing;
     if (saved?.sleeping) this.sleeping = saved.sleeping;
+    if (saved?.currentGoal) this.currentGoal = saved.currentGoal;
 
     // Vitals & inventory
     this.vitals = saved?.vitals ?? defaultVitals();
@@ -520,6 +524,7 @@ export class NPC extends ex.Actor {
       personality: this.personality,
       memory: serializeMemory(this.memory),
       sleeping: this.sleeping,
+      currentGoal: this.currentGoal,
     };
   }
 }

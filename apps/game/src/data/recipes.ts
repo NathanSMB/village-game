@@ -50,9 +50,9 @@ export const RECIPES: Recipe[] = [
     resultId: "starter_pants",
   },
   {
-    id: "cow_hide_boots",
-    name: "Cow Hide Boots",
+    id: "simple_boots",
+    name: "Simple Boots",
     ingredients: [{ itemId: "cow_hide", count: 1 }],
-    resultId: "cow_hide_boots",
+    resultId: "starter_boots",
   },
 ];

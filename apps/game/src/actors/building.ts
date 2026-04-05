@@ -58,12 +58,14 @@ export class Building extends ex.Actor {
   ) {
     const worldX = tileX * TILE_SIZE + TILE_SIZE / 2;
     const worldY = tileY * TILE_SIZE + TILE_SIZE / 2;
+    // Floor tiles render below ground items (z: 3) so dropped items stay visible
+    const zIndex = type.id === "floor" ? 2 : 5;
     super({
       pos: ex.vec(worldX, worldY),
       width: TILE_SIZE,
       height: TILE_SIZE,
       anchor: ex.vec(0.5, 0.5),
-      z: 5,
+      z: zIndex,
     });
     this.type = type;
     this.state = state;

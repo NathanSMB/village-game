@@ -80,6 +80,17 @@ import { Sheep } from "../actors/sheep.ts";
 import { Cow } from "../actors/cow.ts";
 import { detectBreedingEnclosures } from "../systems/enclosure.ts";
 import { getUIScale } from "../systems/ui-scale.ts";
+import { SpeechBubble } from "../actors/speech-bubble.ts";
+import { ChatLog } from "../actors/chat-log.ts";
+import {
+  type ChatMessage,
+  type ChatMode,
+  CHAT_MODE_ORDER,
+  CHAT_EXPIRE_MS,
+  CHAT_MODE_RADIUS,
+  CHAT_MODE_COLORS,
+  CHAT_MODE_LABELS,
+} from "../types/chat.ts";
 
 const MAP_COLS = 64;
 const MAP_ROWS = 64;
@@ -104,6 +115,57 @@ const GROUND_ITEM_DESPAWN_MS = 180_000; // 3 minutes until non-permanent ground 
 export type GameWorldData =
   | { type: "new"; appearance: CharacterAppearance }
   | { type: "load"; save: SaveData };
+
+/** Map an Excalibur key code + shift state to a printable character, or null. */
+function chatKeyToChar(key: ex.Keys, shift: boolean): string | null {
+  const s = key as string;
+
+  // Letter keys: KeyA → "a"/"A"
+  if (s.startsWith("Key") && s.length === 4) {
+    const ch = s[3].toLowerCase();
+    return shift ? ch.toUpperCase() : ch;
+  }
+
+  // Digit keys: Digit0 → "0" (or shift symbols)
+  const DIGIT_SHIFT: Record<string, string> = {
+    Digit1: "!",
+    Digit2: "@",
+    Digit3: "#",
+    Digit4: "$",
+    Digit5: "%",
+    Digit6: "^",
+    Digit7: "&",
+    Digit8: "*",
+    Digit9: "(",
+    Digit0: ")",
+  };
+  if (s.startsWith("Digit") && s.length === 6) {
+    if (shift) return DIGIT_SHIFT[s] ?? s[5];
+    return s[5];
+  }
+
+  // Space
+  if (key === ex.Keys.Space) return " ";
+
+  // Punctuation keys
+  const PUNCT: Record<string, [string, string]> = {
+    Minus: ["-", "_"],
+    Equal: ["=", "+"],
+    BracketLeft: ["[", "{"],
+    BracketRight: ["]", "}"],
+    Backslash: ["\\", "|"],
+    Semicolon: [";", ":"],
+    Quote: ["'", '"'],
+    Comma: [",", "<"],
+    Period: [".", ">"],
+    Slash: ["/", "?"],
+    Backquote: ["`", "~"],
+  };
+  const punct = PUNCT[s];
+  if (punct) return shift ? punct[1] : punct[0];
+
+  return null;
+}
 
 /** Encode tile coords into a single number for Set lookups. */
 function tileKey(x: number, y: number): number {
@@ -241,6 +303,15 @@ export class GameWorld extends ex.Scene<GameWorldData> {
   private inventoryEquipSubmenuItems: { item: Item; realIndex: number }[] = [];
   private inventoryEquipSubmenuIndex = 0;
   private inventoryEquipSubmenuScroll = 0;
+
+  // Chat state
+  private chatMessages: ChatMessage[] = [];
+  private chatOpen = false;
+  private chatPanel: ex.ScreenElement | null = null;
+  private chatInputText = "";
+  private chatMode: ChatMode = "talk";
+  private chatLog: ChatLog | null = null;
+  private playerName = "Player";
 
   private uiScale = 1;
 
@@ -605,6 +676,18 @@ export class GameWorld extends ex.Scene<GameWorldData> {
       this.hud = new VitalsHud(() => this.player!.vitals, this.uiScale);
       this.add(this.hud);
 
+      // Chat system setup
+      if (this.chatLog) {
+        this.remove(this.chatLog);
+        this.chatLog = null;
+      }
+      this.chatMessages = [];
+      this.playerName = context.data.type === "load" ? context.data.save.name : "Player";
+      // Position chat log above the vitals hud (vitals is at y=8, height ~56px)
+      const chatLogY = this.engine.screen.resolution.height / this.uiScale - 8;
+      this.chatLog = new ChatLog(() => this.chatMessages, this.uiScale, chatLogY * this.uiScale);
+      this.add(this.chatLog);
+
       // Restore berry bush states from save
       if (context.data.type === "load" && context.data.save.bushes) {
         this.restoreBushStates(context.data.save.bushes);
@@ -726,6 +809,15 @@ export class GameWorld extends ex.Scene<GameWorldData> {
       return; // Block all other input while storage menu is open
     }
 
+    // Chat input handling
+    if (this.chatOpen) {
+      this.handleChatInput(kb);
+      return; // Block all other input while chat is open
+    }
+
+    // Chat message expiry cleanup
+    this.updateChatCleanup();
+
     // Tree branch dropping
     this.updateTreeBranchDrops();
 
@@ -776,6 +868,9 @@ export class GameWorld extends ex.Scene<GameWorldData> {
     }
     if (wasActionPressed(kb, "inventory")) {
       this.openInventoryMenu();
+    }
+    if (wasActionPressed(kb, "chat")) {
+      this.openChat();
     }
     if (
       this.player &&
@@ -3165,6 +3260,227 @@ export class GameWorld extends ex.Scene<GameWorldData> {
     });
 
     this.storageMenuPanel.graphics.use(canvas);
+  }
+
+  // ==================== Chat System ====================
+
+  private readonly CHAT_PANEL_WIDTH = 280;
+  private readonly CHAT_MAX_INPUT = 80;
+
+  private openChat(): void {
+    if (!this.player || this.chatOpen) return;
+    this.chatOpen = true;
+    this.chatInputText = "";
+    this.chatMode = "talk";
+    this.player.lockInput();
+
+    const panelW = this.CHAT_PANEL_WIDTH;
+    const panelH = 62;
+    const screenW = this.engine.screen.resolution.width;
+    const screenH = this.engine.screen.resolution.height;
+
+    this.chatPanel = new ex.ScreenElement({
+      pos: ex.vec(
+        (screenW / 2) * this.uiScale - (panelW / 2) * this.uiScale,
+        screenH * this.uiScale - panelH * this.uiScale - 8 * this.uiScale,
+      ),
+      z: 200,
+      anchor: ex.vec(0, 0),
+    });
+
+    this.updateChatPanel();
+    this.add(this.chatPanel);
+  }
+
+  private closeChat(): void {
+    this.chatOpen = false;
+    if (this.chatPanel) {
+      this.remove(this.chatPanel);
+      this.chatPanel = null;
+    }
+    if (this.player) {
+      this.player.unlockInput();
+    }
+  }
+
+  private handleChatInput(kb: ex.Keyboard): void {
+    // Tab cycles chat mode
+    if (kb.wasPressed(ex.Keys.Tab)) {
+      const idx = CHAT_MODE_ORDER.indexOf(this.chatMode);
+      this.chatMode = CHAT_MODE_ORDER[(idx + 1) % CHAT_MODE_ORDER.length];
+      this.updateChatPanel();
+      return;
+    }
+
+    // Enter sends or closes
+    if (kb.wasPressed(ex.Keys.Enter)) {
+      if (this.chatInputText.trim().length > 0) {
+        this.sendChatMessage();
+      }
+      this.closeChat();
+      return;
+    }
+
+    // Escape closes without sending
+    if (kb.wasPressed(ex.Keys.Escape)) {
+      this.closeChat();
+      return;
+    }
+
+    // Backspace removes last character
+    if (kb.wasPressed(ex.Keys.Backspace)) {
+      if (this.chatInputText.length > 0) {
+        this.chatInputText = this.chatInputText.slice(0, -1);
+        this.updateChatPanel();
+      }
+      return;
+    }
+
+    // Check for printable key presses
+    if (this.chatInputText.length >= this.CHAT_MAX_INPUT) return;
+
+    const shift = kb.isHeld(ex.Keys.ShiftLeft) || kb.isHeld(ex.Keys.ShiftRight);
+
+    // Check all printable keys
+    for (const key of kb.getKeys()) {
+      if (!kb.wasPressed(key)) continue;
+      const ch = chatKeyToChar(key, shift);
+      if (ch !== null) {
+        this.chatInputText += ch;
+        this.updateChatPanel();
+        return;
+      }
+    }
+  }
+
+  private sendChatMessage(): void {
+    if (!this.player) return;
+    const msg: ChatMessage = {
+      sender: this.playerName,
+      text: this.chatInputText.trim(),
+      tileX: this.player.getTileX(),
+      tileY: this.player.getTileY(),
+      mode: this.chatMode,
+      timestamp: Date.now(),
+    };
+
+    // The sender always sees their own message
+    this.chatMessages.push(msg);
+
+    // In the future, distribute to nearby AI agents here:
+    // for each agent within CHAT_MODE_RADIUS[msg.mode] Chebyshev distance,
+    // push msg into that agent's personal chat log.
+
+    // Spawn speech bubble that follows the player
+    this.add(new SpeechBubble(msg.text, this.player, msg.mode));
+  }
+
+  private updateChatPanel(): void {
+    if (!this.chatPanel) return;
+
+    const panelW = this.CHAT_PANEL_WIDTH;
+    const panelH = 62;
+
+    const canvas = new ex.Canvas({
+      width: Math.round(panelW * this.uiScale),
+      height: Math.round(panelH * this.uiScale),
+      cache: false,
+      draw: (ctx) => {
+        ctx.imageSmoothingEnabled = false;
+        ctx.scale(this.uiScale, this.uiScale);
+
+        // Background
+        ctx.fillStyle = "rgba(10, 10, 20, 0.88)";
+        ctx.strokeStyle = "rgba(80, 200, 180, 0.35)";
+        ctx.lineWidth = 1.5;
+        this.drawRoundRect(ctx, 0, 0, panelW, panelH, 4);
+        ctx.fill();
+        ctx.stroke();
+
+        // Mode indicator
+        const modeLabel = CHAT_MODE_LABELS[this.chatMode];
+        const modeColor = CHAT_MODE_COLORS[this.chatMode];
+        const radius = CHAT_MODE_RADIUS[this.chatMode];
+
+        ctx.font = "bold 10px monospace";
+        ctx.textBaseline = "top";
+        ctx.fillStyle = modeColor;
+        ctx.fillText(`[${modeLabel}]`, 8, 6);
+
+        // Radius hint
+        ctx.font = "9px monospace";
+        ctx.fillStyle = "#666666";
+        const radiusText = `(${radius} tile${radius > 1 ? "s" : ""})`;
+        ctx.fillText(radiusText, 8 + ctx.measureText(`[${modeLabel}]`).width + 6, 7);
+
+        // Divider line
+        ctx.strokeStyle = "rgba(80, 200, 180, 0.2)";
+        ctx.lineWidth = 1;
+        ctx.beginPath();
+        ctx.moveTo(8, 20);
+        ctx.lineTo(panelW - 8, 20);
+        ctx.stroke();
+
+        // Input area
+        ctx.font = "10px monospace";
+        ctx.fillStyle = "#ffffff";
+        ctx.textBaseline = "top";
+
+        const inputY = 25;
+        const maxInputW = panelW - 16;
+        let displayText = this.chatInputText;
+
+        // Truncate from the left if text is too long to fit
+        while (ctx.measureText(displayText + "_").width > maxInputW && displayText.length > 0) {
+          displayText = displayText.slice(1);
+        }
+
+        ctx.fillText(displayText, 8, inputY);
+
+        // Blinking cursor
+        const cursorOn = Math.floor(Date.now() / 500) % 2 === 0;
+        if (cursorOn) {
+          const cursorX = 8 + ctx.measureText(displayText).width;
+          ctx.fillStyle = modeColor;
+          ctx.fillRect(cursorX, inputY, 1, 11);
+        }
+
+        // Hint bar
+        ctx.font = "8px monospace";
+        ctx.fillStyle = "#555555";
+        ctx.textBaseline = "top";
+        ctx.fillText("[Tab] Mode  [Enter] Send  [Esc] Cancel", 8, panelH - 14);
+      },
+    });
+
+    this.chatPanel.graphics.use(canvas);
+  }
+
+  private updateChatCleanup(): void {
+    const now = Date.now();
+    this.chatMessages = this.chatMessages.filter((msg) => now - msg.timestamp <= CHAT_EXPIRE_MS);
+  }
+
+  /** Draw a rounded rectangle path (shared helper). */
+  private drawRoundRect(
+    ctx: CanvasRenderingContext2D,
+    x: number,
+    y: number,
+    w: number,
+    h: number,
+    r: number,
+  ): void {
+    ctx.beginPath();
+    ctx.moveTo(x + r, y);
+    ctx.lineTo(x + w - r, y);
+    ctx.quadraticCurveTo(x + w, y, x + w, y + r);
+    ctx.lineTo(x + w, y + h - r);
+    ctx.quadraticCurveTo(x + w, y + h, x + w - r, y + h);
+    ctx.lineTo(x + r, y + h);
+    ctx.quadraticCurveTo(x, y + h, x, y + h - r);
+    ctx.lineTo(x, y + r);
+    ctx.quadraticCurveTo(x, y, x + r, y);
+    ctx.closePath();
   }
 
   // ==================== Inventory Menu ====================

@@ -1,7 +1,20 @@
 import * as ex from "excalibur";
 import type { CharacterAppearance } from "../types/character.ts";
-import { totalWeight, type InventoryState } from "../types/inventory.ts";
-import { EquipmentSlot, RARITY_COLORS, type Item } from "../types/item.ts";
+import {
+  totalWeight,
+  equipItem,
+  unequipItem,
+  consumeItem,
+  type InventoryState,
+} from "../types/inventory.ts";
+import {
+  EquipmentSlot,
+  RARITY_COLORS,
+  ALL_EQUIPMENT_SLOTS,
+  EQUIPMENT_SLOT_LABELS,
+  isConsumable,
+  type Item,
+} from "../types/item.ts";
 import { isAlive } from "../types/vitals.ts";
 import { Player } from "../actors/player.ts";
 import { BerryBush } from "../actors/berry-bush.ts";
@@ -15,6 +28,8 @@ import { wasActionPressed } from "../systems/keybinds.ts";
 import { ITEMS } from "../data/items.ts";
 import { BUILDING_TYPES, BUILDING_TYPE_MAP, type BuildingType } from "../data/buildings.ts";
 import { COOKING_RECIPES, COOKING_RECIPE_MAP } from "../data/cooking.ts";
+import { RECIPES } from "../data/recipes.ts";
+import { canCraft, craft } from "../types/crafting.ts";
 import { Building } from "../actors/building.ts";
 import { EdgeBuilding } from "../actors/edge-building.ts";
 import { PlanCursor } from "../actors/plan-cursor.ts";
@@ -178,6 +193,21 @@ export class GameWorld extends ex.Scene<GameWorldData> {
   private planMenuPanel: ex.ScreenElement | null = null;
   private planPlayerTileX = 0;
   private planPlayerTileY = 0;
+
+  // Inventory menu state (canvas overlay — game world continues updating)
+  private inventoryMenuOpen = false;
+  private inventoryMenuPanel: ex.ScreenElement | null = null;
+  private inventoryTab: "equipment" | "bag" | "craft" = "equipment";
+  private inventoryEquipIndex = 0;
+  private inventoryBagIndex = 0;
+  private inventoryBagScroll = 0;
+  private inventoryCraftIndex = 0;
+  private inventoryCraftScroll = 0;
+  private inventoryFilterText = "";
+  private inventoryFilterActive = false;
+  private inventorySortMode: "default" | "a-z" | "z-a" = "default";
+  private inventoryViewBag: { item: Item; realIndex: number }[] = [];
+  private inventoryOnFilterBar = false;
 
   override onInitialize(): void {
     this.tilemap = new ex.TileMap({
@@ -658,6 +688,20 @@ export class GameWorld extends ex.Scene<GameWorldData> {
     this.updateWildSpawn(delta);
     this.updateCowWildSpawn(delta);
 
+    // Death check while inventory is open (game keeps running)
+    if (this.inventoryMenuOpen && this.player && !isAlive(this.player.vitals)) {
+      this.closeInventoryMenu();
+      const cause = this.getDeathCause();
+      void engine.goToScene("game-over", { sceneActivationData: { cause } });
+      return;
+    }
+
+    // Inventory menu: game world continues updating, only player input is blocked
+    if (this.inventoryMenuOpen) {
+      this.handleInventoryMenuInput(kb);
+      return;
+    }
+
     // Sleeping: only allow pause and waking up
     if (this.playerSleeping && this.sleepingBed) {
       if (wasActionPressed(kb, "pause")) {
@@ -680,7 +724,7 @@ export class GameWorld extends ex.Scene<GameWorldData> {
       void engine.goToScene("pause-menu");
     }
     if (wasActionPressed(kb, "inventory")) {
-      void engine.goToScene("inventory");
+      this.openInventoryMenu();
     }
     if (
       this.player &&
@@ -2867,6 +2911,861 @@ export class GameWorld extends ex.Scene<GameWorldData> {
     });
 
     this.storageMenuPanel.graphics.use(canvas);
+  }
+
+  // ==================== Inventory Menu ====================
+
+  private readonly INV_PANEL_WIDTH = 300;
+  private readonly INV_LINE_HEIGHT = 22;
+  private readonly INV_MAX_VISIBLE = 8;
+
+  private openInventoryMenu(): void {
+    if (!this.player || this.inventoryMenuOpen) return;
+    this.inventoryMenuOpen = true;
+    this.inventoryTab = "equipment";
+    this.inventoryEquipIndex = 0;
+    this.inventoryBagIndex = 0;
+    this.inventoryBagScroll = 0;
+    this.inventoryCraftIndex = 0;
+    this.inventoryCraftScroll = 0;
+    this.inventoryFilterText = "";
+    this.inventoryFilterActive = false;
+    this.inventorySortMode = "default";
+    this.inventoryOnFilterBar = false;
+    this.rebuildInventoryViewBag();
+    this.player.lockInput();
+
+    this.inventoryMenuPanel = new ex.ScreenElement({
+      x: 8,
+      y: 40,
+      z: 200,
+    });
+    this.add(this.inventoryMenuPanel);
+    this.updateInventoryMenu();
+  }
+
+  private closeInventoryMenu(): void {
+    this.inventoryMenuOpen = false;
+    this.inventoryFilterActive = false;
+    if (this.inventoryMenuPanel) {
+      this.remove(this.inventoryMenuPanel);
+      this.inventoryMenuPanel = null;
+    }
+    this.player?.unlockInput();
+  }
+
+  private handleInventoryMenuInput(kb: ex.Keyboard): void {
+    // Filter typing mode captures all keyboard input
+    if (this.inventoryFilterActive) {
+      this.handleInventoryFilterInput(kb);
+      return;
+    }
+
+    // Close menu
+    if (wasActionPressed(kb, "back") || wasActionPressed(kb, "inventory")) {
+      this.closeInventoryMenu();
+      return;
+    }
+
+    // Tab navigation (left / right)
+    if (wasActionPressed(kb, "moveLeft")) {
+      if (this.inventoryTab === "bag") {
+        this.inventoryTab = "equipment";
+        this.updateInventoryMenu();
+        return;
+      }
+      if (this.inventoryTab === "craft") {
+        this.inventoryTab = "bag";
+        this.rebuildInventoryViewBag();
+        this.enterInventoryBagPanel();
+        this.updateInventoryMenu();
+        return;
+      }
+    }
+
+    if (wasActionPressed(kb, "moveRight")) {
+      if (this.inventoryTab === "equipment") {
+        this.inventoryTab = "bag";
+        this.rebuildInventoryViewBag();
+        this.enterInventoryBagPanel();
+        this.updateInventoryMenu();
+        return;
+      }
+      if (this.inventoryTab === "bag") {
+        if (RECIPES.length > 0) {
+          this.inventoryTab = "craft";
+          this.updateInventoryMenu();
+        }
+        return;
+      }
+    }
+
+    // Tab-specific input
+    if (this.inventoryTab === "equipment") {
+      this.handleInventoryEquipInput(kb);
+    } else if (this.inventoryTab === "bag") {
+      this.handleInventoryBagInput(kb);
+    } else if (this.inventoryTab === "craft") {
+      this.handleInventoryCraftInput(kb);
+    }
+  }
+
+  private handleInventoryEquipInput(kb: ex.Keyboard): void {
+    if (!this.player) return;
+    const slotCount = ALL_EQUIPMENT_SLOTS.length;
+
+    if (wasActionPressed(kb, "moveUp")) {
+      this.inventoryEquipIndex = (this.inventoryEquipIndex - 1 + slotCount) % slotCount;
+      this.updateInventoryMenu();
+    }
+    if (wasActionPressed(kb, "moveDown")) {
+      this.inventoryEquipIndex = (this.inventoryEquipIndex + 1) % slotCount;
+      this.updateInventoryMenu();
+    }
+    if (wasActionPressed(kb, "confirm") || wasActionPressed(kb, "action")) {
+      const slot = ALL_EQUIPMENT_SLOTS[this.inventoryEquipIndex];
+      if (this.player.inventory.equipment[slot]) {
+        unequipItem(this.player.inventory, slot);
+        this.player.refreshSprite();
+        this.updateInventoryMenu();
+      }
+    }
+  }
+
+  private handleInventoryBagInput(kb: ex.Keyboard): void {
+    if (!this.player) return;
+    const inv = this.player.inventory;
+
+    // X cycles sort mode (works from anywhere in bag tab)
+    if (kb.wasPressed(ex.Keys.KeyX)) {
+      if (this.inventorySortMode === "default") this.inventorySortMode = "a-z";
+      else if (this.inventorySortMode === "a-z") this.inventorySortMode = "z-a";
+      else this.inventorySortMode = "default";
+      this.rebuildInventoryViewBag();
+      this.clampInventoryBagIndex();
+      this.updateInventoryMenu();
+      return;
+    }
+
+    // Filter bar
+    if (this.inventoryOnFilterBar) {
+      if (wasActionPressed(kb, "confirm") || wasActionPressed(kb, "action")) {
+        this.inventoryFilterActive = true;
+        this.updateInventoryMenu();
+        return;
+      }
+      if (wasActionPressed(kb, "moveDown") && this.inventoryViewBag.length > 0) {
+        this.inventoryOnFilterBar = false;
+        this.inventoryBagIndex = 0;
+        this.inventoryBagScroll = 0;
+        this.updateInventoryMenu();
+      }
+      return;
+    }
+
+    // Item list
+    const viewLen = this.inventoryViewBag.length;
+    if (viewLen === 0) {
+      if (wasActionPressed(kb, "moveUp")) {
+        this.inventoryOnFilterBar = true;
+        this.updateInventoryMenu();
+      }
+      return;
+    }
+
+    const maxVis = this.INV_MAX_VISIBLE - 1; // account for filter bar row
+
+    if (wasActionPressed(kb, "moveUp")) {
+      if (this.inventoryBagIndex > 0) {
+        this.inventoryBagIndex--;
+        if (this.inventoryBagIndex < this.inventoryBagScroll) {
+          this.inventoryBagScroll = this.inventoryBagIndex;
+        }
+      } else {
+        this.inventoryOnFilterBar = true;
+      }
+      this.updateInventoryMenu();
+    }
+
+    if (wasActionPressed(kb, "moveDown")) {
+      if (this.inventoryBagIndex < viewLen - 1) {
+        this.inventoryBagIndex++;
+        if (this.inventoryBagIndex >= this.inventoryBagScroll + maxVis) {
+          this.inventoryBagScroll = this.inventoryBagIndex - maxVis + 1;
+        }
+        this.updateInventoryMenu();
+      }
+    }
+
+    if (wasActionPressed(kb, "confirm") || wasActionPressed(kb, "action")) {
+      const entry = this.inventoryViewBag[this.inventoryBagIndex];
+      if (!entry) return;
+
+      if (isConsumable(entry.item)) {
+        const newVitals = consumeItem(inv, entry.realIndex, this.player.vitals);
+        if (newVitals) {
+          this.player.vitals = newVitals;
+        }
+      } else {
+        equipItem(inv, entry.realIndex);
+        this.player.refreshSprite();
+      }
+
+      this.rebuildInventoryViewBag();
+      if (inv.bag.length === 0) {
+        this.inventoryTab = "equipment";
+        this.inventoryOnFilterBar = false;
+      } else if (this.inventoryViewBag.length === 0) {
+        this.inventoryOnFilterBar = true;
+      }
+      this.clampInventoryBagIndex();
+      this.updateInventoryMenu();
+    }
+
+    if (wasActionPressed(kb, "drop")) {
+      this.dropInventoryItem();
+    }
+  }
+
+  private handleInventoryFilterInput(kb: ex.Keyboard): void {
+    if (kb.wasPressed(ex.Keys.Escape) || kb.wasPressed(ex.Keys.Enter)) {
+      this.inventoryFilterActive = false;
+      if (this.inventoryViewBag.length > 0) {
+        this.inventoryOnFilterBar = false;
+        this.inventoryBagIndex = 0;
+        this.inventoryBagScroll = 0;
+      }
+      this.updateInventoryMenu();
+      return;
+    }
+
+    if (kb.wasPressed(ex.Keys.Backspace)) {
+      this.inventoryFilterText = this.inventoryFilterText.slice(0, -1);
+      this.rebuildInventoryViewBag();
+      this.inventoryBagIndex = 0;
+      this.inventoryBagScroll = 0;
+      this.updateInventoryMenu();
+      return;
+    }
+
+    const pressed = kb.getKeys();
+    const shift = kb.isHeld(ex.Keys.ShiftLeft) || kb.isHeld(ex.Keys.ShiftRight);
+    for (const key of pressed) {
+      if (!kb.wasPressed(key)) continue;
+      const ch = this.inventoryKeyToChar(key, shift);
+      if (ch && this.inventoryFilterText.length < 16) {
+        this.inventoryFilterText += ch;
+        this.rebuildInventoryViewBag();
+        this.inventoryBagIndex = 0;
+        this.inventoryBagScroll = 0;
+        this.updateInventoryMenu();
+        break;
+      }
+    }
+  }
+
+  private handleInventoryCraftInput(kb: ex.Keyboard): void {
+    if (!this.player) return;
+    const recipeCount = RECIPES.length;
+    if (recipeCount === 0) return;
+
+    if (wasActionPressed(kb, "moveUp")) {
+      if (this.inventoryCraftIndex > 0) {
+        this.inventoryCraftIndex--;
+        if (this.inventoryCraftIndex < this.inventoryCraftScroll) {
+          this.inventoryCraftScroll = this.inventoryCraftIndex;
+        }
+        this.updateInventoryMenu();
+      }
+    }
+    if (wasActionPressed(kb, "moveDown")) {
+      if (this.inventoryCraftIndex < recipeCount - 1) {
+        this.inventoryCraftIndex++;
+        if (this.inventoryCraftIndex >= this.inventoryCraftScroll + this.INV_MAX_VISIBLE) {
+          this.inventoryCraftScroll = this.inventoryCraftIndex - this.INV_MAX_VISIBLE + 1;
+        }
+        this.updateInventoryMenu();
+      }
+    }
+    if (wasActionPressed(kb, "confirm") || wasActionPressed(kb, "action")) {
+      const recipe = RECIPES[this.inventoryCraftIndex];
+      if (recipe && craft(this.player.inventory, recipe)) {
+        this.rebuildInventoryViewBag();
+        this.updateInventoryMenu();
+      }
+    }
+  }
+
+  private rebuildInventoryViewBag(): void {
+    if (!this.player) {
+      this.inventoryViewBag = [];
+      return;
+    }
+    let entries = this.player.inventory.bag.map((item, i) => ({ item, realIndex: i }));
+    const query = this.inventoryFilterText.trim().toLowerCase();
+    if (query) {
+      entries = entries.filter((e) => e.item.name.toLowerCase().includes(query));
+    }
+    if (this.inventorySortMode === "a-z") {
+      entries.sort((a, b) => a.item.name.localeCompare(b.item.name));
+    } else if (this.inventorySortMode === "z-a") {
+      entries.sort((a, b) => b.item.name.localeCompare(a.item.name));
+    }
+    this.inventoryViewBag = entries;
+  }
+
+  private clampInventoryBagIndex(): void {
+    const len = this.inventoryViewBag.length;
+    if (len === 0) {
+      this.inventoryBagIndex = 0;
+      this.inventoryBagScroll = 0;
+    } else if (this.inventoryBagIndex >= len) {
+      this.inventoryBagIndex = len - 1;
+    }
+    if (this.inventoryBagScroll > this.inventoryBagIndex) {
+      this.inventoryBagScroll = this.inventoryBagIndex;
+    }
+    const maxVis = this.INV_MAX_VISIBLE - 1;
+    if (this.inventoryBagIndex >= this.inventoryBagScroll + maxVis) {
+      this.inventoryBagScroll = this.inventoryBagIndex - maxVis + 1;
+    }
+  }
+
+  private enterInventoryBagPanel(): void {
+    if (this.inventoryViewBag.length > 0) {
+      this.inventoryOnFilterBar = false;
+      this.inventoryBagIndex = Math.min(this.inventoryBagIndex, this.inventoryViewBag.length - 1);
+    } else {
+      this.inventoryOnFilterBar = true;
+    }
+  }
+
+  private dropInventoryItem(): void {
+    if (!this.player || this.inventoryOnFilterBar) return;
+    const entry = this.inventoryViewBag[this.inventoryBagIndex];
+    if (!entry) return;
+
+    this.player.inventory.bag.splice(entry.realIndex, 1);
+    const playerTileX = this.player.getTileX();
+    const playerTileY = this.player.getTileY();
+    this.dropItemAt(playerTileX, playerTileY, entry.item);
+
+    this.rebuildInventoryViewBag();
+    if (this.player.inventory.bag.length === 0) {
+      this.inventoryTab = "equipment";
+      this.inventoryOnFilterBar = false;
+    } else if (this.inventoryViewBag.length === 0) {
+      this.inventoryOnFilterBar = true;
+    }
+    this.clampInventoryBagIndex();
+    this.updateInventoryMenu();
+  }
+
+  private inventoryKeyToChar(key: ex.Keys, shift: boolean): string | null {
+    const str = key as string;
+    if (str.startsWith("Key") && str.length === 4) {
+      const letter = str[3];
+      return shift ? letter : letter.toLowerCase();
+    }
+    if (str.startsWith("Digit") && str.length === 6) return str[5];
+    if (key === ex.Keys.Space) return " ";
+    if (key === ex.Keys.Minus) return shift ? "_" : "-";
+    return null;
+  }
+
+  private updateInventoryMenu(): void {
+    if (!this.inventoryMenuPanel || !this.player) return;
+
+    const inv = this.player.inventory;
+    const pw = this.INV_PANEL_WIDTH;
+    const lh = this.INV_LINE_HEIGHT;
+    const maxVis = this.INV_MAX_VISIBLE;
+    const tab = this.inventoryTab;
+
+    const headerH = 28;
+    const tabBarH = 24;
+    const contentH = maxVis * lh;
+    const detailH = 46;
+    const hintH = 24;
+    const ph = headerH + tabBarH + contentH + detailH + hintH + 14;
+
+    // Snapshot state for draw closure
+    const equipIdx = this.inventoryEquipIndex;
+    const bagIdx = this.inventoryBagIndex;
+    const bagScroll = this.inventoryBagScroll;
+    const craftIdx = this.inventoryCraftIndex;
+    const craftScroll = this.inventoryCraftScroll;
+    const viewBag = [...this.inventoryViewBag];
+    const filterText = this.inventoryFilterText;
+    const filterActive = this.inventoryFilterActive;
+    const onFilterBar = this.inventoryOnFilterBar;
+    const sortMode = this.inventorySortMode;
+    const bagTotal = inv.bag.length;
+    const filteredCount = viewBag.length;
+    const curWeight = totalWeight(inv);
+    const maxWeight = inv.maxWeight;
+
+    const canvas = new ex.Canvas({
+      width: pw,
+      height: ph,
+      cache: false,
+      draw: (ctx) => {
+        ctx.imageSmoothingEnabled = false;
+
+        // ── Background with rounded corners ──
+        ctx.fillStyle = "rgba(10, 10, 20, 0.88)";
+        const r = 4;
+        ctx.beginPath();
+        ctx.moveTo(r, 0);
+        ctx.lineTo(pw - r, 0);
+        ctx.arcTo(pw, 0, pw, r, r);
+        ctx.lineTo(pw, ph - r);
+        ctx.arcTo(pw, ph, pw - r, ph, r);
+        ctx.lineTo(r, ph);
+        ctx.arcTo(0, ph, 0, ph - r, r);
+        ctx.lineTo(0, r);
+        ctx.arcTo(0, 0, r, 0, r);
+        ctx.closePath();
+        ctx.fill();
+
+        // Border (warm gold)
+        ctx.strokeStyle = "rgba(200, 170, 80, 0.35)";
+        ctx.lineWidth = 1;
+        ctx.stroke();
+
+        // ── Header ──
+        ctx.fillStyle = "#ffffff";
+        ctx.font = "bold 14px monospace";
+        ctx.textAlign = "center";
+        ctx.fillText("INVENTORY", pw / 2, 18);
+
+        // Header divider
+        ctx.strokeStyle = "rgba(200, 170, 80, 0.25)";
+        ctx.beginPath();
+        ctx.moveTo(8, headerH);
+        ctx.lineTo(pw - 8, headerH);
+        ctx.stroke();
+
+        // ── Tab bar ──
+        const tabY = headerH + 16;
+        const tabW = Math.floor(pw / 3);
+        ctx.font = "bold 10px monospace";
+        ctx.textAlign = "center";
+
+        // EQUIP tab
+        const eqX = Math.floor(tabW * 0.5);
+        ctx.fillStyle = tab === "equipment" ? "#f0c040" : "#666666";
+        ctx.fillText("EQUIP", eqX, tabY);
+        if (tab === "equipment") {
+          ctx.fillStyle = "rgba(240, 192, 64, 0.5)";
+          ctx.fillRect(eqX - 20, tabY + 3, 40, 1);
+        }
+
+        // BAG tab
+        const bagX = Math.floor(tabW * 1.5);
+        let bagLabel = "BAG";
+        if (bagTotal > 0) bagLabel += ` (${bagTotal})`;
+        ctx.fillStyle = tab === "bag" ? "#f0c040" : "#666666";
+        ctx.fillText(bagLabel, bagX, tabY);
+        if (tab === "bag") {
+          const labelW = ctx.measureText(bagLabel).width;
+          ctx.fillStyle = "rgba(240, 192, 64, 0.5)";
+          ctx.fillRect(bagX - labelW / 2, tabY + 3, labelW, 1);
+        }
+
+        // CRAFT tab
+        const craftX = Math.floor(tabW * 2.5);
+        ctx.fillStyle = tab === "craft" ? "#f0c040" : "#666666";
+        ctx.fillText("CRAFT", craftX, tabY);
+        if (tab === "craft") {
+          ctx.fillStyle = "rgba(240, 192, 64, 0.5)";
+          ctx.fillRect(craftX - 22, tabY + 3, 44, 1);
+        }
+
+        // Tab divider
+        ctx.strokeStyle = "rgba(200, 170, 80, 0.15)";
+        ctx.beginPath();
+        ctx.moveTo(8, headerH + tabBarH);
+        ctx.lineTo(pw - 8, headerH + tabBarH);
+        ctx.stroke();
+
+        const contentTop = headerH + tabBarH;
+
+        // ═══════════════ EQUIPMENT TAB ═══════════════
+        if (tab === "equipment") {
+          const slotCount = ALL_EQUIPMENT_SLOTS.length;
+          for (let i = 0; i < slotCount; i++) {
+            const slot = ALL_EQUIPMENT_SLOTS[i];
+            const item = inv.equipment[slot];
+            const selected = i === equipIdx;
+            const y = contentTop + 6 + i * lh + lh / 2;
+
+            // Selection highlight
+            if (selected) {
+              ctx.fillStyle = "rgba(200, 170, 80, 0.12)";
+              ctx.fillRect(4, contentTop + 4 + i * lh, pw - 8, lh);
+            }
+
+            // Slot label
+            const prefix = selected ? "> " : "  ";
+            ctx.textAlign = "left";
+            ctx.font = "10px monospace";
+            ctx.fillStyle = "#888888";
+            const slotLabel = EQUIPMENT_SLOT_LABELS[slot];
+            ctx.fillText(`${prefix}${slotLabel}:`, 8, y);
+
+            // Item name (after label)
+            const labelWidth = ctx.measureText(`${prefix}${slotLabel}: `).width;
+            if (item) {
+              ctx.font = selected ? "bold 11px monospace" : "11px monospace";
+              ctx.fillStyle = selected ? "#f0c040" : (RARITY_COLORS[item.rarity] ?? "#ffffff");
+              let name = item.name;
+              if (name.length > 16) name = name.slice(0, 15) + "\u2026";
+              ctx.fillText(name, 8 + labelWidth, y);
+
+              // Stats right-aligned
+              const canonical = ITEMS[item.id] ?? item;
+              const statParts: string[] = [];
+              if (canonical.stats.attack) statParts.push(`ATK+${canonical.stats.attack}`);
+              if (canonical.stats.defense) statParts.push(`DEF+${canonical.stats.defense}`);
+              if (canonical.stats.speed) statParts.push(`SPD+${canonical.stats.speed}`);
+              if (statParts.length > 0) {
+                ctx.textAlign = "right";
+                ctx.font = "9px monospace";
+                ctx.fillStyle = selected ? "#f0c040" : "#66cc66";
+                ctx.fillText(statParts.join(" "), pw - 8, y);
+              }
+            } else {
+              ctx.font = "11px monospace";
+              ctx.fillStyle = selected ? "#f0c040" : "#444444";
+              ctx.fillText("(empty)", 8 + labelWidth, y);
+            }
+          }
+
+          // Weight
+          const weightY = contentTop + contentH + 8;
+          ctx.textAlign = "center";
+          ctx.font = "10px monospace";
+          ctx.fillStyle = curWeight > maxWeight ? "#ff4444" : "#888888";
+          ctx.fillText(`Weight: ${curWeight}/${maxWeight}`, pw / 2, weightY);
+
+          // Detail: selected item description
+          const selSlot = ALL_EQUIPMENT_SLOTS[equipIdx];
+          const selItem = inv.equipment[selSlot];
+          if (selItem) {
+            ctx.textAlign = "left";
+            ctx.font = "9px monospace";
+            ctx.fillStyle = "#777777";
+            let desc = selItem.description;
+            if (desc.length > 44) desc = desc.slice(0, 43) + "\u2026";
+            ctx.fillText(desc, 8, weightY + 14);
+          }
+        }
+
+        // ═══════════════ BAG TAB ═══════════════
+        if (tab === "bag") {
+          // Filter bar (occupies first row)
+          const filterY = contentTop + 14;
+          ctx.textAlign = "left";
+          if (filterActive) {
+            ctx.font = "bold 10px monospace";
+            ctx.fillStyle = "#66cc66";
+            ctx.fillText(`/ ${filterText}_`, 8, filterY);
+          } else if (onFilterBar) {
+            ctx.font = "bold 10px monospace";
+            ctx.fillStyle = "#f0c040";
+            ctx.fillText(filterText ? `> / ${filterText}` : "> / ...", 8, filterY);
+          } else if (filterText) {
+            ctx.font = "10px monospace";
+            ctx.fillStyle = "#888888";
+            ctx.fillText(`/ ${filterText}`, 8, filterY);
+          } else {
+            ctx.font = "10px monospace";
+            ctx.fillStyle = "#555555";
+            ctx.fillText("/ ...", 8, filterY);
+          }
+
+          // Sort mode indicator
+          if (sortMode !== "default") {
+            ctx.textAlign = "right";
+            ctx.font = "9px monospace";
+            ctx.fillStyle = "#888888";
+            ctx.fillText(sortMode === "a-z" ? "A\u2011Z" : "Z\u2011A", pw - 8, filterY);
+          }
+
+          const itemsTop = contentTop + 24;
+          const itemMaxVis = maxVis - 1; // 7 visible items
+
+          // Scroll-up indicator
+          if (bagScroll > 0) {
+            ctx.fillStyle = "#666666";
+            ctx.font = "9px monospace";
+            ctx.textAlign = "left";
+            ctx.fillText("...", 14, itemsTop - 2);
+          }
+
+          // Item list
+          for (let vi = 0; vi < itemMaxVis; vi++) {
+            const realIdx = bagScroll + vi;
+            if (realIdx >= viewBag.length) break;
+            const entry = viewBag[realIdx];
+            const selected = !onFilterBar && realIdx === bagIdx;
+            const y = itemsTop + vi * lh + lh / 2;
+
+            // Selection highlight
+            if (selected) {
+              ctx.fillStyle = "rgba(200, 170, 80, 0.12)";
+              ctx.fillRect(4, itemsTop + vi * lh - 2, pw - 8, lh);
+            }
+
+            const prefix = selected ? "> " : "  ";
+            ctx.textAlign = "left";
+            ctx.font = selected ? "bold 11px monospace" : "11px monospace";
+            ctx.fillStyle = selected ? "#f0c040" : (RARITY_COLORS[entry.item.rarity] ?? "#cccccc");
+
+            let name = entry.item.name;
+            if (name.length > 24) name = name.slice(0, 23) + "\u2026";
+            ctx.fillText(`${prefix}${name}`, 8, y);
+
+            // Weight right-aligned
+            ctx.textAlign = "right";
+            ctx.font = "9px monospace";
+            ctx.fillStyle = selected ? "#f0c040" : "#666666";
+            ctx.fillText(`${entry.item.weight}`, pw - 8, y);
+          }
+
+          // Scroll-down indicator
+          if (bagScroll + itemMaxVis < viewBag.length) {
+            ctx.fillStyle = "#666666";
+            ctx.font = "9px monospace";
+            ctx.textAlign = "left";
+            ctx.fillText("...", 14, itemsTop + itemMaxVis * lh + 2);
+          }
+
+          // Empty states
+          if (bagTotal === 0) {
+            ctx.textAlign = "center";
+            ctx.font = "11px monospace";
+            ctx.fillStyle = "#444444";
+            ctx.fillText("Empty", pw / 2, itemsTop + lh);
+          } else if (filteredCount === 0) {
+            ctx.textAlign = "center";
+            ctx.font = "11px monospace";
+            ctx.fillStyle = "#444444";
+            ctx.fillText("No matches", pw / 2, itemsTop + lh);
+          }
+
+          // Weight
+          const weightY = contentTop + contentH + 8;
+          ctx.textAlign = "center";
+          ctx.font = "10px monospace";
+          ctx.fillStyle = curWeight > maxWeight ? "#ff4444" : "#888888";
+          ctx.fillText(`Weight: ${curWeight}/${maxWeight}`, pw / 2, weightY);
+
+          // Detail: selected item info
+          if (!onFilterBar && viewBag.length > 0 && bagIdx < viewBag.length) {
+            const selItem = viewBag[bagIdx].item;
+            const detailY = weightY + 14;
+            ctx.textAlign = "left";
+            ctx.font = "9px monospace";
+
+            if (isConsumable(selItem) && selItem.consumable) {
+              const parts: string[] = [];
+              if (selItem.consumable.hungerRestore)
+                parts.push(`Hunger +${selItem.consumable.hungerRestore}`);
+              if (selItem.consumable.thirstRestore)
+                parts.push(`Thirst +${selItem.consumable.thirstRestore}`);
+              if (selItem.consumable.healthRestore)
+                parts.push(`Health +${selItem.consumable.healthRestore}`);
+              ctx.fillStyle = "#66cc66";
+              ctx.fillText(parts.length > 0 ? parts.join("  ") : selItem.description, 8, detailY);
+            } else {
+              const canonical = ITEMS[selItem.id] ?? selItem;
+              const parts: string[] = [];
+              if (canonical.stats.attack) parts.push(`ATK +${canonical.stats.attack}`);
+              if (canonical.stats.defense) parts.push(`DEF +${canonical.stats.defense}`);
+              if (canonical.stats.speed) parts.push(`SPD +${canonical.stats.speed}`);
+              if (parts.length > 0) {
+                ctx.fillStyle = "#66cc66";
+                ctx.fillText(parts.join("  "), 8, detailY);
+              } else {
+                ctx.fillStyle = "#777777";
+                let desc = selItem.description;
+                if (desc.length > 44) desc = desc.slice(0, 43) + "\u2026";
+                ctx.fillText(desc, 8, detailY);
+              }
+            }
+          }
+        }
+
+        // ═══════════════ CRAFT TAB ═══��═══════════
+        if (tab === "craft") {
+          const recipes = RECIPES;
+          const visStart = craftScroll;
+          const visEnd = Math.min(recipes.length, craftScroll + maxVis);
+
+          // Scroll-up indicator
+          if (craftScroll > 0) {
+            ctx.fillStyle = "#666666";
+            ctx.font = "9px monospace";
+            ctx.textAlign = "center";
+            ctx.fillText("\u25b2", pw / 2, contentTop + 8);
+          }
+
+          // Recipe list
+          for (let vi = 0; vi < maxVis; vi++) {
+            const recipeIdx = visStart + vi;
+            if (recipeIdx >= visEnd) break;
+
+            const recipe = recipes[recipeIdx];
+            const available = canCraft(inv, recipe);
+            const selected = recipeIdx === craftIdx;
+            const y = contentTop + 6 + vi * lh + lh / 2;
+
+            // Selection highlight
+            if (selected) {
+              ctx.fillStyle = "rgba(200, 170, 80, 0.12)";
+              ctx.fillRect(4, contentTop + 4 + vi * lh, pw - 8, lh);
+            }
+
+            // Recipe name
+            const prefix = selected ? "> " : "  ";
+            ctx.textAlign = "left";
+            ctx.font = selected ? "bold 11px monospace" : "11px monospace";
+            if (selected) {
+              ctx.fillStyle = "#f0c040";
+            } else if (available) {
+              ctx.fillStyle = "#ffffff";
+            } else {
+              ctx.fillStyle = "#666666";
+            }
+            ctx.fillText(`${prefix}${recipe.name}`, 8, y);
+
+            // Cost right-aligned
+            const costStr = recipe.ingredients
+              .map((ing) => {
+                const n = ITEMS[ing.itemId]?.name ?? ing.itemId;
+                return `${ing.count}x${n}`;
+              })
+              .join(" ");
+            ctx.textAlign = "right";
+            ctx.font = "9px monospace";
+            if (selected) {
+              ctx.fillStyle = "#f0c040";
+            } else if (available) {
+              ctx.fillStyle = "#888888";
+            } else {
+              ctx.fillStyle = "#444444";
+            }
+            ctx.fillText(costStr, pw - 8, y);
+          }
+
+          // Scroll-down indicator
+          if (visEnd < recipes.length) {
+            ctx.fillStyle = "#666666";
+            ctx.font = "9px monospace";
+            ctx.textAlign = "center";
+            ctx.fillText("\u25bc", pw / 2, contentTop + maxVis * lh + 4);
+          }
+
+          // Empty state
+          if (recipes.length === 0) {
+            ctx.textAlign = "center";
+            ctx.font = "11px monospace";
+            ctx.fillStyle = "#444444";
+            ctx.fillText("No recipes", pw / 2, contentTop + lh);
+          }
+
+          // Detail: selected recipe result
+          if (recipes.length > 0 && craftIdx < recipes.length) {
+            const recipe = recipes[craftIdx];
+            const resultItem = ITEMS[recipe.resultId];
+            const detailY = contentTop + contentH + 8;
+
+            if (resultItem) {
+              // Result item name in rarity color
+              ctx.textAlign = "left";
+              ctx.font = "bold 10px monospace";
+              ctx.fillStyle = RARITY_COLORS[resultItem.rarity] ?? "#ffffff";
+              ctx.fillText(`\u2192 ${resultItem.name}`, 8, detailY);
+
+              // Rarity + slot info
+              ctx.font = "9px monospace";
+              const nameW = ctx.measureText(`\u2192 ${resultItem.name}  `).width;
+              ctx.fillStyle = RARITY_COLORS[resultItem.rarity] ?? "#888888";
+              const slotText = resultItem.slot ? EQUIPMENT_SLOT_LABELS[resultItem.slot] : "";
+              ctx.fillText(
+                slotText ? `${resultItem.rarity} \u00b7 ${slotText}` : resultItem.rarity,
+                8 + nameW,
+                detailY,
+              );
+
+              // Stats or description
+              const detailY2 = detailY + 14;
+              const statParts: string[] = [];
+              if (resultItem.stats.attack) statParts.push(`ATK +${resultItem.stats.attack}`);
+              if (resultItem.stats.defense) statParts.push(`DEF +${resultItem.stats.defense}`);
+              if (resultItem.stats.speed) statParts.push(`SPD +${resultItem.stats.speed}`);
+              if (statParts.length > 0) {
+                ctx.fillStyle = "#66cc66";
+                ctx.fillText(statParts.join("  "), 8, detailY2);
+              } else {
+                ctx.fillStyle = "#777777";
+                let desc = resultItem.description;
+                if (desc.length > 44) desc = desc.slice(0, 43) + "\u2026";
+                ctx.fillText(desc, 8, detailY2);
+              }
+            }
+          }
+        }
+
+        // ── Bottom divider ──
+        const bottomDivY = contentTop + contentH + detailH - 2;
+        ctx.strokeStyle = "rgba(200, 170, 80, 0.25)";
+        ctx.beginPath();
+        ctx.moveTo(8, bottomDivY);
+        ctx.lineTo(pw - 8, bottomDivY);
+        ctx.stroke();
+
+        // ── Hint text ──
+        ctx.textAlign = "center";
+        ctx.font = "9px monospace";
+        ctx.fillStyle = "#666666";
+        const hintY = bottomDivY + 14;
+
+        if (tab === "equipment") {
+          const selSlot = ALL_EQUIPMENT_SLOTS[equipIdx];
+          const hasItem = inv.equipment[selSlot] != null;
+          if (hasItem) {
+            ctx.fillText("[E] Unequip  [\u2190\u2192] Tab  [I] Close", pw / 2, hintY);
+          } else {
+            ctx.fillText("[\u2190\u2192] Tab  [I] Close", pw / 2, hintY);
+          }
+        } else if (tab === "bag") {
+          if (filterActive) {
+            ctx.fillStyle = "#66cc66";
+            ctx.fillText("Type to search \u00b7 [Esc] Done", pw / 2, hintY);
+          } else if (onFilterBar) {
+            ctx.fillText("[E] Search  [X] Sort  [I] Close", pw / 2, hintY);
+          } else if (viewBag.length > 0) {
+            ctx.fillText("[E] Use  [Q] Drop  [X] Sort  [I] Close", pw / 2, hintY);
+          } else {
+            ctx.fillText("[\u2190\u2192] Tab  [I] Close", pw / 2, hintY);
+          }
+        } else if (tab === "craft") {
+          if (RECIPES.length > 0 && craftIdx < RECIPES.length && canCraft(inv, RECIPES[craftIdx])) {
+            ctx.fillText("[E] Craft  [\u2190\u2192] Tab  [I] Close", pw / 2, hintY);
+          } else if (RECIPES.length > 0) {
+            ctx.fillStyle = "#555555";
+            ctx.fillText("Missing materials  [\u2190\u2192] Tab  [I] Close", pw / 2, hintY);
+          } else {
+            ctx.fillText("[\u2190\u2192] Tab  [I] Close", pw / 2, hintY);
+          }
+        }
+      },
+    });
+
+    this.inventoryMenuPanel.graphics.use(canvas);
   }
 
   // ==================== Building Management (tile-based) ====================

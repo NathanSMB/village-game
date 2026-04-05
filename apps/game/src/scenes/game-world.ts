@@ -88,6 +88,7 @@ const BREEDING_INTERVAL_MS = 60_000; // 60 seconds
 const WILD_SPAWN_INTERVAL_MS = 600_000; // 10 minutes
 const WILD_SPAWN_MAX_SHEEP = 10; // Only wild spawn when ≤ 10 sheep alive
 const WILD_SPAWN_MAX_COWS = 10; // Only wild spawn when ≤ 10 cows alive
+const GROUND_ITEM_DESPAWN_MS = 180_000; // 3 minutes until non-permanent ground items vanish
 
 export type GameWorldData =
   | { type: "new"; appearance: CharacterAppearance }
@@ -337,7 +338,7 @@ export class GameWorld extends ex.Scene<GameWorldData> {
       if (this.blockedTiles.has(key)) continue;
       if (this.waterTiles.has(key)) continue;
 
-      this.dropItemAt(sx, sy, { ...ITEMS["small_rock"] });
+      this.dropItemAt(sx, sy, { ...ITEMS["small_rock"] }, true);
       smallRocksPlaced++;
     }
 
@@ -695,6 +696,9 @@ export class GameWorld extends ex.Scene<GameWorldData> {
 
     // Tree branch dropping
     this.updateTreeBranchDrops();
+
+    // Despawn expired ground items
+    this.updateGroundItemDespawn(delta);
 
     // Creature AI, breeding, and wild spawning
     this.updateSheep(delta);
@@ -1439,13 +1443,10 @@ export class GameWorld extends ex.Scene<GameWorldData> {
     }
   }
 
-  /** Update branch counts and process pending drops for all trees. */
+  /** Process pending branch drops for all trees. */
   private updateTreeBranchDrops(): void {
     for (const tree of this.trees) {
       if (tree.isChoppedDown()) continue; // Stumps don't drop branches
-
-      // Recount branches around this tree (handles picked-up branches)
-      tree.branchCount = this.countBranchesAroundTree(tree);
 
       if (tree.consumePendingDrop()) {
         this.tryDropBranch(tree);
@@ -1453,32 +1454,8 @@ export class GameWorld extends ex.Scene<GameWorldData> {
     }
   }
 
-  /** Count how many branches exist in tiles adjacent to a tree. */
-  private countBranchesAroundTree(tree: Tree): number {
-    let count = 0;
-    for (let dy = -1; dy <= 1; dy++) {
-      for (let dx = -1; dx <= 1; dx++) {
-        if (dx === 0 && dy === 0) continue;
-        const tx = tree.tileX + dx;
-        const ty = tree.tileY + dy;
-        if (tx < 0 || tx >= MAP_COLS || ty < 0 || ty >= MAP_ROWS) continue;
-        const key = tileKey(tx, ty);
-        const stack = this.groundItems.get(key);
-        if (stack && !stack.isEmpty()) {
-          const items = stack.getItems();
-          if (items.some((item) => item.id === "branch")) {
-            count++;
-          }
-        }
-      }
-    }
-    return count;
-  }
-
   /** Attempt to drop a branch on a random valid adjacent tile. */
   private tryDropBranch(tree: Tree): void {
-    if (tree.branchCount >= 3) return;
-
     const candidates: { tx: number; ty: number }[] = [];
     for (let dy = -1; dy <= 1; dy++) {
       for (let dx = -1; dx <= 1; dx++) {
@@ -1502,7 +1479,24 @@ export class GameWorld extends ex.Scene<GameWorldData> {
     if (candidates.length === 0) return;
     const chosen = candidates[Math.floor(Math.random() * candidates.length)];
     this.dropItemAt(chosen.tx, chosen.ty, { ...ITEMS["branch"] });
-    tree.branchCount++;
+  }
+
+  /** Remove non-permanent ground items that have exceeded their lifespan. */
+  private updateGroundItemDespawn(delta: number): void {
+    const toRemove: number[] = [];
+    for (const [key, stack] of this.groundItems) {
+      stack.tickDespawn(delta, GROUND_ITEM_DESPAWN_MS);
+      if (stack.isEmpty()) {
+        toRemove.push(key);
+      }
+    }
+    for (const key of toRemove) {
+      const stack = this.groundItems.get(key);
+      if (stack) {
+        this.remove(stack);
+        this.groundItems.delete(key);
+      }
+    }
   }
 
   getPlayerInventory(): InventoryState | null {
@@ -1543,7 +1537,7 @@ export class GameWorld extends ex.Scene<GameWorldData> {
   }
 
   /** Drop an item onto a tile. Creates a GroundItemStack if none exists. */
-  dropItemAt(tx: number, ty: number, item: Item): void {
+  dropItemAt(tx: number, ty: number, item: Item, permanent = false): void {
     const key = tileKey(tx, ty);
     let stack = this.groundItems.get(key);
     if (!stack) {
@@ -1551,7 +1545,7 @@ export class GameWorld extends ex.Scene<GameWorldData> {
       this.groundItems.set(key, stack);
       this.add(stack);
     }
-    stack.addItem(item);
+    stack.addItem(item, permanent);
   }
 
   /** Get ground items at a tile position. */
@@ -1819,10 +1813,13 @@ export class GameWorld extends ex.Scene<GameWorldData> {
     const states: GroundItemSaveState[] = [];
     for (const stack of this.groundItems.values()) {
       if (!stack.isEmpty()) {
+        const entries = stack.getEntries();
         states.push({
           tileX: stack.tileX,
           tileY: stack.tileY,
-          items: stack.getItems(),
+          items: entries.map((e) => e.item),
+          ages: entries.map((e) => e.age),
+          permanent: entries.map((e) => e.permanent),
         });
       }
     }
@@ -1838,9 +1835,19 @@ export class GameWorld extends ex.Scene<GameWorldData> {
 
     // Restore saved ground items
     for (const saved of states) {
-      for (const item of saved.items) {
+      for (let i = 0; i < saved.items.length; i++) {
+        const item = saved.items[i];
         migrateItemDurability(item);
-        this.dropItemAt(saved.tileX, saved.tileY, item);
+        const age = saved.ages?.[i] ?? 0;
+        const perm = saved.permanent?.[i] ?? false;
+        const key = tileKey(saved.tileX, saved.tileY);
+        let stack = this.groundItems.get(key);
+        if (!stack) {
+          stack = new GroundItemStack(saved.tileX, saved.tileY);
+          this.groundItems.set(key, stack);
+          this.add(stack);
+        }
+        stack.addItemWithState(item, age, perm);
       }
     }
   }

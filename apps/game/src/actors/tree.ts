@@ -7,7 +7,6 @@ import { DamageFlash } from "./damage-flash.ts";
 
 const TILE_SIZE = 32;
 const DROP_INTERVAL_MS = 60_000; // 60 seconds between timed branch drops
-const MAX_BRANCHES = 3;
 const BRANCH_DROP_EVERY = 50; // damage needed for each branch drop
 const REGROW_MS = 300_000; // 5 minutes to regrow from stump
 const LOGS_ON_DEATH = 6;
@@ -180,15 +179,11 @@ export class Tree extends ex.Actor {
     }
 
     // Timed branch drop timer (only when alive)
-    if (this.branchCount < MAX_BRANCHES) {
-      this.dropTimer -= delta;
-      if (this.dropTimer <= 0) {
-        this.dropTimer = DROP_INTERVAL_MS;
-        this.pendingDrop = true;
-      }
-    } else {
-      // Reset timer so it starts fresh when a branch is picked up
+    // Branches despawn naturally after DESPAWN_MS, so no cap needed.
+    this.dropTimer -= delta;
+    if (this.dropTimer <= 0) {
       this.dropTimer = DROP_INTERVAL_MS;
+      this.pendingDrop = true;
     }
   }
 }

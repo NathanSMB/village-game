@@ -58,9 +58,11 @@ export class GameOver extends ex.Scene<GameOverData> {
   private menuLabels: ex.Label[] = [];
   private causeLabel: ex.Label | null = null;
   private selectedIndex = 0;
+  private centerX = 0;
 
   override onInitialize(engine: ex.Engine): void {
-    const centerX = engine.drawWidth / 2;
+    this.centerX = engine.drawWidth / 2;
+    const centerX = this.centerX;
 
     const title = new ex.Label({
       text: "You Died",
@@ -115,10 +117,9 @@ export class GameOver extends ex.Scene<GameOverData> {
   }
 
   override onActivate(context: ex.SceneActivationContext<GameOverData>): void {
-    const vw = this.engine.drawWidth * this.camera.zoom;
     const vh = this.engine.drawHeight * this.camera.zoom;
     this.camera.zoom = vh / UI_REF_HEIGHT;
-    this.camera.pos = ex.vec(vw / 2, UI_REF_HEIGHT / 2);
+    this.camera.pos = ex.vec(this.centerX, UI_REF_HEIGHT / 2);
     this.selectedIndex = 0;
     this.updateSelection();
 

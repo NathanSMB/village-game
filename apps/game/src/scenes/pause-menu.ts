@@ -37,9 +37,11 @@ export class PauseMenu extends ex.Scene {
   private menuItems: MenuItem[] = [];
   private menuLabels: ex.Label[] = [];
   private selectedIndex = 0;
+  private centerX = 0;
 
   override onInitialize(engine: ex.Engine): void {
-    const centerX = engine.drawWidth / 2;
+    this.centerX = engine.drawWidth / 2;
+    const centerX = this.centerX;
 
     const title = new ex.Label({
       text: "Paused",
@@ -105,10 +107,9 @@ export class PauseMenu extends ex.Scene {
   }
 
   override onActivate(): void {
-    const vw = this.engine.drawWidth * this.camera.zoom;
     const vh = this.engine.drawHeight * this.camera.zoom;
     this.camera.zoom = vh / UI_REF_HEIGHT;
-    this.camera.pos = ex.vec(vw / 2, UI_REF_HEIGHT / 2);
+    this.camera.pos = ex.vec(this.centerX, UI_REF_HEIGHT / 2);
     this.selectedIndex = 0;
     this.updateSelection();
   }

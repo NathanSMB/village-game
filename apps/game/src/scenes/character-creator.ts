@@ -218,10 +218,9 @@ export class CharacterCreator extends ex.Scene {
   }
 
   override onActivate(): void {
-    const vw = this.engine.drawWidth * this.camera.zoom;
     const vh = this.engine.drawHeight * this.camera.zoom;
     this.camera.zoom = vh / UI_REF_HEIGHT;
-    this.camera.pos = ex.vec(vw / 2, UI_REF_HEIGHT / 2);
+    this.camera.pos = ex.vec(this.centerX, UI_REF_HEIGHT / 2);
     this.appearance = defaultAppearance();
     this.selectedRow = 0;
     this.rebuildOptionRows();

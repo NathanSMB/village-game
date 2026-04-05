@@ -3495,7 +3495,11 @@ export class GameWorld extends ex.Scene<GameWorldData> {
   }
 
   private handleInventoryFilterInput(kb: ex.Keyboard): void {
-    if (kb.wasPressed(ex.Keys.Escape) || kb.wasPressed(ex.Keys.Enter)) {
+    if (
+      kb.wasPressed(ex.Keys.Escape) ||
+      kb.wasPressed(ex.Keys.Enter) ||
+      kb.wasPressed(ex.Keys.Tab)
+    ) {
       this.inventoryFilterActive = false;
       if (this.inventoryViewBag.length > 0) {
         this.inventoryOnFilterBar = false;

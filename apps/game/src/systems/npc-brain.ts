@@ -208,16 +208,82 @@ export async function decideNextAction(
     { role: "user", content: "What is your next action? Respond with one JSON action." },
   ];
 
+  const t0 = performance.now();
   const response = await callLLM(config, messages, signal);
+  const elapsed = Math.round(performance.now() - t0);
+
+  // ── Structured console logging ──────────────────────────────────────
+  const label = `%c[NPC] ${npc.npcName}`;
+  const style = "color:#88aaff;font-weight:bold";
 
   if (response.error) {
-    console.warn(`[NPC ${npc.npcName}] LLM error: ${response.error}`);
+    console.group(label, style);
+    console.warn("LLM error:", response.error);
+    console.log("Position:", `(${npc.tileX},${npc.tileY})`, "facing", npc.facing);
+    console.groupEnd();
+
+    npc.debugLastResponse = `ERROR: ${response.error}`;
+    npc.debugLastAction = '{"action":"wait","durationMs":5000}';
+    npc.debugLastResult = "❌ LLM error";
     return { action: "wait", durationMs: 5000 };
   }
 
   const action = parseActionResponse(response.text);
+  const actionJson = action ? JSON.stringify(action) : "null";
+
+  console.group(label, style);
+  console.log(
+    `%cPosition%c (${npc.tileX},${npc.tileY}) facing ${npc.facing} | ` +
+      `%cVitals%c H:${Math.round(npc.vitals.health)} F:${Math.round(npc.vitals.hunger)} ` +
+      `T:${Math.round(npc.vitals.thirst)} E:${Math.round(npc.vitals.energy)}`,
+    "color:#aaa",
+    "color:inherit",
+    "color:#aaa",
+    "color:inherit",
+  );
+  if (snapshot.entities.length > 0) {
+    console.groupCollapsed(`%cVisible (${snapshot.entities.length} entities)`, "color:#888");
+    for (const e of snapshot.entities) {
+      console.log(`  (${e.x},${e.y}) ${e.type}: ${e.details}`);
+    }
+    console.groupEnd();
+  }
+  if (snapshot.nearbyMessages.length > 0) {
+    console.log(
+      "%cMessages heard:",
+      "color:#888",
+      snapshot.nearbyMessages.map((m) => `[${m.sender}] ${m.text}`).join(" | "),
+    );
+  }
+  if (npc.memory.notes.length > 0) {
+    console.log("%cMemory:", "color:#888", npc.memory.notes.join(" | "));
+  }
+  console.groupCollapsed(`%cFull prompt`, "color:#555");
+  console.log(systemPrompt);
+  console.groupEnd();
+  if (action) {
+    console.log(
+      `%c→ Action%c ${actionJson} %c(${elapsed}ms)`,
+      "color:#44ff88",
+      "color:inherit",
+      "color:#666",
+    );
+  } else {
+    console.warn(`→ Parse failed (${elapsed}ms):`, response.text.slice(0, 300));
+  }
+  console.groupEnd();
+  // ───────────────────────────────────────────────────────────────────
+
+  // Store debug state on the NPC
+  npc.debugLastResponse = response.text ? response.text.slice(0, 500) : "(empty response)";
+  npc.debugLastAction = actionJson;
+
   if (!action) {
-    console.warn(`[NPC ${npc.npcName}] Failed to parse action: ${response.text.slice(0, 200)}`);
+    if (!response.text) {
+      npc.debugLastResult = "❌ Empty response — check model name & API key in Settings → AI";
+    } else {
+      npc.debugLastResult = "❌ Parse failed — model didn't return JSON";
+    }
     return { action: "wait", durationMs: 3000 };
   }
 

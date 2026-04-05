@@ -107,6 +107,24 @@ export class NPC extends ex.Actor {
   private waitTimer = 0;
   pendingPath: Direction[] = []; // for move_to multi-step
 
+  // ── Debug state ────────────────────────────────────────────────────
+  /** Whether an LLM call is currently in-flight (set externally by GameWorld). */
+  debugThinking = false;
+  /** The raw text of the last LLM response. */
+  debugLastResponse = "";
+  /** The last action JSON returned by the LLM. */
+  debugLastAction = "";
+  /** Whether the last action succeeded. */
+  debugLastResult = "";
+  /** Circular buffer of recent actions (newest first, max 10). */
+  debugHistory: { action: string; result: string; time: number }[] = [];
+
+  /** Push an entry into the action history (keeps newest 10). */
+  pushDebugHistory(action: string, result: string): void {
+    this.debugHistory.unshift({ action, result, time: Date.now() });
+    if (this.debugHistory.length > 10) this.debugHistory.length = 10;
+  }
+
   // Combat tracking for passive health regen
   private combatTimer = 10000;
   private regenAccum = 0;

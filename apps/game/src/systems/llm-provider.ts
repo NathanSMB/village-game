@@ -116,8 +116,17 @@ async function callClaude(
     return { text: "", error: `Claude API ${resp.status}: ${errText}` };
   }
 
-  const data = (await resp.json()) as { content?: { type: string; text: string }[] };
+  const data = (await resp.json()) as {
+    content?: { type: string; text: string }[];
+    error?: { type: string; message: string };
+  };
+  if (data.error) {
+    return { text: "", error: `Claude error: ${data.error.type} — ${data.error.message}` };
+  }
   const textBlock = data.content?.find((b) => b.type === "text");
+  if (!textBlock?.text) {
+    console.warn("[LLM] Claude returned no text block:", JSON.stringify(data));
+  }
   return { text: textBlock?.text ?? "" };
 }
 
@@ -148,9 +157,17 @@ async function callOpenAI(
   }
 
   const data = (await resp.json()) as {
-    choices?: { message?: { content?: string } }[];
+    choices?: { message?: { content?: string | null }; finish_reason?: string }[];
+    error?: { message: string; type: string; code?: string };
   };
-  return { text: data.choices?.[0]?.message?.content ?? "" };
+  if (data.error) {
+    return { text: "", error: `OpenAI error: ${data.error.message}` };
+  }
+  const content = data.choices?.[0]?.message?.content;
+  if (!content) {
+    console.warn("[LLM] OpenAI returned no content:", JSON.stringify(data));
+  }
+  return { text: content ?? "" };
 }
 
 // ── Ollama (local chat API) ──────────────────────────────────────────

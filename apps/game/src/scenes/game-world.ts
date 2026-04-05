@@ -100,6 +100,8 @@ import { loadLLMConfig } from "../systems/llm-settings.ts";
 import { decideNextAction, buildWorldSnapshot } from "../systems/npc-brain.ts";
 import { executeNPCAction, type GameWorldNPCInterface } from "../systems/npc-actions.ts";
 import { findPath } from "../systems/pathfinding.ts";
+import { NPCThoughtIndicator } from "../actors/npc-thought-indicator.ts";
+import { NPCDebugPanel } from "../actors/npc-debug-panel.ts";
 
 const MAP_COLS = 64;
 const MAP_ROWS = 64;
@@ -235,6 +237,8 @@ export class GameWorld extends ex.Scene<GameWorldData> {
   private npcRegisteredTile = new Map<NPC, number>();
   private npcInFlight = new Map<string, AbortController>(); // in-flight LLM calls
   private llmConfig: LLMProviderConfig = defaultConfig();
+  private npcDebugPanel: NPCDebugPanel | null = null;
+  private npcDebugVisible = false;
 
   // Sleeping state
   private playerSleeping = false;
@@ -812,6 +816,28 @@ export class GameWorld extends ex.Scene<GameWorldData> {
 
   override onPreUpdate(engine: ex.Engine, delta: number): void {
     const kb = engine.input.keyboard;
+
+    // Lazily create NPC debug panel on first update (engine dimensions are reliable here)
+    if (!this.npcDebugPanel) {
+      this.npcDebugPanel = new NPCDebugPanel(engine.drawWidth, engine.drawHeight);
+      this.npcDebugPanel.graphics.visible = false;
+      this.add(this.npcDebugPanel);
+      this.npcDebugPanel.setNPCs(this.npcList.filter((n) => !n.isDead));
+    }
+
+    // NPC debug panel toggle (backtick)
+    if (kb.wasPressed(ex.Keys.Backquote)) {
+      this.npcDebugVisible = !this.npcDebugVisible;
+      if (this.npcDebugPanel) {
+        this.npcDebugPanel.graphics.visible = this.npcDebugVisible;
+        this.npcDebugPanel.setNPCs(this.npcList.filter((n) => !n.isDead));
+      }
+    }
+    // Cycle NPC in debug panel with left/right when panel is open
+    if (this.npcDebugVisible && this.npcDebugPanel) {
+      if (kb.wasPressed(ex.Keys.ArrowLeft)) this.npcDebugPanel.cycleNPC(-1);
+      if (kb.wasPressed(ex.Keys.ArrowRight)) this.npcDebugPanel.cycleNPC(1);
+    }
 
     // Planning mode input handling
     if (this.planningMode) {
@@ -5327,6 +5353,14 @@ export class GameWorld extends ex.Scene<GameWorldData> {
     this.npcRegisteredTile.set(npc, key);
     this.blockedTiles.add(key);
     this.add(npc);
+
+    // Attach thought indicator as child
+    const indicator = new NPCThoughtIndicator(npc);
+    npc.addChild(indicator);
+
+    // Update debug panel NPC list
+    this.npcDebugPanel?.setNPCs(this.npcList.filter((n) => !n.isDead));
+
     return npc;
   }
 
@@ -5404,18 +5438,24 @@ export class GameWorld extends ex.Scene<GameWorldData> {
   }
 
   private npcFallbackWander(npc: NPC): void {
-    // Simple random wander (sheep-like)
+    // Simple random wander (sheep-like) — used when no LLM config is set
+    npc.debugLastAction = "(no LLM — fallback wander)";
+    npc.debugLastResult = "✓ fallback";
     if (Math.random() < 0.3) {
       const dirs = ["up", "down", "left", "right"] as const;
-      npc.moveToTile(dirs[Math.floor(Math.random() * 4)]);
+      const dir = dirs[Math.floor(Math.random() * 4)];
+      npc.moveToTile(dir);
+      npc.pushDebugHistory(`{"action":"move","direction":"${dir}"}`, "✓ fallback");
     } else {
       npc.startWaiting(2000 + Math.random() * 3000);
+      npc.pushDebugHistory('{"action":"wait"}', "✓ fallback");
     }
   }
 
   private triggerNPCDecision(npc: NPC): void {
     const abortController = new AbortController();
     this.npcInFlight.set(npc.npcId, abortController);
+    npc.debugThinking = true;
 
     const snapshot = this.getWorldSnapshotForNPC(npc);
     const config = this.llmConfig;
@@ -5423,15 +5463,26 @@ export class GameWorld extends ex.Scene<GameWorldData> {
     decideNextAction(npc, snapshot, config, abortController.signal)
       .then((action) => {
         this.npcInFlight.delete(npc.npcId);
+        npc.debugThinking = false;
         if (npc.isDead) return;
 
         // Clear chat inbox since the brain has consumed them
         npc.chatInbox = [];
 
-        executeNPCAction(npc, action, this.getNPCInterface());
+        const result = executeNPCAction(npc, action, this.getNPCInterface());
+        const actionJson = JSON.stringify(action);
+        const resultStr = result.success
+          ? `✓ ${result.reason ?? "ok"}`
+          : `✗ ${result.reason ?? "failed"}`;
+        npc.debugLastResult = resultStr;
+        npc.pushDebugHistory(actionJson, resultStr);
       })
-      .catch(() => {
+      .catch((err: unknown) => {
         this.npcInFlight.delete(npc.npcId);
+        npc.debugThinking = false;
+        if (!String(err).includes("aborted")) {
+          npc.debugLastResult = `✗ ${String(err)}`;
+        }
       });
   }
 

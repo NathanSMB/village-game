@@ -25,7 +25,7 @@ const FIRELIT_ROOM = 0.05;
 const WALL_IDS = new Set(["wall", "wall_window", "wall_door"]);
 
 /** Tile building type IDs that count as floor for room detection. */
-const FLOOR_IDS = new Set(["floor", "bed", "hearth"]);
+const FLOOR_IDS = new Set(["floor", "bed", "hearth", "box_short", "box_medium", "box_tall"]);
 
 function tileKey(x: number, y: number): number {
   return y * MAP_COLS + x;

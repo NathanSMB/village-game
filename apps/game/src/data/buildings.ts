@@ -34,6 +34,8 @@ export interface BuildingType {
   placement: "tile" | "edge";
   /** If true, this building can only be placed on a completed indoor floor tile (which it replaces). */
   requiresIndoor?: boolean;
+  /** If true, this building can be placed on a completed indoor floor tile in addition to normal outdoor tiles. */
+  allowIndoor?: boolean;
   /** If set, this building supports fire behavior (burn timer, ignition, cooking). */
   fire?: FireConfig;
   /** If set, this building acts as an item container with fixed slots. */
@@ -182,6 +184,7 @@ export const BUILDING_TYPES: BuildingType[] = [
     interactable: false,
     solidWhenClosed: false,
     placement: "tile",
+    allowIndoor: true,
     storage: { slotCount: 8 },
   },
   {
@@ -193,6 +196,7 @@ export const BUILDING_TYPES: BuildingType[] = [
     interactable: false,
     solidWhenClosed: false,
     placement: "tile",
+    allowIndoor: true,
     storage: { slotCount: 12 },
   },
   {
@@ -204,6 +208,7 @@ export const BUILDING_TYPES: BuildingType[] = [
     interactable: false,
     solidWhenClosed: false,
     placement: "tile",
+    allowIndoor: true,
     storage: { slotCount: 16 },
   },
 ];

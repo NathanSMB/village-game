@@ -114,6 +114,8 @@ export interface SaveData {
   sheep?: SheepSaveState[];
   cows?: CowSaveState[];
   npcs?: NPCSaveState[];
+  /** The player's chosen character name. Absent in old saves → falls back to save slot name. */
+  playerName?: string;
 }
 
 const DB_NAME = "village-game";

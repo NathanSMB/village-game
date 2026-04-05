@@ -69,9 +69,6 @@ export function executeNPCAction(
     case "complete_goal":
       return execCompleteGoal(npc);
 
-    case "move":
-      return execMove(npc, action.direction);
-
     case "move_to":
       return execMoveTo(npc, action.x, action.y, world);
 
@@ -148,12 +145,6 @@ export function executeNPCAction(
 }
 
 // ── Individual action executors ──────────────────────────────────────
-
-function execMove(npc: NPC, direction: Direction): ActionResult {
-  const moved = npc.moveToTile(direction);
-  if (!moved) return { success: false, reason: "Tile is blocked" };
-  return { success: true };
-}
 
 function execSetGoal(npc: NPC, goal: string): ActionResult {
   if (!goal || goal.trim().length === 0) return { success: false, reason: "Goal cannot be empty" };

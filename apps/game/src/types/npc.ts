@@ -92,7 +92,6 @@ export interface WorldSnapshot {
 export type NPCAction =
   | { action: "set_goal"; goal: string }
   | { action: "complete_goal" }
-  | { action: "move"; direction: Direction }
   | { action: "move_to"; x: number; y: number }
   | { action: "pick_bush"; direction: Direction }
   | { action: "chop_tree"; direction: Direction }

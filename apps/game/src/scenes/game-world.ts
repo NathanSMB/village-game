@@ -124,7 +124,7 @@ const WILD_SPAWN_MAX_COWS = 10; // Only wild spawn when ≤ 10 cows alive
 const GROUND_ITEM_DESPAWN_MS = 180_000; // 3 minutes until non-permanent ground items vanish
 
 export type GameWorldData =
-  | { type: "new"; appearance: CharacterAppearance }
+  | { type: "new"; appearance: CharacterAppearance; playerName: string }
   | { type: "load"; save: SaveData };
 
 /** Map an Excalibur key code + shift state to a printable character, or null. */
@@ -708,7 +708,10 @@ export class GameWorld extends ex.Scene<GameWorldData> {
       this.chatMessages = [];
       this.chatOpen = false;
       this.chatInputText = "";
-      this.playerName = context.data.type === "load" ? context.data.save.name : "Player";
+      this.playerName =
+        context.data.type === "load"
+          ? (context.data.save.playerName ?? context.data.save.name)
+          : context.data.playerName;
 
       // Chat input/hint panel sits at the very bottom-left.
       // UI_REF_HEIGHT (600) is the design-unit screen height; multiplying by
@@ -3362,12 +3365,12 @@ export class GameWorld extends ex.Scene<GameWorldData> {
   }
 
   private handleChatInput(kb: ex.Keyboard): void {
-    // Arrow keys scroll the chat log
-    if (kb.wasPressed(ex.Keys.ArrowUp) || kb.wasPressed(ex.Keys.W)) {
+    // Arrow keys scroll the chat log (NOT WASD — those are for typing!)
+    if (kb.wasPressed(ex.Keys.ArrowUp)) {
       this.chatLog?.scrollUp();
       return;
     }
-    if (kb.wasPressed(ex.Keys.ArrowDown) || kb.wasPressed(ex.Keys.S)) {
+    if (kb.wasPressed(ex.Keys.ArrowDown)) {
       this.chatLog?.scrollDown();
       return;
     }
@@ -5673,6 +5676,8 @@ export class GameWorld extends ex.Scene<GameWorldData> {
         this.chatMessages.push(msg);
         this.chatLog?.scrollToBottom();
         new SpeechBubble(msg.text, npc2, msg.mode);
+        // Add to sender's own chat history so they remember what they said
+        npc2.pushChatHistory(msg);
         this.distributeMessageToNPCs(msg, npc2);
       },
       npcPlaceBuilding: (buildingId, x, y, rotation) => {
@@ -5731,11 +5736,16 @@ export class GameWorld extends ex.Scene<GameWorldData> {
       const dist = chebyshevDistance(msg.tileX, msg.tileY, npc.tileX, npc.tileY);
       if (dist <= CHAT_MODE_RADIUS[msg.mode]) {
         npc.chatInbox.push(msg);
+        npc.pushChatHistory(msg);
       }
     }
   }
 
   // ==================== NPC Save/Load ====================
+
+  getPlayerName(): string {
+    return this.playerName;
+  }
 
   getNPCStates(): NPCSaveState[] {
     return this.npcList.filter((n) => !n.isDead).map((n) => n.getState());

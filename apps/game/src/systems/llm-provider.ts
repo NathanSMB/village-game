@@ -5,11 +5,19 @@
 
 export type LLMProviderType = "claude" | "openai" | "ollama" | "custom";
 
+export type ReasoningEffort = "none" | "low" | "medium" | "high";
+export type ProviderSort = "price" | "throughput" | "latency";
+
+export const REASONING_EFFORT_ORDER: ReasoningEffort[] = ["none", "low", "medium", "high"];
+export const PROVIDER_SORT_ORDER: ProviderSort[] = ["price", "throughput", "latency"];
+
 export interface LLMProviderConfig {
   provider: LLMProviderType;
   apiKey: string;
   model: string;
   endpointUrl: string;
+  reasoningEffort: ReasoningEffort;
+  providerSort: ProviderSort;
 }
 
 export interface LLMMessage {
@@ -33,24 +41,26 @@ export const DEFAULT_MODELS: Record<LLMProviderType, string> = {
   claude: "claude-haiku-4-5-20251001",
   openai: "gpt-5.4-nano",
   ollama: "llama3",
-  custom: "moonshotai/kimi-k2.5",
+  custom: "openai/gpt-oss-120b",
 };
 
 export const PROVIDER_LABELS: Record<LLMProviderType, string> = {
   claude: "Claude",
   openai: "OpenAI",
   ollama: "Ollama",
-  custom: "Custom",
+  custom: "OpenRouter",
 };
 
-export const PROVIDER_ORDER: LLMProviderType[] = ["claude", "openai", "ollama", "custom"];
+export const PROVIDER_ORDER: LLMProviderType[] = ["custom", "claude", "openai", "ollama"];
 
 export function defaultConfig(): LLMProviderConfig {
   return {
-    provider: "claude",
+    provider: "custom",
     apiKey: "",
-    model: DEFAULT_MODELS.claude,
-    endpointUrl: DEFAULT_ENDPOINTS.claude,
+    model: DEFAULT_MODELS.custom,
+    endpointUrl: DEFAULT_ENDPOINTS.custom,
+    reasoningEffort: "low",
+    providerSort: "latency",
   };
 }
 
@@ -212,10 +222,11 @@ async function callOpenRouter(
     },
     body: JSON.stringify({
       model: config.model,
-      max_tokens: 256,
+      max_tokens: 512,
       messages: messages.map((m) => ({ role: m.role, content: m.content })),
+      reasoning: { effort: config.reasoningEffort || "low" },
       provider: {
-        sort: "throughput",
+        sort: config.providerSort || "latency",
       },
     }),
     signal,
@@ -227,15 +238,42 @@ async function callOpenRouter(
   }
 
   const data = (await resp.json()) as {
-    choices?: { message?: { content?: string | null }; finish_reason?: string }[];
+    choices?: {
+      message?: {
+        content?: string | null;
+        reasoning?: string | null;
+      };
+      finish_reason?: string;
+    }[];
     error?: { message: string; type: string; code?: string };
   };
   if (data.error) {
     return { text: "", error: `OpenRouter error: ${data.error.message}` };
   }
-  const content = data.choices?.[0]?.message?.content;
+
+  const choice = data.choices?.[0];
+  let content = choice?.message?.content;
+
+  // Reasoning models may put all tokens into reasoning with null content.
+  // Try to extract a JSON action from the reasoning text as a fallback.
+  if (!content && choice?.message?.reasoning) {
+    const reasoning = choice.message.reasoning;
+    const jsonMatch = reasoning.match(/\{[^{}]*"action"\s*:\s*"[^"]+?"[^{}]*\}/);
+    if (jsonMatch) {
+      content = jsonMatch[0];
+      console.info("[LLM] Extracted action from reasoning:", content);
+    } else {
+      console.warn("[LLM] OpenRouter: content null, reasoning had no JSON action");
+    }
+  }
+
   if (!content) {
-    console.warn("[LLM] OpenRouter returned no content:", JSON.stringify(data));
+    const reason = choice?.finish_reason;
+    if (reason === "length") {
+      console.warn("[LLM] OpenRouter: response truncated (finish_reason=length)");
+    } else {
+      console.warn("[LLM] OpenRouter returned no content:", JSON.stringify(data).slice(0, 500));
+    }
   }
   return { text: content ?? "" };
 }

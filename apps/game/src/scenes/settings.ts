@@ -14,6 +14,8 @@ import {
   type LLMProviderConfig,
   PROVIDER_ORDER,
   PROVIDER_LABELS,
+  REASONING_EFFORT_ORDER,
+  PROVIDER_SORT_ORDER,
   callLLM,
 } from "../systems/llm-provider.ts";
 import { loadLLMConfig, saveLLMConfig, getProviderDefaults } from "../systems/llm-settings.ts";
@@ -120,7 +122,14 @@ const DISPLAY_BUTTONS = ["Back"];
 const KEYBIND_BUTTONS = ["Reset to Defaults", "Back"];
 const AI_BUTTONS = ["Test Connection", "Clear", "Back"];
 
-const AI_FIELD_LABELS = ["Provider:", "API Key:", "Model:", "Endpoint:"] as const;
+const AI_FIELD_LABELS = [
+  "Provider:",
+  "API Key:",
+  "Model:",
+  "Endpoint:",
+  "Reasoning:",
+  "Sort:",
+] as const;
 
 const FONT_VALUE = new ex.Font({
   family: "monospace",
@@ -193,15 +202,18 @@ export class Settings extends ex.Scene<SettingsData> {
   private aiContentRow = 0;
   private aiButtonIndex = 0;
   private aiConfig: LLMProviderConfig = {
-    provider: "claude",
+    provider: "custom",
     apiKey: "",
     model: "",
     endpointUrl: "",
+    reasoningEffort: "low",
+    providerSort: "latency",
   };
   private aiTyping = false;
   private aiTypingField: number = -1; // 1=apiKey, 2=model, 3=endpoint
   private aiTypingBuffer = "";
   private aiStatusLabel!: ex.Label;
+  private aiRowLabels: ex.Label[] = []; // the left-side "Provider:", "API Key:", etc. labels
   private pasteHandler: ((e: ClipboardEvent) => void) | null = null;
 
   private get activeTab(): TabName {
@@ -833,6 +845,7 @@ export class Settings extends ex.Scene<SettingsData> {
       });
       this.add(label);
       this.aiElements.push(label);
+      this.aiRowLabels.push(label);
 
       const valueLabel = new ex.Label({
         text: "",
@@ -844,6 +857,10 @@ export class Settings extends ex.Scene<SettingsData> {
         this.aiContentRow = i;
         if (i === 0) {
           this.cycleProvider(1);
+        } else if (i === 4 || i === 5) {
+          // cycle selectors
+          if (i === 4) this.cycleReasoning(1);
+          else this.cycleSort(1);
         } else {
           this.startAITyping(i);
         }
@@ -891,13 +908,27 @@ export class Settings extends ex.Scene<SettingsData> {
   }
 
   private refreshAIValues(): void {
-    if (this.aiValueLabels.length < 4) return;
+    if (this.aiValueLabels.length < 6) return;
     this.aiValueLabels[0].text = `< ${PROVIDER_LABELS[this.aiConfig.provider]} >`;
     this.aiValueLabels[1].text = this.aiConfig.apiKey
       ? `${"*".repeat(Math.min(this.aiConfig.apiKey.length, 20))}`
       : "(not set)";
     this.aiValueLabels[2].text = this.aiConfig.model || "(not set)";
     this.aiValueLabels[3].text = this.aiConfig.endpointUrl || "(not set)";
+    this.aiValueLabels[4].text = `< ${this.aiConfig.reasoningEffort ?? "low"} >`;
+    this.aiValueLabels[5].text = `< ${this.aiConfig.providerSort ?? "latency"} >`;
+
+    // Reasoning + Sort rows are OpenRouter-only
+    const showExtra = this.aiConfig.provider === "custom";
+    for (const idx of [4, 5]) {
+      if (this.aiValueLabels[idx]) this.aiValueLabels[idx].graphics.visible = showExtra;
+      if (this.aiRowLabels[idx]) this.aiRowLabels[idx].graphics.visible = showExtra;
+    }
+  }
+
+  /** The last navigable content row (3 for non-OpenRouter, 5 for OpenRouter). */
+  private get aiMaxContentRow(): number {
+    return this.aiConfig.provider === "custom" ? AI_FIELD_LABELS.length - 1 : 3;
   }
 
   private handleAIContentInput(kb: ex.Keyboard): void {
@@ -911,7 +942,7 @@ export class Settings extends ex.Scene<SettingsData> {
       return;
     }
     if (kb.wasPressed(ex.Keys.ArrowDown) || kb.wasPressed(ex.Keys.S)) {
-      if (this.aiContentRow < AI_FIELD_LABELS.length - 1) {
+      if (this.aiContentRow < this.aiMaxContentRow) {
         this.aiContentRow++;
       } else {
         this.section = "buttons";
@@ -934,6 +965,23 @@ export class Settings extends ex.Scene<SettingsData> {
       ) {
         this.cycleProvider(1);
       }
+    } else if (this.aiContentRow === 4 || this.aiContentRow === 5) {
+      // Cycle selectors: row 4 = reasoning, row 5 = sort
+      const cycleFn =
+        this.aiContentRow === 4
+          ? (d: number) => this.cycleReasoning(d)
+          : (d: number) => this.cycleSort(d);
+      if (kb.wasPressed(ex.Keys.ArrowLeft) || kb.wasPressed(ex.Keys.A)) {
+        cycleFn(-1);
+      }
+      if (
+        kb.wasPressed(ex.Keys.ArrowRight) ||
+        kb.wasPressed(ex.Keys.D) ||
+        kb.wasPressed(ex.Keys.Enter) ||
+        kb.wasPressed(ex.Keys.Space)
+      ) {
+        cycleFn(1);
+      }
     } else {
       // Text input fields — enter to type
       if (kb.wasPressed(ex.Keys.Enter) || kb.wasPressed(ex.Keys.Space)) {
@@ -948,7 +996,7 @@ export class Settings extends ex.Scene<SettingsData> {
         this.aiButtonIndex--;
       } else {
         this.section = "content";
-        this.aiContentRow = AI_FIELD_LABELS.length - 1;
+        this.aiContentRow = this.aiMaxContentRow;
       }
       this.updateSelection();
       return;
@@ -972,6 +1020,28 @@ export class Settings extends ex.Scene<SettingsData> {
     const defaults = getProviderDefaults(next);
     this.aiConfig.endpointUrl = defaults.endpointUrl;
     this.aiConfig.model = defaults.model;
+    this.refreshAIValues();
+    this.updateSelection();
+    void saveLLMConfig(this.aiConfig);
+  }
+
+  private cycleReasoning(dir: number): void {
+    const idx = REASONING_EFFORT_ORDER.indexOf(this.aiConfig.reasoningEffort ?? "low");
+    const next =
+      REASONING_EFFORT_ORDER[
+        (idx + dir + REASONING_EFFORT_ORDER.length) % REASONING_EFFORT_ORDER.length
+      ];
+    this.aiConfig.reasoningEffort = next;
+    this.refreshAIValues();
+    this.updateSelection();
+    void saveLLMConfig(this.aiConfig);
+  }
+
+  private cycleSort(dir: number): void {
+    const idx = PROVIDER_SORT_ORDER.indexOf(this.aiConfig.providerSort ?? "latency");
+    const next =
+      PROVIDER_SORT_ORDER[(idx + dir + PROVIDER_SORT_ORDER.length) % PROVIDER_SORT_ORDER.length];
+    this.aiConfig.providerSort = next;
     this.refreshAIValues();
     this.updateSelection();
     void saveLLMConfig(this.aiConfig);

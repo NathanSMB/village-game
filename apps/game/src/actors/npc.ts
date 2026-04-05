@@ -103,8 +103,12 @@ export class NPC extends ex.Actor {
   // Goal system — the NPC's current objective, drives decision-making
   currentGoal = "";
 
-  // Chat inbox — messages heard since last LLM call, consumed by brain
+  // Chat inbox — NEW messages heard since last LLM call, consumed by brain
   chatInbox: ChatMessage[] = [];
+
+  // Chat history — rolling log of recent messages (sent + received), kept across LLM calls
+  chatHistory: ChatMessage[] = [];
+  private static readonly MAX_CHAT_HISTORY = 50;
 
   // Brain coordination
   private waitTimer = 0;
@@ -126,6 +130,14 @@ export class NPC extends ex.Actor {
   pushDebugHistory(action: string, result: string): void {
     this.debugHistory.unshift({ action, result, time: Date.now() });
     if (this.debugHistory.length > 10) this.debugHistory.length = 10;
+  }
+
+  /** Add a message to the persistent chat history (sent or received). */
+  pushChatHistory(msg: ChatMessage): void {
+    this.chatHistory.push(msg);
+    if (this.chatHistory.length > NPC.MAX_CHAT_HISTORY) {
+      this.chatHistory.splice(0, this.chatHistory.length - NPC.MAX_CHAT_HISTORY);
+    }
   }
 
   // Combat tracking for passive health regen

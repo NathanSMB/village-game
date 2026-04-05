@@ -14,10 +14,12 @@ export async function loadLLMConfig(): Promise<LLMProviderConfig> {
   if (!raw || typeof raw !== "object") return defaultConfig();
   const saved = raw as Partial<LLMProviderConfig>;
   return {
-    provider: saved.provider ?? "claude",
+    provider: saved.provider ?? "custom",
     apiKey: saved.apiKey ?? "",
-    model: saved.model ?? DEFAULT_MODELS[saved.provider ?? "claude"],
-    endpointUrl: saved.endpointUrl ?? DEFAULT_ENDPOINTS[saved.provider ?? "claude"],
+    model: saved.model ?? DEFAULT_MODELS[saved.provider ?? "custom"],
+    endpointUrl: saved.endpointUrl ?? DEFAULT_ENDPOINTS[saved.provider ?? "custom"],
+    reasoningEffort: saved.reasoningEffort ?? "low",
+    providerSort: saved.providerSort ?? "latency",
   };
 }
 

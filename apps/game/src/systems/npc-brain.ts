@@ -21,8 +21,7 @@ Goals:
   {"action":"complete_goal"} — Mark current goal as done (then set a new one!)
 
 Movement:
-  {"action":"move","direction":"up|down|left|right"} — Move 1 tile
-  {"action":"move_to","x":<num>,"y":<num>} — Walk to a tile (auto-pathfinds)
+  {"action":"move_to","x":<num>,"y":<num>} — Walk to a tile (auto-pathfinds, use for ALL movement)
 
 Gathering:
   {"action":"pick_bush","direction":"<dir>"} — Pick berries from adjacent bush
@@ -96,11 +95,24 @@ function buildSystemPrompt(npc: NPC, snapshot: WorldSnapshot): string {
     .map((e) => `  (${e.x},${e.y}): ${e.type} - ${e.details}`)
     .join("\n");
 
-  // Messages heard
-  const msgLines =
+  // Chat history (last 5 minutes — includes own messages + received)
+  const fiveMinAgo = Date.now() - 5 * 60 * 1000;
+  const recentChat = npc.chatHistory.filter((m) => m.timestamp >= fiveMinAgo);
+  const chatLines =
+    recentChat.length > 0
+      ? recentChat
+          .map((m) => {
+            const isSelf = m.sender === npc.npcName;
+            return `  ${isSelf ? "(you)" : m.sender}: "${m.text}"`;
+          })
+          .join("\n")
+      : "  (no recent conversation)";
+
+  // NEW messages since last decision (unread inbox)
+  const newMsgLines =
     snapshot.nearbyMessages.length > 0
-      ? snapshot.nearbyMessages.map((m) => `  [${m.mode}] ${m.sender}: "${m.text}"`).join("\n")
-      : "  None";
+      ? snapshot.nearbyMessages.map((m) => `  >> ${m.sender}: "${m.text}"`).join("\n")
+      : "";
 
   // Notes
   const noteLines =
@@ -138,8 +150,8 @@ ${goalSection}
 VISIBLE (6-tile radius):
 ${entityLines || "  Nothing here — you should EXPLORE by moving!"}
 
-HEARD:
-${msgLines}
+CONVERSATION LOG (last 5 min):
+${chatLines}${newMsgLines ? `\n\nNEW UNREAD MESSAGES:\n${newMsgLines}\n(You should respond to these!)` : ""}
 
 NOTES:
 ${noteLines}
@@ -157,9 +169,9 @@ RULES — READ CAREFULLY:
 5. BE ACTIVE: Move, gather, craft, explore, talk. The world is large (64x64) with resources spread everywhere.
 6. NEVER wait if there's something useful you could do instead. Only use "wait" if you truly have nothing to do.
 7. DON'T CAMP: If a resource is depleted (bush has no berries, tree is a stump), MOVE ON and find another one. Don't wait for it to respawn.
-8. EXPLORE: If you don't see what you need nearby, pick a direction and walk. Use "move_to" for distant targets.
+8. EXPLORE: If you don't see what you need, use "move_to" to walk somewhere new. Try coordinates you haven't visited.
 9. REMEMBER locations: Use "remember" to save where you found water, bushes, rocks, etc.
-10. BE SOCIAL: If you see a player or NPC, greet them with "chat". You're a villager, not a hermit.`;
+10. BE SOCIAL: If someone sent you an unread message, RESPOND with "chat". Check the conversation log — don't repeat what you already said. Don't greet someone you just greeted.`;
 }
 
 // ── Response parser ──────────────────────────────────────────────────
@@ -167,7 +179,6 @@ RULES — READ CAREFULLY:
 const VALID_ACTIONS = new Set([
   "set_goal",
   "complete_goal",
-  "move",
   "move_to",
   "pick_bush",
   "chop_tree",

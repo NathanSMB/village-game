@@ -60,8 +60,8 @@ Memory:
   {"action":"remember","note":"<text>"} — Save a note (max 20)
   {"action":"forget","noteIndex":<num>} — Delete a note
 
-Wait:
-  {"action":"wait","durationMs":<1000-30000>} — Pause before next decision
+Wait (LAST RESORT — prefer moving/exploring instead):
+  {"action":"wait","durationMs":<2000-8000>} — Only if truly nothing to do
 `.trim();
 
 // ── System prompt builder ────────────────────────────────────────────
@@ -108,52 +108,58 @@ function buildSystemPrompt(npc: NPC, snapshot: WorldSnapshot): string {
       ? npc.memory.notes.map((n, i) => `  [${i}] ${n}`).join("\n")
       : "  None";
 
-  // Last action context
-  const lastActionStr = npc.debugLastAction
-    ? `Last action: ${npc.debugLastAction} => ${npc.debugLastResult}`
-    : "No previous action";
+  // Recent action history (last 3) so the NPC knows what it's been doing
+  const recentHistory = npc.debugHistory.slice(0, 3);
+  const historyStr =
+    recentHistory.length > 0
+      ? recentHistory.map((h) => `  ${h.action} => ${h.result}`).join("\n")
+      : "  (none)";
 
   // Goal section
-  const goalSection = npc.currentGoal
-    ? `CURRENT GOAL: "${npc.currentGoal}"
-You are actively working toward this goal. Choose your next action to make progress on it.
-If the goal is done, use "complete_goal" and then "set_goal" with a new objective.`
-    : `You have NO GOAL set. You MUST use "set_goal" as your next action.
-Choose a meaningful objective like: gather food, craft a tool, explore the area, find water, build a shelter, talk to someone nearby, etc.`;
+  let goalSection: string;
+  if (!npc.currentGoal) {
+    goalSection = `NO GOAL SET — You MUST use {"action":"set_goal","goal":"..."} right now.
+Pick a specific, achievable goal like: "Find water and drink", "Gather 3 berries", "Craft a hammer", "Explore south to find resources", "Talk to the player".`;
+  } else {
+    goalSection = `CURRENT GOAL: "${npc.currentGoal}"
+Take the NEXT CONCRETE STEP toward this goal. If it's done, use "complete_goal".`;
+  }
 
-  return `You are ${personality.name}, a villager surviving in a wilderness. ${personality.backstory}
-Personality: ${personality.traits}
+  return `You are ${personality.name}, a villager in a 64x64 wilderness. ${personality.backstory}
+Traits: ${personality.traits}
 
-=== YOUR SITUATION ===
-Position: (${tileX}, ${tileY}), facing ${facing}
-Vitals: HP=${Math.round(vitals.health)}/100  Food=${Math.round(vitals.hunger)}/100  Water=${Math.round(vitals.thirst)}/100  Energy=${Math.round(vitals.energy)}/1000
+SITUATION:
+Pos: (${tileX},${tileY}) facing ${facing} | HP:${Math.round(vitals.health)} Food:${Math.round(vitals.hunger)} Water:${Math.round(vitals.thirst)} Energy:${Math.round(vitals.energy)}
 Equipped: ${equipStr}
 Bag: ${bagStr}
-${lastActionStr}
 
-=== ${goalSection} ===
+${goalSection}
 
-=== WHAT YOU SEE (6-tile radius) ===
-${entityLines || "  Nothing notable nearby"}
+VISIBLE (6-tile radius):
+${entityLines || "  Nothing here — you should EXPLORE by moving!"}
 
-=== MESSAGES HEARD ===
+HEARD:
 ${msgLines}
 
-=== YOUR NOTES ===
+NOTES:
 ${noteLines}
+
+RECENT ACTIONS:
+${historyStr}
 
 ${ACTION_SCHEMA}
 
-RULES:
-1. Respond with EXACTLY ONE JSON action object. No explanation, no markdown, just the JSON.
-2. Direction values: "up"=north, "down"=south, "left"=west, "right"=east.
-3. You can only interact with things ADJACENT to you (1 tile away in a direction).
-4. SURVIVAL PRIORITY: If Water < 15 or Food < 15, drop everything and find water/food.
-5. GOAL SYSTEM: Always have a goal. Use "set_goal" if you have none. Work toward your goal with each action.
-6. Use "remember" to save locations you discover (e.g. "Water pond at (25,30)").
-7. Use "chat" with mode "talk" when you see a player or NPC nearby. Be friendly and in-character.
-8. Use "wait" (5000-15000ms) after completing a sequence, NOT between every action.
-9. When moving toward something far away, use "move_to" with the target coordinates rather than single "move" steps.`;
+RULES — READ CAREFULLY:
+1. Output ONLY one JSON object. No text, no markdown.
+2. Directions: "up"=north "down"=south "left"=west "right"=east. You interact with the tile 1 step in that direction.
+3. ALWAYS have a goal. No goal? Your action MUST be "set_goal".
+4. SURVIVAL: Water<20 or Food<20? Find water/food IMMEDIATELY.
+5. BE ACTIVE: Move, gather, craft, explore, talk. The world is large (64x64) with resources spread everywhere.
+6. NEVER wait if there's something useful you could do instead. Only use "wait" if you truly have nothing to do.
+7. DON'T CAMP: If a resource is depleted (bush has no berries, tree is a stump), MOVE ON and find another one. Don't wait for it to respawn.
+8. EXPLORE: If you don't see what you need nearby, pick a direction and walk. Use "move_to" for distant targets.
+9. REMEMBER locations: Use "remember" to save where you found water, bushes, rocks, etc.
+10. BE SOCIAL: If you see a player or NPC, greet them with "chat". You're a villager, not a hermit.`;
 }
 
 // ── Response parser ──────────────────────────────────────────────────

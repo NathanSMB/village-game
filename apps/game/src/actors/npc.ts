@@ -325,7 +325,7 @@ export class NPC extends ex.Actor {
 
   startWaiting(durationMs: number): void {
     this.actionState = "waiting";
-    this.waitTimer = Math.max(1000, Math.min(30000, durationMs));
+    this.waitTimer = Math.max(1000, Math.min(8000, durationMs));
   }
 
   enterSleep(): void {

@@ -153,6 +153,8 @@ export class GameWorld extends ex.Scene<GameWorldData> {
 
   // Indoor tile cache (computed when entering planning mode for bed validation)
   private indoorTilesCache: Set<number> | null = null;
+  // Floors hidden underneath allowIndoor buildings (boxes); keyed by tile key
+  private floorsUnderBuildings = new Map<number, Building>();
 
   // Planning mode state
   private planningMode = false;
@@ -1707,14 +1709,24 @@ export class GameWorld extends ex.Scene<GameWorldData> {
       for (const planned of this.plannedBuildings.values()) {
         const key = tileKey(planned.x, planned.y);
 
-        // Indoor buildings (bed) replace the existing floor tile
+        // Indoor-only buildings (bed, hearth) replace the existing floor tile
         if (planned.type.requiresIndoor) {
           const existingFloor = this.buildingByTile.get(key);
-          if (existingFloor) {
+          if (existingFloor && existingFloor.type.id === "floor") {
             this.remove(existingFloor);
             const idx = this.buildings.indexOf(existingFloor);
             if (idx !== -1) this.buildings.splice(idx, 1);
             this.buildingByTile.delete(key);
+          }
+        }
+
+        // allowIndoor buildings (boxes) sit on top of the floor — keep the floor alive
+        if (planned.type.allowIndoor) {
+          const existingFloor = this.buildingByTile.get(key);
+          if (existingFloor && existingFloor.type.id === "floor") {
+            this.floorsUnderBuildings.set(key, existingFloor);
+            this.buildingByTile.delete(key);
+            // Floor stays in this.buildings and scene for rendering + serialization
           }
         }
 
@@ -2009,15 +2021,30 @@ export class GameWorld extends ex.Scene<GameWorldData> {
       return true;
     }
 
+    // Can't place on already-planned tiles
+    if (this.plannedBuildings.has(key)) return false;
+    // Can't place on player's tile
+    if (this.player && tx === this.player.getTileX() && ty === this.player.getTileY()) return false;
+
+    // Buildings that allow indoor placement can go on completed indoor floors OR normal outdoor tiles
+    if (this.selectedBuildType?.allowIndoor) {
+      const existing = this.buildingByTile.get(key);
+      if (existing) {
+        // Allow placement on completed indoor floor tiles
+        return (
+          existing.type.id === "floor" &&
+          existing.state === "complete" &&
+          !!this.indoorTilesCache?.has(key)
+        );
+      }
+      // Fall through to normal outdoor checks
+    }
+
     // Can't place on blocked tiles (trees, rocks, bushes, water, other buildings)
     if (this.blockedTiles.has(key)) return false;
     if (this.waterTiles.has(key)) return false;
     // Can't place on existing buildings (including holograms)
     if (this.buildingByTile.has(key)) return false;
-    // Can't place on already-planned tiles
-    if (this.plannedBuildings.has(key)) return false;
-    // Can't place on player's tile
-    if (this.player && tx === this.player.getTileX() && ty === this.player.getTileY()) return false;
     return true;
   }
 
@@ -2747,6 +2774,12 @@ export class GameWorld extends ex.Scene<GameWorldData> {
     this.buildingByTile.delete(key);
     const idx = this.buildings.indexOf(building);
     if (idx !== -1) this.buildings.splice(idx, 1);
+    // Restore the floor underneath if this was an allowIndoor building (box) on a floor
+    const hiddenFloor = this.floorsUnderBuildings.get(key);
+    if (hiddenFloor) {
+      this.floorsUnderBuildings.delete(key);
+      this.buildingByTile.set(key, hiddenFloor);
+    }
     // If the player is sleeping in this bed, wake them up
     if (this.sleepingBed === building) {
       this.exitSleep();
@@ -2833,6 +2866,7 @@ export class GameWorld extends ex.Scene<GameWorldData> {
     }
     this.buildings = [];
     this.buildingByTile.clear();
+    this.floorsUnderBuildings.clear();
 
     for (const saved of states) {
       const type = BUILDING_TYPE_MAP[saved.typeId];
@@ -2847,6 +2881,20 @@ export class GameWorld extends ex.Scene<GameWorldData> {
 
       const key = tileKey(saved.tileX, saved.tileY);
       this.buildings.push(building);
+
+      // Handle floor/box overlap: when two buildings share a tile, stash the floor
+      const existing = this.buildingByTile.get(key);
+      if (existing) {
+        if (existing.type.id === "floor" && type.allowIndoor) {
+          // Existing is floor, new building (box) goes on top
+          this.floorsUnderBuildings.set(key, existing);
+        } else if (type.id === "floor" && existing.type.allowIndoor) {
+          // New building is a floor that goes under the existing box
+          this.floorsUnderBuildings.set(key, building);
+          this.add(building);
+          continue; // keep the box in buildingByTile, skip the set below
+        }
+      }
       this.buildingByTile.set(key, building);
       this.add(building);
 

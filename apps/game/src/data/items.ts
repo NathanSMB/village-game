@@ -34,6 +34,8 @@ export const ITEMS: Record<string, Item> = {
     stats: {},
     weight: 1,
     slot: EquipmentSlot.Feet,
+    colorIndex: 1,
+    dye: "Brown",
     itemSprite: "boots",
   },
   berry: {
@@ -165,7 +167,7 @@ export const ITEMS: Record<string, Item> = {
   cow_hide: {
     id: "cow_hide",
     name: "Cow Hide",
-    description: "Tough hide from a cow. Can be crafted into leather boots.",
+    description: "Tough hide from a cow. Can be crafted into boots.",
     rarity: Rarity.Common,
     stats: {},
     weight: 2,
@@ -189,18 +191,6 @@ export const ITEMS: Record<string, Item> = {
     weight: 2,
     consumable: { hungerRestore: 30 },
     itemSprite: "cooked-beef",
-  },
-  cow_hide_boots: {
-    id: "cow_hide_boots",
-    name: "Cow Hide Boots",
-    description: "Sturdy boots made from cow hide. Dyed a natural brown.",
-    rarity: Rarity.Common,
-    stats: {},
-    weight: 1,
-    slot: EquipmentSlot.Feet,
-    colorIndex: 1,
-    dye: "Brown",
-    itemSprite: "boots",
   },
 };
 

@@ -1043,7 +1043,8 @@ export class InventoryScene extends ex.Scene {
 
     // Show rarity and slot
     if (resultItem.slot) {
-      this.detailRarity.text = `${resultItem.rarity} - ${EQUIPMENT_SLOT_LABELS[resultItem.slot]}`;
+      const dyeSuffix = resultItem.dye ? ` (${resultItem.dye})` : "";
+      this.detailRarity.text = `${resultItem.rarity} - ${EQUIPMENT_SLOT_LABELS[resultItem.slot]}${dyeSuffix}`;
     } else {
       this.detailRarity.text = resultItem.rarity;
     }

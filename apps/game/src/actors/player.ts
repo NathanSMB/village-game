@@ -17,6 +17,11 @@ const PICKUP_DURATION_MS = 800; // 4 frames × 200ms each
 const ATTACK_DURATION_MS = 400; // 3 frames × ~133ms each
 const TURN_DELAY_MS = 120; // hold a direction key this long before walking
 
+/** Out-of-combat threshold: no damage taken for this long. */
+const OUT_OF_COMBAT_MS = 5000;
+/** Passive health regen: 1 HP every this many ms when out of combat. */
+const REGEN_INTERVAL_MS = 5000;
+
 export type Direction = "down" | "up" | "left" | "right";
 
 const DIRECTION_ACTIONS: readonly {
@@ -133,6 +138,10 @@ export class Player extends ex.Actor {
 
   // Sleeping state (in bed)
   sleeping = false;
+
+  // Combat tracking for passive health regen
+  private combatTimer = 10000; // ms since last combat damage (starts high = out of combat)
+  private regenAccum = 0;
 
   // Direction input state: tracks pressed direction keys ordered by most-recent first.
   // The first entry that is still held is the active direction.
@@ -309,6 +318,24 @@ export class Player extends ex.Actor {
     return this.vitals.energy <= 0;
   }
 
+  /**
+   * Apply direct combat damage to the player (from hostile creatures, traps, etc.).
+   * Resets the out-of-combat timer so passive health regen pauses.
+   */
+  takeCombatDamage(amount: number): void {
+    this.vitals = {
+      ...this.vitals,
+      health: clampVital(this.vitals.health - amount),
+    };
+    this.combatTimer = 0;
+    this.regenAccum = 0;
+  }
+
+  /** Returns true if the player has not taken combat damage recently. */
+  isOutOfCombat(): boolean {
+    return this.combatTimer >= OUT_OF_COMBAT_MS;
+  }
+
   getFacing(): Direction {
     return this.facing;
   }
@@ -323,6 +350,32 @@ export class Player extends ex.Actor {
 
   override onPreUpdate(engine: ex.Engine, delta: number): void {
     this.vitals = updateVitals(this.vitals, delta, this.sleeping);
+
+    // Combat timer (capped to avoid growing forever)
+    if (this.combatTimer < 10000) {
+      this.combatTimer += delta;
+    }
+
+    // Passive health regen: 1 HP per 5s when out of combat, alive, and not
+    // taking damage from starvation or dehydration.
+    const takingVitalsDamage = this.vitals.hunger <= 0 || this.vitals.thirst <= 0;
+    if (
+      this.vitals.health > 0 &&
+      this.vitals.health < 100 &&
+      this.combatTimer >= OUT_OF_COMBAT_MS &&
+      !takingVitalsDamage
+    ) {
+      this.regenAccum += delta;
+      if (this.regenAccum >= REGEN_INTERVAL_MS) {
+        this.regenAccum -= REGEN_INTERVAL_MS;
+        this.vitals = {
+          ...this.vitals,
+          health: clampVital(this.vitals.health + 1),
+        };
+      }
+    } else if (this.combatTimer < OUT_OF_COMBAT_MS || takingVitalsDamage) {
+      this.regenAccum = 0;
+    }
 
     // Sleeping in bed — skip all input and animation
     if (this.sleeping) return;

@@ -9,11 +9,17 @@ import * as ex from "excalibur";
 import type { Item } from "../types/item.ts";
 import type { Direction } from "./player.ts";
 import { DamageFlash } from "./damage-flash.ts";
+import { HealthBar } from "./health-bar.ts";
 
 const TILE_SIZE = 32;
 const MAP_TILES = 64;
 const SHAKE_DURATION = 200;
 const SHAKE_MAGNITUDE = 2;
+
+/** Out-of-combat threshold: no damage taken for this long. */
+const OUT_OF_COMBAT_MS = 5000;
+/** Passive health regen: 1 HP every this many ms when out of combat. */
+const REGEN_INTERVAL_MS = 5000;
 
 export type CreatureBehavior = "passive" | "defensive" | "hostile";
 
@@ -59,8 +65,13 @@ export abstract class Creature extends ex.Actor {
   protected speed: number;
   protected isBlocked: BlockedCheck = () => false;
 
+  /** Milliseconds since this creature last took damage (starts high = out of combat). */
+  combatTimer = 10000;
+  private regenAccum = 0;
+
   protected spriteSheet: ex.SpriteSheet | null = null;
   private damageFlash: DamageFlash;
+  private healthBar: HealthBar;
   private shakeTimer = 0;
 
   constructor(
@@ -92,6 +103,13 @@ export abstract class Creature extends ex.Actor {
     this.targetY = tileY;
 
     this.damageFlash = new DamageFlash(this);
+    this.healthBar = new HealthBar({
+      barWidth: 20,
+      offsetY: -18,
+      getHealth: () => ({ current: this.hp, max: this.maxHp }),
+      shouldShow: () => this.hp < this.maxHp || this.combatTimer < OUT_OF_COMBAT_MS,
+    });
+    this.addChild(this.healthBar);
   }
 
   setBlockedCheck(fn: BlockedCheck): void {
@@ -177,6 +195,8 @@ export abstract class Creature extends ex.Actor {
     if (this.isDead) return [];
 
     this.hp -= amount;
+    this.combatTimer = 0;
+    this.regenAccum = 0;
     this.damageFlash.trigger();
     this.startShake();
 
@@ -198,6 +218,22 @@ export abstract class Creature extends ex.Actor {
 
   override onPreUpdate(_engine: ex.Engine, delta: number): void {
     this.damageFlash.update(delta);
+
+    // Combat timer (capped to avoid growing forever)
+    if (this.combatTimer < 10000) {
+      this.combatTimer += delta;
+    }
+
+    // Passive health regen: 1 HP per 5s when out of combat
+    if (!this.isDead && this.hp < this.maxHp && this.combatTimer >= OUT_OF_COMBAT_MS) {
+      this.regenAccum += delta;
+      if (this.regenAccum >= REGEN_INTERVAL_MS) {
+        this.regenAccum -= REGEN_INTERVAL_MS;
+        this.hp = Math.min(this.maxHp, this.hp + 1);
+      }
+    } else if (this.combatTimer < OUT_OF_COMBAT_MS) {
+      this.regenAccum = 0;
+    }
 
     // Movement interpolation (runs before shake so pos is authoritative)
     if (this.moving) {

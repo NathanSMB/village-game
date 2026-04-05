@@ -11,6 +11,7 @@ import {
   decodeEdgeKey,
 } from "../systems/edge-key.ts";
 import { DamageFlash } from "./damage-flash.ts";
+import { HealthBar } from "./health-bar.ts";
 import type { EdgeBuildingSaveState } from "../systems/save-manager.ts";
 
 const TILE_SIZE = 32;
@@ -34,6 +35,7 @@ export class EdgeBuilding extends ex.Actor {
   private connections: FenceConnections;
 
   private damageFlash: DamageFlash;
+  private healthBar: HealthBar;
   private shakeTimer = 0;
   private baseX: number;
   private baseY: number;
@@ -70,6 +72,13 @@ export class EdgeBuilding extends ex.Actor {
 
     const flashSize = isH ? TILE_SIZE : WALL_THICKNESS;
     this.damageFlash = new DamageFlash(this, flashSize);
+    this.healthBar = new HealthBar({
+      barWidth: 20,
+      offsetY: isH ? -7 : -19,
+      getHealth: () => ({ current: this.hp, max: this.type.maxHp }),
+      shouldShow: () => this.state === "complete" && this.hp < this.type.maxHp,
+    });
+    this.addChild(this.healthBar);
     this.updateGraphic();
   }
 

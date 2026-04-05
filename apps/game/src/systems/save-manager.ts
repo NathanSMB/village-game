@@ -116,6 +116,8 @@ export interface SaveData {
   npcs?: NPCSaveState[];
   /** The player's chosen character name. Absent in old saves → falls back to save slot name. */
   playerName?: string;
+  /** Tile coordinates of the player's claimed bed, if any. */
+  playerClaimedBed?: { x: number; y: number };
 }
 
 const DB_NAME = "village-game";

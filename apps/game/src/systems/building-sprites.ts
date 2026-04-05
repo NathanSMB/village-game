@@ -505,6 +505,86 @@ export function drawBed(
   applyHologramTint(ctx, mode, S, S);
 }
 
+// ========== Bedroll (tile-based, outdoor-friendly) ==========
+
+function drawBedroll(ctx: CanvasRenderingContext2D, mode: SpriteMode): void {
+  applyMode(ctx, mode);
+
+  const S = TILE; // 32
+
+  // --- Rolled-out hide base (brown leather) ---
+  const padX = 5;
+  const padY = 2;
+  const rollW = S - padX * 2; // 22
+  const rollH = S - padY * 2; // 28
+
+  // Leather base shadow
+  ctx.fillStyle = "#3a2210";
+  ctx.fillRect(padX, padY, rollW, rollH);
+
+  // Leather fill
+  ctx.fillStyle = "#5c3a1e";
+  ctx.fillRect(padX + 1, padY + 1, rollW - 2, rollH - 2);
+
+  // Leather highlight edges
+  ctx.fillStyle = "#7a5030";
+  ctx.fillRect(padX + 1, padY + 1, rollW - 2, 1);
+  ctx.fillRect(padX + 1, padY + 1, 1, rollH - 2);
+
+  // Stitching along edges (darker dots)
+  ctx.fillStyle = "#2a1808";
+  for (let i = padX + 3; i < padX + rollW - 2; i += 3) {
+    ctx.fillRect(i, padY + 2, 1, 1);
+    ctx.fillRect(i, padY + rollH - 3, 1, 1);
+  }
+
+  // --- Wool blanket/liner (top half, folded back) ---
+  const blanketY = padY + 3;
+  const blanketH = Math.floor(rollH * 0.55);
+  const blanketX = padX + 2;
+  const blanketW = rollW - 4;
+
+  // Blanket base
+  ctx.fillStyle = "#8a8085";
+  ctx.fillRect(blanketX, blanketY, blanketW, blanketH);
+
+  // Blanket highlight
+  ctx.fillStyle = "#9a9095";
+  ctx.fillRect(blanketX + 1, blanketY, blanketW - 2, 1);
+
+  // Fold line
+  ctx.fillStyle = "#6a6065";
+  ctx.fillRect(blanketX, blanketY + blanketH - 1, blanketW, 1);
+
+  // Subtle wrinkle lines
+  ctx.fillStyle = "#7a7580";
+  ctx.fillRect(blanketX + 4, blanketY + 2, 1, blanketH - 4);
+  ctx.fillRect(blanketX + blanketW - 5, blanketY + 2, 1, blanketH - 4);
+
+  // --- Pillow (small bump at the top) ---
+  const pillowX = padX + 6;
+  const pillowW = rollW - 12;
+  const pillowY = padY + 2;
+  const pillowH = 3;
+
+  ctx.fillStyle = "#b0a890";
+  ctx.fillRect(pillowX, pillowY, pillowW, pillowH);
+  ctx.fillStyle = "#c8c0a8";
+  ctx.fillRect(pillowX + 1, pillowY, pillowW - 2, pillowH - 1);
+
+  // --- Roll ties at the bottom (when rolled up for travel) ---
+  ctx.fillStyle = "#3a2810";
+  ctx.fillRect(padX + 3, padY + rollH - 4, 2, 3);
+  ctx.fillRect(padX + rollW - 5, padY + rollH - 4, 2, 3);
+
+  // Tie knot dots
+  ctx.fillStyle = "#5c4020";
+  ctx.fillRect(padX + 3, padY + rollH - 5, 2, 1);
+  ctx.fillRect(padX + rollW - 5, padY + rollH - 5, 2, 1);
+
+  applyHologramTint(ctx, mode, S, S);
+}
+
 // ========== Camp Fire (tile-based) ==========
 
 export function drawCampFire(ctx: CanvasRenderingContext2D, mode: SpriteMode): void {
@@ -871,6 +951,7 @@ type TileDrawFn = (ctx: CanvasRenderingContext2D, mode: SpriteMode, isOpen: bool
 const TILE_DRAW_MAP: Record<string, TileDrawFn> = {
   floor: (ctx, mode) => drawFloor(ctx, mode),
   bed: (ctx, mode, isOpen) => drawBed(ctx, mode, isOpen),
+  bedroll: (ctx, mode) => drawBedroll(ctx, mode),
   camp_fire: (ctx, mode) => drawCampFire(ctx, mode),
   fire_pit: (ctx, mode) => drawFirePit(ctx, mode),
   hearth: (ctx, mode) => drawHearth(ctx, mode),

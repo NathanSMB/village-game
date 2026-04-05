@@ -161,15 +161,31 @@ export class NPCDebugPanel extends ex.ScreenElement {
     );
     y += LINE + 2;
 
-    // Current goal
+    // Todo list
     ctx.textAlign = "left";
     ctx.font = "bold 10px monospace";
     ctx.fillStyle = LABEL_COLOR;
-    ctx.fillText("GOAL", PAD, y);
-    ctx.font = "10px monospace";
-    ctx.fillStyle = npc.currentGoal ? "#ffdd66" : ERR_COLOR;
-    ctx.fillText(truncate(npc.currentGoal || "(no goal set)", 30), PAD + 40, y);
+    ctx.fillText(`PLAN (${npc.todoList.length} items)`, PAD, y);
     y += LINE;
+    if (npc.todoList.length === 0) {
+      ctx.font = "9px monospace";
+      ctx.fillStyle = ERR_COLOR;
+      ctx.fillText("(no plan)", PAD, y);
+      y += LINE - 1;
+    } else {
+      ctx.font = "9px monospace";
+      for (let i = 0; i < Math.min(4, npc.todoList.length); i++) {
+        const t = npc.todoList[i];
+        ctx.fillStyle = t.done ? DIM_COLOR : "#ffdd66";
+        ctx.fillText(`${t.done ? "✓" : "○"} [${i}] ${truncate(t.task, 36)}`, PAD, y);
+        y += LINE - 2;
+      }
+      if (npc.todoList.length > 4) {
+        ctx.fillStyle = DIM_COLOR;
+        ctx.fillText(`  +${npc.todoList.length - 4} more`, PAD, y);
+        y += LINE - 2;
+      }
+    }
 
     // Divider
     y += 4;

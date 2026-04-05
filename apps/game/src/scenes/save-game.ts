@@ -364,6 +364,7 @@ export class SaveGame extends ex.Scene {
       cows: gameWorld.getCowStates(),
       npcs: gameWorld.getNPCStates(),
       playerName: gameWorld.getPlayerName(),
+      playerClaimedBed: gameWorld.getPlayerClaimedBed(),
     };
 
     await saveGame(data);

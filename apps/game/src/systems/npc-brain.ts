@@ -4,42 +4,51 @@
  */
 
 import type { NPC } from "../actors/npc.ts";
-import type { WorldSnapshot, NPCAction, EntityInfo } from "../types/npc.ts";
+import type { WorldSnapshot, NPCAction, EntityInfo, NPCTodoItem } from "../types/npc.ts";
 import type { ChatMessage } from "../types/chat.ts";
 import type { LLMProviderConfig, LLMMessage } from "./llm-provider.ts";
 import { callLLM, callThinkingLLM } from "./llm-provider.ts";
 import { getItemQuantity } from "../types/item.ts";
 import { RECIPES } from "../data/recipes.ts";
+import { BUILDING_TYPES } from "../data/buildings.ts";
+import { COOKING_RECIPES } from "../data/cooking.ts";
 
 // ── Action schema (included in the system prompt) ────────────────────
 
 const ACTION_SCHEMA = `
 ACTIONS (respond with exactly ONE JSON object):
 
-Goals & Thinking:
-  {"action":"set_goal","goal":"<description>"} — Set your current objective (auto-consults the thinking model for strategy)
-  {"action":"complete_goal"} — Mark current goal as done (then set a new one!)
-  {"action":"think","question":"<question>"} — Ask your inner reasoning mind a question. Use this when you're unsure what to do, need to plan, or want advice. The answer will appear in your next prompt.
+Planning & Thinking:
+  {"action":"plan"} — Ask your reasoning mind to create a new plan (todo list). Use when you have no todos or need a new plan.
+  {"action":"complete_todo","todoIndex":<num>} — Mark a todo item as done. When all items are done, the plan is complete and you should "plan" again.
+  {"action":"think"} — Consult your reasoning mind for advice on what to do next
 
 Movement:
   {"action":"move_to","x":<num>,"y":<num>} — Walk to a tile (auto-pathfinds, use for ALL movement)
 
 Gathering:
-  {"action":"pick_bush","direction":"<dir>"} — Pick berries from adjacent bush
-  {"action":"chop_tree","direction":"<dir>"} — Chop adjacent tree (need hatchet for efficiency)
-  {"action":"mine_rock","direction":"<dir>"} — Mine adjacent rock (need pickaxe for efficiency)
-  {"action":"drink_water","direction":"<dir>"} — Drink from adjacent water tile
+  {"action":"pick_bush","direction":"<dir>"} — Pick berries from adjacent bush → gives: berry [consumable, +10 hunger]
+  {"action":"chop_tree","direction":"<dir>"} — Chop adjacent tree → drops: branch (per hit), 6x log (when felled). Hatchet is much faster.
+  {"action":"mine_rock","direction":"<dir>"} — Mine adjacent rock → drops: small_rock (40%), large_stone (40%), flint (20%). Pickaxe is much faster.
+  {"action":"drink_water","direction":"<dir>"} — Drink from adjacent water tile → +25 thirst
   {"action":"pick_up_item","direction":"<dir>"} — Pick up item from adjacent ground
 
 Combat:
-  {"action":"attack","direction":"<dir>"} — Attack creature/entity in that direction
+  {"action":"attack","direction":"<dir>"} — Attack creature. Sheep drops: mutton+wool. Cow drops: raw_beef+cow_hide.
 
-Crafting: ${RECIPES.map((r) => `${r.id}(${r.ingredients.map((i) => `${i.count}x ${i.itemId}`).join("+")})`).join(", ")}
+Crafting recipes: ${RECIPES.map((r) => `${r.id}(${r.ingredients.map((i) => `${i.count}x ${i.itemId}`).join("+")} -> ${r.name}${r.resultQuantity ? ` x${r.resultQuantity}` : ""})`).join(", ")}
   {"action":"craft","recipeId":"<id>"} — Craft if you have the materials
-  {"action":"cook","direction":"<dir>","inputItemId":"<id>"} — Cook raw meat at adjacent burning fire
 
-Building:
-  {"action":"build_plan","buildingId":"<id>","x":<num>,"y":<num>} — Place a building blueprint at a tile
+Cooking: ${COOKING_RECIPES.map((r) => `${r.inputId} -> ${r.outputId}`).join(", ")}
+  {"action":"cook","direction":"<dir>","inputItemId":"<id>"} — Cook at adjacent burning fire
+
+Building recipes: ${BUILDING_TYPES.map((b) => `${b.id}(${b.ingredients.map((i) => `${i.count}x ${i.itemId}`).join("+")}${b.storage ? `, ${b.storage.slotCount} slots` : ""}${b.fire ? ", cookable" : ""}${b.requiresIndoor ? ", indoor only" : ""}, ${b.placement})`).join(", ")}
+  Tile buildings (floor, bed, fire_pit, hearth, box_*): {"action":"build_plan","buildingId":"<id>","x":<num>,"y":<num>,"rotation":<0-3>}
+    rotation: 0-3 = clockwise quarter-turns (0=default). Matters for beds.
+  Edge buildings (wall, wall_window, wall_door, fence, fence_gate): {"action":"build_plan","buildingId":"<id>","x":<num>,"y":<num>,"orientation":"N|E|S|W"}
+    orientation: which side of tile (x,y) to place the wall on. N/S = horizontal wall, E/W = vertical wall.
+  To build a room: place floors on all tiles, then walls on all edges around them. "Indoor" = enclosed floor area fully surrounded by walls.
+  To construct: equip a HAMMER, have the required materials in your bag, then attack the hologram. Each hit delivers materials until complete.
 
 Inventory:
   {"action":"equip","bagIndex":<num>} — Equip item from bag
@@ -49,7 +58,8 @@ Inventory:
 
 Interaction:
   {"action":"open_door","direction":"<dir>"} / {"action":"close_door","direction":"<dir>"}
-  {"action":"sleep","direction":"<dir>"} — Sleep in adjacent bed
+  {"action":"claim_bed","direction":"<dir>"} — Claim an adjacent bed as yours (must claim before sleeping!)
+  {"action":"sleep","direction":"<dir>"} — Sleep in YOUR claimed bed (must be adjacent). Restores energy.
   {"action":"wake_up"}
   {"action":"store_item","direction":"<dir>","bagIndex":<num>} / {"action":"retrieve_item","direction":"<dir>","slotIndex":<num>}
 
@@ -64,14 +74,24 @@ Wait (LAST RESORT — prefer moving/exploring instead):
   {"action":"wait","durationMs":<2000-8000>} — Only if truly nothing to do
 `.trim();
 
-// ── System prompt builder ────────────────────────────────────────────
+// ── Shared context builder ───────────────────────────────────────────
 
-function buildSystemPrompt(npc: NPC, snapshot: WorldSnapshot): string {
-  const { personality, vitals, inventory, facing, tileX, tileY } = npc;
+interface NPCContext {
+  equipStr: string;
+  bagStr: string;
+  entityLines: string;
+  chatLines: string;
+  newMsgLines: string;
+  noteLines: string;
+  knownLocStr: string;
+  historyStr: string;
+  thinkingLines: string;
+}
 
+function buildNPCContext(npc: NPC, snapshot: WorldSnapshot): NPCContext {
   // Equipment summary
   const equipped: string[] = [];
-  for (const [slot, item] of Object.entries(inventory.equipment)) {
+  for (const [slot, item] of Object.entries(npc.inventory.equipment)) {
     if (item) {
       const dur = item.durability != null ? ` (${item.durability}/${item.maxDurability})` : "";
       equipped.push(`${slot}: ${item.name}${dur}`);
@@ -81,8 +101,8 @@ function buildSystemPrompt(npc: NPC, snapshot: WorldSnapshot): string {
 
   // Bag summary
   const bagItems: string[] = [];
-  for (let i = 0; i < inventory.bag.length; i++) {
-    const item = inventory.bag[i];
+  for (let i = 0; i < npc.inventory.bag.length; i++) {
+    const item = npc.inventory.bag[i];
     const qty = getItemQuantity(item);
     const qtyStr = qty > 1 ? ` x${qty}` : "";
     const consumeStr = item.consumable ? " [consumable]" : "";
@@ -96,7 +116,7 @@ function buildSystemPrompt(npc: NPC, snapshot: WorldSnapshot): string {
     .map((e) => `  (${e.x},${e.y}): ${e.type} - ${e.details}`)
     .join("\n");
 
-  // Chat history (last 5 minutes — includes own messages + received)
+  // Chat history (last 5 minutes)
   const fiveMinAgo = Date.now() - 5 * 60 * 1000;
   const recentChat = npc.chatHistory.filter((m) => m.timestamp >= fiveMinAgo);
   const chatLines =
@@ -109,7 +129,7 @@ function buildSystemPrompt(npc: NPC, snapshot: WorldSnapshot): string {
           .join("\n")
       : "  (no recent conversation)";
 
-  // NEW messages since last decision (unread inbox)
+  // NEW messages since last decision
   const newMsgLines =
     snapshot.nearbyMessages.length > 0
       ? snapshot.nearbyMessages.map((m) => `  >> ${m.sender}: "${m.text}"`).join("\n")
@@ -121,7 +141,7 @@ function buildSystemPrompt(npc: NPC, snapshot: WorldSnapshot): string {
       ? npc.memory.notes.map((n, i) => `  [${i}] ${n}`).join("\n")
       : "  None";
 
-  // Known locations (object permanence) — group by type
+  // Known locations (object permanence)
   const locEntries = Object.entries(npc.knownLocations);
   let knownLocStr = "";
   if (locEntries.length > 0) {
@@ -136,71 +156,99 @@ function buildSystemPrompt(npc: NPC, snapshot: WorldSnapshot): string {
       .join("\n");
   }
 
-  // Recent action history (last 3) so the NPC knows what it's been doing
+  // Recent action history
   const recentHistory = npc.debugHistory.slice(0, 3);
   const historyStr =
     recentHistory.length > 0
       ? recentHistory.map((h) => `  ${h.action} => ${h.result}`).join("\n")
       : "  (none)";
 
-  // Thinking history (reasoning model conversations)
+  // Thinking history
   const thinkingLines =
     npc.thinkingHistory.length > 0
-      ? npc.thinkingHistory.map((t) => `  Q: ${t.question}\n  A: ${t.answer}`).join("\n")
+      ? npc.thinkingHistory.map((t) => `  [${t.question}]\n  ${t.answer}`).join("\n")
       : "";
 
-  // Goal section
-  let goalSection: string;
-  if (!npc.currentGoal) {
-    goalSection = `NO GOAL SET — You MUST use {"action":"set_goal","goal":"..."} right now.
-Pick a specific, achievable goal like: "Find water and drink", "Gather 3 berries", "Craft a hammer", "Explore south to find resources", "Talk to the player".`;
+  return {
+    equipStr,
+    bagStr,
+    entityLines,
+    chatLines,
+    newMsgLines,
+    noteLines,
+    knownLocStr,
+    historyStr,
+    thinkingLines,
+  };
+}
+
+// ── System prompt builder (small action model) ──────────────────────
+
+function buildSystemPrompt(npc: NPC, snapshot: WorldSnapshot): string {
+  const ctx = buildNPCContext(npc, snapshot);
+  const { personality, vitals, facing, tileX, tileY } = npc;
+
+  // Todo list section
+  let planSection: string;
+  if (npc.todoList.length === 0) {
+    planSection = `NO PLAN — You MUST use {"action":"plan"} to create a todo list before doing anything else.`;
   } else {
-    goalSection = `CURRENT GOAL: "${npc.currentGoal}"
-Take the NEXT CONCRETE STEP toward this goal. If it's done, use "complete_goal".`;
+    const todoLines = npc.todoList
+      .map((t, i) => `  [${i}] ${t.done ? "DONE" : "TODO"}: ${t.task}`)
+      .join("\n");
+    const nextTodo = npc.todoList.findIndex((t) => !t.done);
+    planSection = `YOUR TODO LIST:\n${todoLines}\n${nextTodo >= 0 ? `→ Work on item [${nextTodo}]. Take the actions needed to accomplish it. Only use complete_todo AFTER you've actually done it.` : 'All items done! Use {"action":"plan"} for a new plan.'}`;
   }
+
+  // Bed info
+  const bedStr = npc.claimedBed
+    ? `Claimed bed at (${npc.claimedBed.x},${npc.claimedBed.y})`
+    : "NO BED CLAIMED — you need a bed to restore energy! Build or find one, then use claim_bed.";
 
   return `You are ${personality.name}, a villager in a 64x64 wilderness. ${personality.backstory}
 Traits: ${personality.traits}
 
 SITUATION:
-Pos: (${tileX},${tileY}) facing ${facing} | HP:${Math.round(vitals.health)} Food:${Math.round(vitals.hunger)} Water:${Math.round(vitals.thirst)} Energy:${Math.round(vitals.energy)}
-Equipped: ${equipStr}
-Bag: ${bagStr}
+Pos: (${tileX},${tileY}) facing ${facing} | HP:${Math.round(vitals.health)} Food:${Math.round(vitals.hunger)} Water:${Math.round(vitals.thirst)} Energy:${Math.round(vitals.energy)}/1000
+Equipped: ${ctx.equipStr}
+Bag: ${ctx.bagStr}
+Bed: ${bedStr}
 
-${goalSection}
+${planSection}
 
 VISIBLE (6-tile radius):
-${entityLines || "  Nothing here — you should EXPLORE by moving!"}
+${ctx.entityLines || "  Nothing here — you should EXPLORE by moving!"}
 
 CONVERSATION LOG (last 5 min):
-${chatLines}${newMsgLines ? `\n\nNEW UNREAD MESSAGES:\n${newMsgLines}\n(You should respond to these!)` : ""}
+${ctx.chatLines}${ctx.newMsgLines ? `\n\nNEW UNREAD MESSAGES:\n${ctx.newMsgLines}\n(You should respond to these!)` : ""}
 
 NOTES:
-${noteLines}
-${knownLocStr ? `\nKNOWN LOCATIONS (places you've discovered — use these to navigate!):\n${knownLocStr}\n` : ""}
+${ctx.noteLines}
+${ctx.knownLocStr ? `\nKNOWN LOCATIONS (places you've discovered — use these to navigate!):\n${ctx.knownLocStr}\n` : ""}
 RECENT ACTIONS:
-${historyStr}
-${thinkingLines ? `\nTHINKING LOG (your reasoning model's advice):\n${thinkingLines}\n` : ""}
+${ctx.historyStr}
+${ctx.thinkingLines ? `\nTHINKING LOG (your reasoning model's advice):\n${ctx.thinkingLines}\n` : ""}
 ${ACTION_SCHEMA}
 
 RULES — READ CAREFULLY:
 1. Output ONLY one JSON object. No text, no markdown.
 2. Directions: "up"=north "down"=south "left"=west "right"=east. You interact with the tile 1 step in that direction.
-3. ALWAYS have a goal. No goal? Your action MUST be "set_goal".
+3. ALWAYS have a plan. No todo list? Your action MUST be "plan". Work through your todos in order.
 4. SURVIVAL: Water<20 or Food<20? Find water/food IMMEDIATELY.
-5. BE ACTIVE: Move, gather, craft, explore, talk. The world is large (64x64) with resources spread everywhere.
-6. NEVER wait if there's something useful you could do instead. Only use "wait" if you truly have nothing to do.
-7. DON'T CAMP: If a resource is depleted (bush has no berries, tree is a stump), MOVE ON and find another one. Don't wait for it to respawn.
-8. EXPLORE: If you don't see what you need, use "move_to" to walk somewhere new. Try coordinates you haven't visited.
-9. REMEMBER locations: Use "remember" to save where you found water, bushes, rocks, etc.
-10. BE SOCIAL: If someone sent you an unread message, RESPOND with "chat". Check the conversation log — don't repeat what you already said. Don't greet someone you just greeted.`;
+5. ENERGY IS CRITICAL: Energy drains at 1/sec while awake. The ONLY way to recover energy is sleeping in a bed you own. If energy reaches 0, you die. You MUST build or find a bed, claim it with "claim_bed", and sleep periodically to restore energy.
+6. BED PRIORITY: If you have no claimed bed and energy < 500, your top priority should be building an indoor room with a bed, or finding an unclaimed bed.
+7. BE ACTIVE: Move, gather, craft, explore, talk. The world is large (64x64) with resources spread everywhere.
+8. NEVER wait if there's something useful you could do instead. Only use "wait" if you truly have nothing to do.
+9. DON'T CAMP: If a resource is depleted, MOVE ON. Don't wait for respawns.
+10. EXPLORE: If you don't see what you need, use "move_to" to walk somewhere new.
+11. BE SOCIAL: If someone sent you an unread message, RESPOND with "chat". Don't repeat greetings.`;
 }
 
 // ── Response parser ──────────────────────────────────────────────────
 
 const VALID_ACTIONS = new Set([
-  "set_goal",
-  "complete_goal",
+  "plan",
+  "complete_todo",
   "think",
   "move_to",
   "pick_bush",
@@ -218,6 +266,7 @@ const VALID_ACTIONS = new Set([
   "drop_item",
   "open_door",
   "close_door",
+  "claim_bed",
   "sleep",
   "wake_up",
   "store_item",
@@ -295,7 +344,7 @@ export async function decideNextAction(
 
   console.group(label, style);
   console.log(
-    `%cGoal%c ${npc.currentGoal || "(none)"} | ` +
+    `%cPlan%c ${npc.todoList.length > 0 ? `${npc.todoList.filter((t) => !t.done).length}/${npc.todoList.length} remaining` : "(none)"} | ` +
       `%cPos%c (${npc.tileX},${npc.tileY}) ${npc.facing} | ` +
       `%cVitals%c H:${Math.round(npc.vitals.health)} F:${Math.round(npc.vitals.hunger)} ` +
       `T:${Math.round(npc.vitals.thirst)} E:${Math.round(npc.vitals.energy)}`,
@@ -361,108 +410,177 @@ export async function decideNextAction(
  * Ask the thinking model to set a goal with a strategy.
  * Returns the goal string (goal + strategy) to set on the NPC.
  */
-export async function thinkAboutGoal(
+export async function thinkAboutPlan(
   npc: NPC,
   snapshot: WorldSnapshot,
   config: LLMProviderConfig,
   signal?: AbortSignal,
-): Promise<string> {
-  const { personality, vitals, inventory } = npc;
+): Promise<NPCTodoItem[]> {
+  const ctx = buildNPCContext(npc, snapshot);
+  const { personality, vitals } = npc;
 
-  const bagSummary = inventory.bag.map((i) => i.name).join(", ") || "empty";
-  const equipped =
-    Object.entries(inventory.equipment)
-      .filter(([, v]) => v)
-      .map(([k, v]) => `${k}:${v!.name}`)
-      .join(", ") || "nothing";
-
-  const visibleSummary = snapshot.entities
-    .slice(0, 15)
-    .map((e) => `(${e.x},${e.y}) ${e.type}: ${e.details}`)
-    .join("\n  ");
-
-  const notesSummary = npc.memory.notes.join("; ") || "none";
+  const bedStr = npc.claimedBed
+    ? `Claimed bed at (${npc.claimedBed.x},${npc.claimedBed.y})`
+    : "NO BED — need one to restore energy!";
 
   const prompt = `You are the strategic mind of ${personality.name}, a villager in a 64x64 survival game.
 Personality: ${personality.traits}. ${personality.backstory}
 
-Current state:
-- Position: (${npc.tileX}, ${npc.tileY})
-- Vitals: HP=${Math.round(vitals.health)} Food=${Math.round(vitals.hunger)} Water=${Math.round(vitals.thirst)} Energy=${Math.round(vitals.energy)}
-- Equipped: ${equipped}
-- Bag: ${bagSummary}
-- Notes: ${notesSummary}
+SITUATION:
+Pos: (${npc.tileX},${npc.tileY}) | HP:${Math.round(vitals.health)} Food:${Math.round(vitals.hunger)} Water:${Math.round(vitals.thirst)} Energy:${Math.round(vitals.energy)}/1000
+Equipped: ${ctx.equipStr}
+Bag: ${ctx.bagStr}
+Bed: ${bedStr}
 
-Nearby:
-  ${visibleSummary || "Nothing notable nearby"}
+VISIBLE (6-tile radius):
+${ctx.entityLines || "  Nothing notable nearby"}
+${ctx.knownLocStr ? `\nKNOWN LOCATIONS (all discovered resources):\n${ctx.knownLocStr}\n` : ""}
+NOTES:
+${ctx.noteLines}
 
-Previous goal: ${npc.currentGoal || "(none)"}
+CONVERSATION LOG:
+${ctx.chatLines}
 
-Set a NEW specific goal with a step-by-step strategy. Consider survival needs (food, water, tools), personality traits, and what's available nearby. Be concrete — name specific coordinates, items, and actions.
+RECENT ACTIONS:
+${ctx.historyStr}
 
-Respond in this format:
-GOAL: <one sentence objective>
-STRATEGY: <2-4 numbered steps to accomplish it>`;
+${ACTION_SCHEMA}
+
+Create a TODO LIST for this villager. Each item must be SPECIFIC and ACTIONABLE — name the resource type, item, or action clearly. Don't include coordinates — the action model knows where things are from its known locations.
+
+RULES FOR GOOD TASKS:
+- BAD: "Find food" / "Explore the area" / "Gather resources"
+- GOOD: "Find a berry bush that has berries and pick them" / "Go to water and drink" / "Mine a rock to get small_rock" / "Explore north to discover new resources"
+- Each task should map to 1-3 game actions (move_to, pick_bush, craft, etc.)
+- Be specific about WHAT to do and WHY, not WHERE (the action model handles navigation)
+
+CRITICAL PRIORITIES (in order):
+1. Water < 20 or Food < 20 → first tasks MUST fix this immediately
+2. No claimed bed and Energy < 500 → plan must include getting/building a bed (bedroll needs 1 cow_hide + 1 wool)
+3. No tools → craft a hammer (1 small_rock + 1 branch) so you can build things
+4. Energy drains at 1/sec. The ONLY way to recover is sleeping in YOUR claimed bed. If energy hits 0, you die.
+
+Respond with ONLY a JSON array of 3-6 task strings:
+["Go to water and drink to restore thirst", "Find a berry bush with berries and pick them for food", "Craft a hammer using 1 small_rock + 1 branch"]`;
 
   const messages: LLMMessage[] = [
     { role: "system", content: prompt },
-    { role: "user", content: "What should your next goal and strategy be?" },
+    { role: "user", content: "Create a todo list for your next plan." },
   ];
 
-  console.group(`%c[THINK] ${npc.npcName} — Goal Planning`, "color:#ff88ff;font-weight:bold");
+  console.group(`%c[THINK] ${npc.npcName} — Planning`, "color:#ff88ff;font-weight:bold");
 
   const t0 = performance.now();
   const response = await callThinkingLLM(config, messages, signal);
   const elapsed = Math.round(performance.now() - t0);
 
   if (response.error) {
-    console.warn(`Thinking error (${elapsed}ms):`, response.error);
+    console.warn(`Planning error (${elapsed}ms):`, response.error);
     console.groupEnd();
-    return "Explore the area and find useful resources";
+    return [{ task: "Walk to a new area to find water, bushes, and rocks", done: false }];
   }
 
   console.log(
-    `%c← Response (${elapsed}ms):%c ${response.text.slice(0, 300)}`,
+    `%c← Plan (${elapsed}ms):%c ${response.text.slice(0, 400)}`,
     "color:#888",
     "color:inherit",
   );
   console.groupEnd();
 
-  // Store in thinking history
-  npc.pushThinkingHistory("What should my next goal be?", response.text.slice(0, 300));
+  // Parse JSON array from response
+  const todos = parseTodoList(response.text);
 
-  return response.text.slice(0, 300);
+  // Store in thinking history
+  npc.pushThinkingHistory("Create a plan", todos.map((t) => t.task).join(" → "));
+
+  return todos;
+}
+
+/** Parse a JSON array of strings from the thinking model's response into todo items. */
+function parseTodoList(text: string): NPCTodoItem[] {
+  let jsonStr = text.trim();
+
+  // Strip markdown fences
+  const fenceMatch = jsonStr.match(/```(?:json)?\s*([\s\S]*?)```/);
+  if (fenceMatch) jsonStr = fenceMatch[1].trim();
+
+  // Find the array
+  const bracketStart = jsonStr.indexOf("[");
+  const bracketEnd = jsonStr.lastIndexOf("]");
+  if (bracketStart !== -1 && bracketEnd > bracketStart) {
+    jsonStr = jsonStr.substring(bracketStart, bracketEnd + 1);
+  }
+
+  try {
+    const parsed = JSON.parse(jsonStr);
+    if (Array.isArray(parsed)) {
+      return parsed
+        .filter((item): item is string => typeof item === "string" && item.trim().length > 0)
+        .slice(0, 8)
+        .map((task) => ({ task: task.trim(), done: false }));
+    }
+  } catch {
+    // Try line-by-line fallback (numbered list)
+    const lines = text
+      .split("\n")
+      .map((l) => l.replace(/^\d+[.)]\s*/, "").trim())
+      .filter((l) => l.length > 5 && !l.startsWith("[") && !l.startsWith("{"));
+    if (lines.length > 0) {
+      return lines.slice(0, 8).map((task) => ({ task, done: false }));
+    }
+  }
+
+  return [{ task: "Walk to a new area to find water, bushes, and rocks", done: false }];
 }
 
 /**
- * Ask the thinking model an ad-hoc question from the small model.
+ * Ask the thinking model for general advice given the NPC's full context.
  */
 export async function thinkAboutQuestion(
   npc: NPC,
-  question: string,
   snapshot: WorldSnapshot,
   config: LLMProviderConfig,
   signal?: AbortSignal,
 ): Promise<string> {
-  const visibleSummary = snapshot.entities
-    .slice(0, 10)
-    .map((e) => `(${e.x},${e.y}) ${e.type}: ${e.details}`)
-    .join("; ");
+  const ctx = buildNPCContext(npc, snapshot);
+  const { vitals } = npc;
 
-  const prompt = `You are the strategic mind of ${npc.personality.name}, a villager in a survival game.
-Position: (${npc.tileX},${npc.tileY}). Current goal: "${npc.currentGoal || "none"}".
-Vitals: HP=${Math.round(npc.vitals.health)} Food=${Math.round(npc.vitals.hunger)} Water=${Math.round(npc.vitals.thirst)}.
-Nearby: ${visibleSummary || "nothing notable"}.
-Notes: ${npc.memory.notes.join("; ") || "none"}.
+  const bedStr = npc.claimedBed
+    ? `Claimed bed at (${npc.claimedBed.x},${npc.claimedBed.y})`
+    : "NO BED — need one to restore energy!";
 
-Answer the following question concisely and practically. Give specific actionable advice.`;
+  const prompt = `You are the strategic mind of ${npc.personality.name}, a villager in a 64x64 survival game.
+${npc.personality.backstory}. Traits: ${npc.personality.traits}
+
+SITUATION:
+Pos: (${npc.tileX},${npc.tileY}) | HP:${Math.round(vitals.health)} Food:${Math.round(vitals.hunger)} Water:${Math.round(vitals.thirst)} Energy:${Math.round(vitals.energy)}/1000
+Equipped: ${ctx.equipStr}
+Bag: ${ctx.bagStr}
+Bed: ${bedStr}
+Todo list: ${npc.todoList.length > 0 ? npc.todoList.map((t, i) => `[${i}]${t.done ? "DONE" : "TODO"}: ${t.task}`).join(", ") : "(none)"}
+
+VISIBLE (6-tile radius):
+${ctx.entityLines || "  Nothing notable nearby"}
+${ctx.knownLocStr ? `\nKNOWN LOCATIONS:\n${ctx.knownLocStr}\n` : ""}
+CONVERSATION LOG:
+${ctx.chatLines}
+
+NOTES:
+${ctx.noteLines}
+
+RECENT ACTIONS:
+${ctx.historyStr}
+
+${ACTION_SCHEMA}
+
+Analyze the current situation and give concise, actionable advice. What should this villager focus on right now? Consider survival priorities (water, food, energy/bed), available resources, and personality. Be specific with coordinates and item names.`;
 
   const messages: LLMMessage[] = [
     { role: "system", content: prompt },
-    { role: "user", content: question },
+    { role: "user", content: "What should I do next? Analyze my situation and advise." },
   ];
 
-  console.group(`%c[THINK] ${npc.npcName} — "${question}"`, "color:#ff88ff;font-weight:bold");
+  console.group(`%c[THINK] ${npc.npcName} — Reasoning`, "color:#ff88ff;font-weight:bold");
 
   const t0 = performance.now();
   const response = await callThinkingLLM(config, messages, signal);
@@ -471,14 +589,14 @@ Answer the following question concisely and practically. Give specific actionabl
   if (response.error) {
     console.warn(`Thinking error (${elapsed}ms):`, response.error);
     console.groupEnd();
-    return "I couldn't think clearly about that right now.";
+    return "I couldn't think clearly right now.";
   }
 
-  const answer = response.text.slice(0, 300);
-  console.log(`%c← Answer (${elapsed}ms):%c ${answer}`, "color:#888", "color:inherit");
+  const answer = response.text.slice(0, 400);
+  console.log(`%c← Advice (${elapsed}ms):%c ${answer}`, "color:#888", "color:inherit");
   console.groupEnd();
 
-  npc.pushThinkingHistory(question, answer);
+  npc.pushThinkingHistory("What should I do next?", answer);
   return answer;
 }
 

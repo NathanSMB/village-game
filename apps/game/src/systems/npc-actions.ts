@@ -44,9 +44,18 @@ export interface GameWorldNPCInterface {
   npcToggleDoor(edge: EdgeBuilding): void;
   npcToggleTileDoor(building: Building): void;
   npcChat(npc: NPC, text: string, mode: ChatMode): void;
-  npcPlaceBuilding(buildingId: string, x: number, y: number, rotation: number): boolean;
+  npcPlaceBuilding(
+    buildingId: string,
+    x: number,
+    y: number,
+    rotation: number,
+    orientation?: string,
+  ): boolean;
   dropResourceNear(cx: number, cy: number, item: Item): void;
   findPathDirections(fromX: number, fromY: number, toX: number, toY: number): Direction[] | null;
+  isBedClaimed(x: number, y: number): boolean;
+  claimBed(npc: NPC, x: number, y: number): boolean;
+  npcAttackAt(npc: NPC, x: number, y: number): void;
 }
 
 // ── Timing constants (same as player) ────────────────────────────────
@@ -63,11 +72,12 @@ export function executeNPCAction(
   world: GameWorldNPCInterface,
 ): ActionResult {
   switch (action.action) {
-    case "set_goal":
-      return execSetGoal(npc, action.goal);
+    case "plan":
+      // Handled by GameWorld — routed to thinking model
+      return { success: true, reason: "Planning..." };
 
-    case "complete_goal":
-      return execCompleteGoal(npc);
+    case "complete_todo":
+      return execCompleteTodo(npc, action.todoIndex);
 
     case "think":
       // Handled specially by GameWorld — not executed here
@@ -92,7 +102,7 @@ export function executeNPCAction(
       return execPickUpItem(npc, action.direction, world);
 
     case "attack":
-      return execAttack(npc, action.direction);
+      return execAttack(npc, action.direction, world);
 
     case "craft":
       return execCraft(npc, action.recipeId);
@@ -101,7 +111,15 @@ export function executeNPCAction(
       return execCook(npc, action.direction, action.inputItemId, world);
 
     case "build_plan":
-      return execBuildPlan(npc, action.buildingId, action.x, action.y, world);
+      return execBuildPlan(
+        npc,
+        action.buildingId,
+        action.x,
+        action.y,
+        action.rotation ?? 0,
+        action.orientation,
+        world,
+      );
 
     case "equip":
       return execEquip(npc, action.bagIndex);
@@ -118,6 +136,9 @@ export function executeNPCAction(
     case "open_door":
     case "close_door":
       return execToggleDoor(npc, action.direction, world);
+
+    case "claim_bed":
+      return execClaimBed(npc, action.direction, world);
 
     case "sleep":
       return execSleep(npc, action.direction, world);
@@ -150,17 +171,23 @@ export function executeNPCAction(
 
 // ── Individual action executors ──────────────────────────────────────
 
-function execSetGoal(npc: NPC, goal: string): ActionResult {
-  if (!goal || goal.trim().length === 0) return { success: false, reason: "Goal cannot be empty" };
-  npc.currentGoal = goal.trim();
-  return { success: true, reason: `Goal: ${npc.currentGoal}` };
-}
+function execCompleteTodo(npc: NPC, todoIndex: number): ActionResult {
+  if (todoIndex < 0 || todoIndex >= npc.todoList.length) {
+    return { success: false, reason: "Invalid todo index" };
+  }
+  const item = npc.todoList[todoIndex];
+  if (item.done) {
+    return { success: false, reason: "Already completed" };
+  }
+  item.done = true;
 
-function execCompleteGoal(npc: NPC): ActionResult {
-  if (!npc.currentGoal) return { success: false, reason: "No goal to complete" };
-  const completed = npc.currentGoal;
-  npc.currentGoal = "";
-  return { success: true, reason: `Completed: ${completed}` };
+  // Check if all todos are done — if so, clear the list so the NPC will plan again
+  const allDone = npc.todoList.every((t) => t.done);
+  if (allDone) {
+    npc.todoList = [];
+  }
+
+  return { success: true, reason: `Done: ${item.task}${allDone ? " (plan complete!)" : ""}` };
 }
 
 function execMoveTo(npc: NPC, x: number, y: number, world: GameWorldNPCInterface): ActionResult {
@@ -305,11 +332,16 @@ function execPickUpItem(
   return { success: true };
 }
 
-function execAttack(npc: NPC, direction: Direction): ActionResult {
+function execAttack(npc: NPC, direction: Direction, world: GameWorldNPCInterface): ActionResult {
   npc.face(direction);
   npc.startAttack();
-  // Actual damage is handled by GameWorld in the NPC update loop
-  // (it checks what's at the facing tile and applies damage)
+
+  // Apply damage after animation delay (same timing as player)
+  const facing = npc.getFacingTile();
+  setTimeout(() => {
+    world.npcAttackAt(npc, facing.x, facing.y);
+  }, 200);
+
   return { success: true };
 }
 
@@ -357,9 +389,11 @@ function execBuildPlan(
   buildingId: string,
   x: number,
   y: number,
+  rotation: number,
+  orientation: string | undefined,
   world: GameWorldNPCInterface,
 ): ActionResult {
-  const placed = world.npcPlaceBuilding(buildingId, x, y, 0);
+  const placed = world.npcPlaceBuilding(buildingId, x, y, rotation, orientation);
   if (!placed) return { success: false, reason: "Cannot place building there" };
   return { success: true };
 }
@@ -430,13 +464,39 @@ function execToggleDoor(
   return { success: false, reason: "No door to toggle" };
 }
 
+function execClaimBed(npc: NPC, direction: Direction, world: GameWorldNPCInterface): ActionResult {
+  npc.face(direction);
+  const facing = npc.getFacingTile();
+  const building = world.getBuildingAt(facing.x, facing.y);
+  const isBedType = building && (building.type.id === "bed" || building.type.id === "bedroll");
+  if (!isBedType || building.state !== "complete") {
+    return { success: false, reason: "No bed or bedroll there" };
+  }
+  if (world.isBedClaimed(facing.x, facing.y)) {
+    return { success: false, reason: "Already claimed by someone" };
+  }
+  const ok = world.claimBed(npc, facing.x, facing.y);
+  if (!ok) return { success: false, reason: "Could not claim" };
+  npc.claimedBed = { x: facing.x, y: facing.y };
+  return { success: true, reason: `Claimed at (${facing.x},${facing.y})` };
+}
+
 function execSleep(npc: NPC, direction: Direction, world: GameWorldNPCInterface): ActionResult {
   npc.face(direction);
   const facing = npc.getFacingTile();
   const building = world.getBuildingAt(facing.x, facing.y);
-  if (!building || building.type.id !== "bed" || building.state !== "complete") {
-    return { success: false, reason: "No bed there" };
+  const isBedType = building && (building.type.id === "bed" || building.type.id === "bedroll");
+  if (!isBedType || building.state !== "complete") {
+    return { success: false, reason: "No bed or bedroll there" };
   }
+  // Can only sleep in your own claimed bed
+  if (
+    world.isBedClaimed(facing.x, facing.y) &&
+    (!npc.claimedBed || npc.claimedBed.x !== facing.x || npc.claimedBed.y !== facing.y)
+  ) {
+    return { success: false, reason: "This bed belongs to someone else" };
+  }
+  npc.sleepEnergyRate = building.type.id === "bedroll" ? 3 : 5;
   npc.enterSleep();
   return { success: true };
 }

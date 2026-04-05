@@ -100,7 +100,7 @@ import { loadLLMConfig } from "../systems/llm-settings.ts";
 import {
   decideNextAction,
   buildWorldSnapshot,
-  thinkAboutGoal,
+  thinkAboutPlan,
   thinkAboutQuestion,
 } from "../systems/npc-brain.ts";
 import { executeNPCAction, type GameWorldNPCInterface } from "../systems/npc-actions.ts";
@@ -244,6 +244,8 @@ export class GameWorld extends ex.Scene<GameWorldData> {
   private llmConfig: LLMProviderConfig = defaultConfig();
   private npcDebugPanel: NPCDebugPanel | null = null;
   private npcDebugVisible = false;
+  // Bed ownership: tileKey → NPC id (prevents double-claiming)
+  private claimedBeds = new Map<number, string>();
 
   // Sleeping state
   private playerSleeping = false;
@@ -794,6 +796,12 @@ export class GameWorld extends ex.Scene<GameWorldData> {
         this.spawnInitialNPCs();
       }
 
+      // Restore player's claimed bed AFTER clearAllNPCs (which clears claimedBeds)
+      if (context.data.type === "load" && context.data.save.playerClaimedBed) {
+        const pb = context.data.save.playerClaimedBed;
+        this.claimedBeds.set(tileKey(pb.x, pb.y), "__player__");
+      }
+
       // Load LLM config for NPC brains
       void loadLLMConfig().then((config) => {
         this.llmConfig = config;
@@ -808,7 +816,11 @@ export class GameWorld extends ex.Scene<GameWorldData> {
         const ss = context.data.save.player.sleeping;
         const bedKey = tileKey(ss.bedTileX, ss.bedTileY);
         const bed = this.buildingByTile.get(bedKey);
-        if (bed && bed.type.id === "bed" && bed.state === "complete") {
+        if (
+          bed &&
+          (bed.type.id === "bed" || bed.type.id === "bedroll") &&
+          bed.state === "complete"
+        ) {
           this.enterSleep(bed);
         }
       }
@@ -1266,23 +1278,41 @@ export class GameWorld extends ex.Scene<GameWorldData> {
       const facingBuilding = this.buildingByTile.get(facingKey);
       const exhausted = this.player.isExhausted();
 
-      // Bed interaction — always allowed, even when exhausted
+      // Bed/bedroll interaction — always allowed, even when exhausted
       if (
         facingBuilding &&
-        facingBuilding.type.id === "bed" &&
+        (facingBuilding.type.id === "bed" || facingBuilding.type.id === "bedroll") &&
         facingBuilding.state === "complete"
       ) {
         const worldX = facing.x * TILE_SIZE + TILE_SIZE / 2;
         const worldY = facing.y * TILE_SIZE + TILE_SIZE / 2;
+        const bedKey = tileKey(facing.x, facing.y);
+        const bedOwner = this.claimedBeds.get(bedKey);
+        const playerOwns = bedOwner === "__player__";
+        const unclaimed = !bedOwner;
 
         if (this.actionPrompt) {
-          this.actionPrompt.text = "[E] Sleep";
+          if (unclaimed) {
+            this.actionPrompt.text = "[E] Claim";
+          } else if (playerOwns) {
+            this.actionPrompt.text = "[E] Sleep";
+          } else {
+            this.actionPrompt.text = "Taken";
+          }
           this.actionPrompt.pos = ex.vec(worldX, worldY - TILE_SIZE / 2 - 4);
           this.actionPrompt.graphics.visible = true;
         }
 
         if (wasActionPressed(kb, "action")) {
-          this.enterSleep(facingBuilding);
+          if (unclaimed) {
+            // Claim the bed
+            this.claimedBeds.set(bedKey, "__player__");
+            this.spawnPickupText("Claimed!", worldX, worldY);
+          } else if (playerOwns) {
+            // Sleep in the bed
+            this.enterSleep(facingBuilding);
+          }
+          // If taken by NPC, do nothing
         }
       } else if (exhausted) {
         // Too tired to do anything — hide prompt
@@ -1543,6 +1573,7 @@ export class GameWorld extends ex.Scene<GameWorldData> {
     if (!this.player) return;
     this.playerSleeping = true;
     this.sleepingBed = bed;
+    this.player.sleepEnergyRate = bed.type.id === "bedroll" ? 3 : 5;
     this.player.lockInput();
 
     // Save original position so we can snap back on wake-up
@@ -5367,6 +5398,11 @@ export class GameWorld extends ex.Scene<GameWorldData> {
     const indicator = new NPCThoughtIndicator(npc);
     npc.addChild(indicator);
 
+    // Restore bed claim if NPC has one saved
+    if (npc.claimedBed) {
+      this.claimedBeds.set(tileKey(npc.claimedBed.x, npc.claimedBed.y), npc.npcId);
+    }
+
     // Update debug panel NPC list
     this.npcDebugPanel?.setNPCs(this.npcList.filter((n) => !n.isDead));
 
@@ -5480,40 +5516,27 @@ export class GameWorld extends ex.Scene<GameWorldData> {
         // Clear chat inbox since the brain has consumed them
         npc.chatInbox = [];
 
-        // Intercept set_goal → route through thinking model for strategy
-        if (action.action === "set_goal") {
-          npc.debugLastAction = JSON.stringify(action);
-          npc.debugLastResult = "⏳ Consulting thinking model...";
-          const goalWithStrategy = await thinkAboutGoal(
-            npc,
-            snapshot,
-            config,
-            abortController.signal,
-          );
-          npc.currentGoal = goalWithStrategy;
-          npc.debugLastResult = `✓ Goal: ${goalWithStrategy.slice(0, 80)}`;
-          npc.pushDebugHistory('{"action":"set_goal"}', `✓ ${goalWithStrategy.slice(0, 60)}`);
+        // Intercept plan → route through thinking model to create todo list
+        if (action.action === "plan") {
+          npc.debugLastAction = '{"action":"plan"}';
+          npc.debugLastResult = "⏳ Planning...";
+          const todos = await thinkAboutPlan(npc, snapshot, config, abortController.signal);
+          npc.todoList = todos;
+          const summary = todos.map((t) => t.task).join(" → ");
+          npc.debugLastResult = `✓ Plan: ${summary.slice(0, 80)}`;
+          npc.pushDebugHistory('{"action":"plan"}', `✓ ${todos.length} todos`);
           this.npcInFlight.delete(npc.npcId);
           npc.debugThinking = false;
           return;
         }
 
-        // Intercept think → route through thinking model for ad-hoc question
+        // Intercept think → route through thinking model
         if (action.action === "think") {
-          npc.debugLastAction = JSON.stringify(action);
+          npc.debugLastAction = '{"action":"think"}';
           npc.debugLastResult = "⏳ Thinking...";
-          const answer = await thinkAboutQuestion(
-            npc,
-            action.question,
-            snapshot,
-            config,
-            abortController.signal,
-          );
+          const answer = await thinkAboutQuestion(npc, snapshot, config, abortController.signal);
           npc.debugLastResult = `✓ Thought: ${answer.slice(0, 80)}`;
-          npc.pushDebugHistory(
-            `{"action":"think","question":"${action.question.slice(0, 40)}"}`,
-            `✓ ${answer.slice(0, 60)}`,
-          );
+          npc.pushDebugHistory('{"action":"think"}', `✓ ${answer.slice(0, 60)}`);
           this.npcInFlight.delete(npc.npcId);
           npc.debugThinking = false;
           return;
@@ -5574,7 +5597,9 @@ export class GameWorld extends ex.Scene<GameWorldData> {
             type: "tree",
             x: tx,
             y: ty,
-            details: tree.isChoppedDown() ? "stump (regrowing)" : "tree (choppable)",
+            details: tree.isChoppedDown()
+              ? "stump (regrowing)"
+              : `tree (HP:${tree.hp}/${tree.maxHp})`,
           });
         }
 
@@ -5595,13 +5620,32 @@ export class GameWorld extends ex.Scene<GameWorldData> {
         // Building
         const building = this.buildingByTile.get(key);
         if (building) {
-          let detail = `${building.type.name} (${building.state})`;
+          let detail = `${building.type.name} (${building.state}, HP:${building.hp}/${building.type.maxHp})`;
+          if (building.state === "hologram") {
+            const delivered = building.materialsDelivered;
+            const total = building.type.ingredients.reduce((s, i) => s + i.count, 0);
+            detail += ` [${delivered}/${total} materials delivered]`;
+          }
           if (building.type.storage && building.storageSlots) {
             const used = building.storageSlots.filter((s) => s !== null).length;
-            const total = building.storageSlots.length;
-            detail += ` [${used}/${total} items]`;
+            const slots = building.storageSlots.length;
+            detail += ` [${used}/${slots} items]`;
           }
           if (building.isBurning) detail += " [burning]";
+          // Show bed/bedroll claim status
+          if (building.type.id === "bed" || building.type.id === "bedroll") {
+            const bedOwner = this.claimedBeds.get(key);
+            if (bedOwner === npc.npcId) {
+              detail += " [YOUR bed]";
+            } else if (bedOwner === "__player__") {
+              detail += " [claimed by player]";
+            } else if (bedOwner) {
+              const ownerNpc = this.npcList.find((n) => n.npcId === bedOwner);
+              detail += ` [claimed by ${ownerNpc?.npcName ?? "someone"}]`;
+            } else {
+              detail += " [unclaimed]";
+            }
+          }
           entities.push({ type: "building", x: tx, y: ty, details: detail });
         }
 
@@ -5733,9 +5777,31 @@ export class GameWorld extends ex.Scene<GameWorldData> {
         npc2.pushChatHistory(msg);
         this.distributeMessageToNPCs(msg, npc2);
       },
-      npcPlaceBuilding: (buildingId, x, y, rotation) => {
+      npcPlaceBuilding: (buildingId, x, y, rotation, orientation) => {
         const buildType = BUILDING_TYPE_MAP[buildingId];
         if (!buildType) return false;
+
+        // Edge buildings (walls, fences, doors) use orientation (N/E/S/W)
+        if (buildType.placement === "edge") {
+          const dir = (orientation ?? "N") as import("../systems/edge-key.ts").EdgeOrientation;
+          const ek = edgeKeyFromTileAndDir(x, y, dir);
+          if (ek == null) return false;
+          if (this.edgeBuildings.has(ek)) return false;
+          const edge = new EdgeBuilding(buildType, ek, "hologram");
+          edge.onDestroy = () => {
+            this.edgeBuildings.delete(ek);
+            this.blockedEdges.delete(ek);
+            this.edgeBuildingsList = this.edgeBuildingsList.filter((e) => e !== edge);
+            this.recalculateIndoorLighting();
+          };
+          this.edgeBuildingsList.push(edge);
+          this.edgeBuildings.set(ek, edge);
+          if (edge.isSolid()) this.blockedEdges.add(ek);
+          this.add(edge);
+          return true;
+        }
+
+        // Tile buildings (beds, fires, boxes, floors)
         const k = tileKey(x, y);
         if (this.blockedTiles.has(k) || this.waterTiles.has(k)) return false;
         if (this.buildingByTile.has(k)) return false;
@@ -5772,6 +5838,56 @@ export class GameWorld extends ex.Scene<GameWorldData> {
         }
         return dirs;
       },
+      isBedClaimed: (x, y) => {
+        return this.claimedBeds.has(tileKey(x, y));
+      },
+      claimBed: (npc2, x, y) => {
+        const k = tileKey(x, y);
+        if (this.claimedBeds.has(k)) return false;
+        this.claimedBeds.set(k, npc2.npcId);
+        return true;
+      },
+      npcAttackAt: (npc2, x, y) => {
+        const key = tileKey(x, y);
+        const mainHand = npc2.inventory.equipment[EquipmentSlot.MainHand];
+        const canonical = mainHand ? ITEMS[mainHand.id] : null;
+        const baseDamage = canonical ? (canonical.stats.attack ?? 0) : 1; // UNARMED_DAMAGE = 1
+
+        // Attack sheep
+        const sheep = this.sheepByTile.get(key);
+        if (sheep && !sheep.isDead) {
+          const mult = canonical?.toolMultipliers?.creature ?? 1;
+          const damage = baseDamage * mult;
+          const drops = sheep.takeDamage(damage);
+          for (const drop of drops) {
+            this.dropResourceNear(sheep.tileX, sheep.tileY, drop);
+          }
+          if (sheep.isDead) this.removeSheep(sheep);
+          return;
+        }
+
+        // Attack cow
+        const cow = this.cowByTile.get(key);
+        if (cow && !cow.isDead) {
+          const mult = canonical?.toolMultipliers?.creature ?? 1;
+          const damage = baseDamage * mult;
+          const drops = cow.takeDamage(damage);
+          for (const drop of drops) {
+            this.dropResourceNear(cow.tileX, cow.tileY, drop);
+          }
+          if (cow.isDead) this.removeCow(cow);
+          return;
+        }
+
+        // Degrade weapon durability
+        if (mainHand && mainHand.durability != null) {
+          mainHand.durability -= 1;
+          if (mainHand.durability <= 0) {
+            npc2.inventory.equipment[EquipmentSlot.MainHand] = null;
+            npc2.refreshSprite();
+          }
+        }
+      },
     };
   }
 
@@ -5800,6 +5916,17 @@ export class GameWorld extends ex.Scene<GameWorldData> {
     return this.playerName;
   }
 
+  getPlayerClaimedBed(): { x: number; y: number } | undefined {
+    for (const [key, owner] of this.claimedBeds) {
+      if (owner === "__player__") {
+        const x = key % 64;
+        const y = Math.floor(key / 64);
+        return { x, y };
+      }
+    }
+    return undefined;
+  }
+
   getNPCStates(): NPCSaveState[] {
     return this.npcList.filter((n) => !n.isDead).map((n) => n.getState());
   }
@@ -5823,6 +5950,7 @@ export class GameWorld extends ex.Scene<GameWorldData> {
     this.npcList = [];
     this.npcByTile.clear();
     this.npcRegisteredTile.clear();
+    this.claimedBeds.clear();
   }
 
   private restoreNPCStates(states: NPCSaveState[]): void {

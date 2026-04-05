@@ -22,6 +22,7 @@ import type {
   NPCMemoryState,
   NPCSaveState,
   NPCActionState,
+  NPCTodoItem,
 } from "../types/npc.ts";
 import { compositeCharacter } from "../systems/character-compositor.ts";
 import { getWeaponSpriteSheet } from "../systems/sprite-loader.ts";
@@ -76,6 +77,8 @@ export class NPC extends ex.Actor {
   vitals: VitalsState;
   facing: Direction = "down";
   sleeping = false;
+  /** Energy recovery rate while sleeping (bed=5, bedroll=3). */
+  sleepEnergyRate = 5;
   isDead = false;
 
   // Tile-based movement (mirrors Creature)
@@ -101,7 +104,10 @@ export class NPC extends ex.Actor {
   memory: NPCMemoryState;
 
   // Goal system — the NPC's current objective, drives decision-making
-  currentGoal = "";
+  todoList: NPCTodoItem[] = [];
+
+  // Claimed bed — the NPC's assigned bed for sleeping
+  claimedBed: { x: number; y: number } | null = null;
 
   // Object permanence — discovered resource locations persist across vision range
   // Key format: "type:x,y" (e.g. "tree:30,25"), value: last known state
@@ -194,8 +200,9 @@ export class NPC extends ex.Actor {
 
     if (saved?.facing) this.facing = saved.facing;
     if (saved?.sleeping) this.sleeping = saved.sleeping;
-    if (saved?.currentGoal) this.currentGoal = saved.currentGoal;
+    if (saved?.todoList) this.todoList = saved.todoList.map((t) => ({ ...t }));
     if (saved?.knownLocations) this.knownLocations = { ...saved.knownLocations };
+    if (saved?.claimedBed) this.claimedBed = { ...saved.claimedBed };
 
     // Vitals & inventory
     this.vitals = saved?.vitals ?? defaultVitals();
@@ -430,7 +437,7 @@ export class NPC extends ex.Actor {
     if (this.isDead) return;
 
     // --- Vitals ---
-    this.vitals = updateVitals(this.vitals, delta, this.sleeping);
+    this.vitals = updateVitals(this.vitals, delta, this.sleeping, this.sleepEnergyRate);
 
     // Combat timer
     if (this.combatTimer < 10000) this.combatTimer += delta;
@@ -566,7 +573,8 @@ export class NPC extends ex.Actor {
       personality: this.personality,
       memory: serializeMemory(this.memory),
       sleeping: this.sleeping,
-      currentGoal: this.currentGoal,
+      todoList: this.todoList.map((t) => ({ ...t })),
+      claimedBed: this.claimedBed ? { ...this.claimedBed } : null,
       knownLocations: { ...this.knownLocations },
     };
   }

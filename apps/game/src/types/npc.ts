@@ -19,6 +19,13 @@ export interface NPCMemoryState {
   notes: string[];
 }
 
+// ── Todo List ────────────────────────────────────────────────────
+
+export interface NPCTodoItem {
+  task: string;
+  done: boolean;
+}
+
 // ── Action State ─────────────────────────────────────────────────────
 
 export type NPCActionState =
@@ -54,7 +61,9 @@ export interface NPCSaveState {
   personality: NPCPersonality;
   memory: NPCMemoryState;
   sleeping: boolean;
-  currentGoal: string;
+  /** The NPC's current plan — a list of tasks from the thinking model. */
+  todoList: NPCTodoItem[];
+  claimedBed: { x: number; y: number } | null;
   knownLocations: Record<string, string>;
 }
 
@@ -91,9 +100,9 @@ export interface WorldSnapshot {
 // ── NPC Actions (discriminated union) ────────────────────────────────
 
 export type NPCAction =
-  | { action: "set_goal"; goal: string }
-  | { action: "complete_goal" }
-  | { action: "think"; question: string }
+  | { action: "plan" }
+  | { action: "complete_todo"; todoIndex: number }
+  | { action: "think" }
   | { action: "move_to"; x: number; y: number }
   | { action: "pick_bush"; direction: Direction }
   | { action: "chop_tree"; direction: Direction }
@@ -103,13 +112,21 @@ export type NPCAction =
   | { action: "attack"; direction: Direction }
   | { action: "craft"; recipeId: string }
   | { action: "cook"; direction: Direction; inputItemId: string }
-  | { action: "build_plan"; buildingId: string; x: number; y: number }
+  | {
+      action: "build_plan";
+      buildingId: string;
+      x: number;
+      y: number;
+      rotation?: number;
+      orientation?: string;
+    }
   | { action: "equip"; bagIndex: number }
   | { action: "unequip"; slot: string }
   | { action: "consume"; bagIndex: number }
   | { action: "drop_item"; bagIndex: number }
   | { action: "open_door"; direction: Direction }
   | { action: "close_door"; direction: Direction }
+  | { action: "claim_bed"; direction: Direction }
   | { action: "sleep"; direction: Direction }
   | { action: "wake_up" }
   | { action: "store_item"; direction: Direction; bagIndex: number }

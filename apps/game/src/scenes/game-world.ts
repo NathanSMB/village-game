@@ -3298,6 +3298,7 @@ export class GameWorld extends ex.Scene<GameWorldData> {
 
   private closeChat(): void {
     this.chatOpen = false;
+    this.chatLog?.scrollToBottom();
     if (this.player) {
       this.player.unlockInput();
     }
@@ -3305,6 +3306,16 @@ export class GameWorld extends ex.Scene<GameWorldData> {
   }
 
   private handleChatInput(kb: ex.Keyboard): void {
+    // Arrow keys scroll the chat log
+    if (kb.wasPressed(ex.Keys.ArrowUp) || kb.wasPressed(ex.Keys.W)) {
+      this.chatLog?.scrollUp();
+      return;
+    }
+    if (kb.wasPressed(ex.Keys.ArrowDown) || kb.wasPressed(ex.Keys.S)) {
+      this.chatLog?.scrollDown();
+      return;
+    }
+
     // Tab cycles chat mode
     if (kb.wasPressed(ex.Keys.Tab)) {
       const idx = CHAT_MODE_ORDER.indexOf(this.chatMode);
@@ -3367,13 +3378,14 @@ export class GameWorld extends ex.Scene<GameWorldData> {
 
     // The sender always sees their own message
     this.chatMessages.push(msg);
+    this.chatLog?.scrollToBottom();
 
     // In the future, distribute to nearby AI agents here:
     // for each agent within CHAT_MODE_RADIUS[msg.mode] Chebyshev distance,
     // push msg into that agent's personal chat log.
 
-    // Spawn speech bubble that follows the player
-    this.add(new SpeechBubble(msg.text, this.player, msg.mode));
+    // Spawn speech bubble as a child of the player (auto-attaches via constructor)
+    new SpeechBubble(msg.text, this.player, msg.mode);
   }
 
   /**

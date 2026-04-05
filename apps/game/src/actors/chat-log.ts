@@ -12,10 +12,16 @@ const BORDER_RADIUS = 4;
  * Always-visible screen element that shows a character's personal chat log.
  * Messages were already proximity-filtered at send time, so this just renders
  * whatever is in the array.
+ *
+ * Supports scrolling via the `scrollOffset` property — the number of messages
+ * scrolled back from the newest. 0 = pinned to bottom (default).
  */
 export class ChatLog extends ex.ScreenElement {
   private source: () => ChatMessage[];
   private uiScale: number;
+
+  /** How many messages to scroll back from the newest. 0 = bottom. */
+  scrollOffset = 0;
 
   constructor(source: () => ChatMessage[], uiScale: number, yOffset: number) {
     super({
@@ -35,16 +41,53 @@ export class ChatLog extends ex.ScreenElement {
     this.graphics.use(canvas);
   }
 
+  /** Scroll up (older messages). Returns true if scroll changed. */
+  scrollUp(): boolean {
+    const total = this.source().length;
+    const maxOffset = Math.max(0, total - MAX_VISIBLE);
+    if (this.scrollOffset < maxOffset) {
+      this.scrollOffset++;
+      return true;
+    }
+    return false;
+  }
+
+  /** Scroll down (newer messages). Returns true if scroll changed. */
+  scrollDown(): boolean {
+    if (this.scrollOffset > 0) {
+      this.scrollOffset--;
+      return true;
+    }
+    return false;
+  }
+
+  /** Reset scroll to bottom (newest messages). */
+  scrollToBottom(): void {
+    this.scrollOffset = 0;
+  }
+
   private drawLog(ctx: CanvasRenderingContext2D): void {
     ctx.scale(this.uiScale, this.uiScale);
 
     const messages = this.source();
     const now = Date.now();
+    const total = messages.length;
 
-    if (messages.length === 0) return;
+    if (total === 0) return;
 
-    // Take last MAX_VISIBLE messages
-    const display = messages.slice(-MAX_VISIBLE);
+    // Clamp scrollOffset in case messages expired
+    const maxOffset = Math.max(0, total - MAX_VISIBLE);
+    if (this.scrollOffset > maxOffset) {
+      this.scrollOffset = maxOffset;
+    }
+
+    // Compute the window of messages to display
+    const endIdx = total - this.scrollOffset;
+    const startIdx = Math.max(0, endIdx - MAX_VISIBLE);
+    const display = messages.slice(startIdx, endIdx);
+
+    const hasOlder = startIdx > 0;
+    const hasNewer = this.scrollOffset > 0;
 
     const panelH = display.length * LINE_HEIGHT + PADDING_Y * 2;
 
@@ -97,6 +140,20 @@ export class ChatLog extends ex.ScreenElement {
     }
 
     ctx.globalAlpha = 1;
+
+    // Scroll indicators
+    ctx.font = "9px monospace";
+    ctx.fillStyle = "#666666";
+    ctx.textAlign = "right";
+    if (hasOlder) {
+      ctx.textBaseline = "top";
+      ctx.fillText("\u25b2 more", LOG_WIDTH - PADDING_X, 2);
+    }
+    if (hasNewer) {
+      ctx.textBaseline = "bottom";
+      ctx.fillText("\u25bc more", LOG_WIDTH - PADDING_X, panelH - 2);
+    }
+    ctx.textAlign = "left";
   }
 }
 

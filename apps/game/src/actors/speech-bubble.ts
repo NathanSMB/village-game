@@ -23,31 +23,34 @@ const PADDING_Y = 4;
 const POINTER_H = 5;
 const BORDER_RADIUS = 4;
 const MAX_BUBBLE_WIDTH = 160;
-/** Vertical offset above the followed actor's position. */
+/** Vertical offset above the parent actor's origin. */
 const FOLLOW_OFFSET_Y = 20;
 
 /**
  * World-space speech bubble that appears above an entity.
- * Follows the target actor, styled by chat mode, and fades out before
- * self-destructing.
+ * Added as a **child** of the speaker actor so it inherits the parent's
+ * transform and moves perfectly in sync — no jitter from velocity
+ * interpolation mismatches.
  */
 export class SpeechBubble extends ex.Actor {
   private elapsed = 0;
   private duration: number;
   private mode: ChatMode;
   private text: string;
-  private target: ex.Actor;
 
-  constructor(text: string, target: ex.Actor, mode: ChatMode) {
+  constructor(text: string, parent: ex.Actor, mode: ChatMode) {
+    // Position is relative to the parent actor
     super({
-      pos: ex.vec(target.pos.x, target.pos.y - FOLLOW_OFFSET_Y),
+      pos: ex.vec(0, -FOLLOW_OFFSET_Y),
       z: 65,
       anchor: ex.vec(0.5, 1),
     });
     this.text = text;
-    this.target = target;
     this.mode = mode;
     this.duration = MODE_DURATION[mode];
+
+    // Attach as a child so we inherit the parent's world transform
+    parent.addChild(this);
 
     this.rebuildGraphic();
   }
@@ -119,18 +122,15 @@ export class SpeechBubble extends ex.Actor {
     this.graphics.use(canvas);
   }
 
-  override onPreUpdate(_engine: ex.Engine, delta: number): void {
+  override onPostUpdate(_engine: ex.Engine, delta: number): void {
     this.elapsed += delta;
     const remaining = this.duration - this.elapsed;
 
     if (remaining <= 0) {
+      this.parent?.removeChild(this);
       this.kill();
       return;
     }
-
-    // Follow the target actor
-    this.pos.x = this.target.pos.x;
-    this.pos.y = this.target.pos.y - FOLLOW_OFFSET_Y;
 
     // Fade out during the last FADE_LEAD_MS
     if (remaining < FADE_LEAD_MS) {

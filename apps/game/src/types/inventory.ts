@@ -2,7 +2,7 @@ import type { CharacterAppearance } from "./character.ts";
 import { EquipmentSlot, type Item } from "./item.ts";
 import type { VitalsState } from "./vitals.ts";
 import { clampVital } from "./vitals.ts";
-import { createStarterItem } from "../data/items.ts";
+import { createStarterItem, DURABILITY_CONFIG, ITEMS } from "../data/items.ts";
 
 export type Equipment = Record<EquipmentSlot, Item | null>;
 
@@ -93,4 +93,26 @@ export function unequipItem(state: InventoryState, slot: EquipmentSlot): void {
   if (!item) return;
   state.equipment[slot] = null;
   state.bag.push(item);
+}
+
+/**
+ * Attempt to repair an equipped item using materials from the bag.
+ * Returns the name of the consumed repair material, or null if repair is not possible.
+ */
+export function repairItem(state: InventoryState, slot: EquipmentSlot): string | null {
+  const item = state.equipment[slot];
+  if (!item || item.durability == null || item.maxDurability == null) return null;
+  if (item.durability >= item.maxDurability) return null;
+
+  const config = DURABILITY_CONFIG[item.id];
+  if (!config) return null;
+
+  // Find and consume one repair material from the bag
+  const repairIdx = state.bag.findIndex((b) => b.id === config.repairItemId);
+  if (repairIdx === -1) return null;
+
+  state.bag.splice(repairIdx, 1);
+  item.durability = item.maxDurability;
+
+  return ITEMS[config.repairItemId]?.name ?? config.repairItemId;
 }

@@ -3,6 +3,7 @@ import type { BuildingType } from "../data/buildings.ts";
 import { flattenIngredients, totalMaterials } from "../data/buildings.ts";
 import type { InventoryState } from "../types/inventory.ts";
 import type { Item } from "../types/item.ts";
+import { migrateItemDurability } from "../data/items.ts";
 import { buildingGraphic } from "../systems/building-sprites.ts";
 import { DamageFlash } from "./damage-flash.ts";
 import { FireEffect } from "./fire-effect.ts";
@@ -287,6 +288,10 @@ export class Building extends ex.Actor {
       this.storageSlots = saved.storageSlots.slice(0, this.type.storage.slotCount);
       while (this.storageSlots.length < this.type.storage.slotCount) {
         this.storageSlots.push(null);
+      }
+      // Migrate durability for old saves
+      for (const item of this.storageSlots) {
+        if (item) migrateItemDurability(item);
       }
     }
   }

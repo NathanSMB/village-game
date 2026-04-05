@@ -76,6 +76,10 @@ export interface Item {
   itemSprite?: string;
   /** Tool effectiveness multipliers against entity categories (e.g. "mineable", "tree"). */
   toolMultipliers?: Partial<Record<string, number>>;
+  /** Current durability of the item (per-instance, only on equipment). */
+  durability?: number;
+  /** Maximum durability this item can have. */
+  maxDurability?: number;
 }
 
 export function isConsumable(item: Item): boolean {
@@ -84,4 +88,8 @@ export function isConsumable(item: Item): boolean {
 
 export function isEquipment(item: Item): boolean {
   return item.slot != null && item.consumable == null;
+}
+
+export function hasDurability(item: Item): boolean {
+  return item.maxDurability != null && item.maxDurability > 0;
 }

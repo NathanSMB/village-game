@@ -30,7 +30,7 @@ import { FloatingText } from "../actors/floating-text.ts";
 import { AttackEffect } from "../actors/attack-effect.ts";
 import { ArrowProjectile } from "../actors/arrow-projectile.ts";
 import { VitalsHud } from "../actors/vitals-hud.ts";
-import { wasActionPressed } from "../systems/keybinds.ts";
+import { actionKeyLabel, wasActionPressed } from "../systems/keybinds.ts";
 import {
   ITEMS,
   DURABILITY_CONFIG,
@@ -470,7 +470,7 @@ export class GameWorld extends ex.Scene<GameWorldData> {
 
     // Action prompt label (shown when facing interactable)
     this.actionPrompt = new ex.Label({
-      text: "[E] Pick",
+      text: `[${actionKeyLabel("action")}] Pick`,
       pos: ex.vec(0, 0),
       z: 50,
       font: new ex.Font({
@@ -970,7 +970,7 @@ export class GameWorld extends ex.Scene<GameWorldData> {
       const bedWorldX = this.sleepingBed.pos.x;
       const bedWorldY = this.sleepingBed.pos.y;
       if (this.actionPrompt) {
-        this.actionPrompt.text = "[E] Get Up";
+        this.actionPrompt.text = `[${actionKeyLabel("action")}] Get Up`;
         this.actionPrompt.pos = ex.vec(bedWorldX, bedWorldY - TILE_SIZE / 2 - 4);
         this.actionPrompt.graphics.visible = true;
       }
@@ -1314,9 +1314,9 @@ export class GameWorld extends ex.Scene<GameWorldData> {
 
         if (this.actionPrompt) {
           if (unclaimed) {
-            this.actionPrompt.text = "[E] Claim";
+            this.actionPrompt.text = `[${actionKeyLabel("action")}] Claim`;
           } else if (playerOwns) {
-            this.actionPrompt.text = "[E] Sleep";
+            this.actionPrompt.text = `[${actionKeyLabel("action")}] Sleep`;
           } else {
             this.actionPrompt.text = "Taken";
           }
@@ -1354,7 +1354,7 @@ export class GameWorld extends ex.Scene<GameWorldData> {
         if (bush?.canPick()) {
           // Berry bush interaction
           if (this.actionPrompt) {
-            this.actionPrompt.text = "[E] Pick";
+            this.actionPrompt.text = `[${actionKeyLabel("action")}] Pick`;
             this.actionPrompt.pos = ex.vec(bush.pos.x, bush.pos.y - TILE_SIZE / 2 - 4);
             this.actionPrompt.graphics.visible = true;
           }
@@ -1379,7 +1379,7 @@ export class GameWorld extends ex.Scene<GameWorldData> {
           const waterWorldY = facing.y * TILE_SIZE + TILE_SIZE / 2;
 
           if (this.actionPrompt) {
-            this.actionPrompt.text = "[E] Drink";
+            this.actionPrompt.text = `[${actionKeyLabel("action")}] Drink`;
             this.actionPrompt.pos = ex.vec(waterWorldX, waterWorldY - TILE_SIZE / 2 - 4);
             this.actionPrompt.graphics.visible = true;
           }
@@ -1398,7 +1398,7 @@ export class GameWorld extends ex.Scene<GameWorldData> {
           const sheepWorldY = facingSheep.pos.y;
 
           if (this.actionPrompt) {
-            this.actionPrompt.text = "[E] Pet";
+            this.actionPrompt.text = `[${actionKeyLabel("action")}] Pet`;
             this.actionPrompt.pos = ex.vec(sheepWorldX, sheepWorldY - TILE_SIZE / 2 - 4);
             this.actionPrompt.graphics.visible = true;
           }
@@ -1413,7 +1413,7 @@ export class GameWorld extends ex.Scene<GameWorldData> {
           const cowWorldY = facingCow.pos.y;
 
           if (this.actionPrompt) {
-            this.actionPrompt.text = "[E] Pet";
+            this.actionPrompt.text = `[${actionKeyLabel("action")}] Pet`;
             this.actionPrompt.pos = ex.vec(cowWorldX, cowWorldY - TILE_SIZE / 2 - 4);
             this.actionPrompt.graphics.visible = true;
           }
@@ -1429,7 +1429,10 @@ export class GameWorld extends ex.Scene<GameWorldData> {
           const count = groundStack.getCount();
 
           if (this.actionPrompt) {
-            this.actionPrompt.text = count > 1 ? `[E] Pick up (${count})` : "[E] Pick up";
+            this.actionPrompt.text =
+              count > 1
+                ? `[${actionKeyLabel("action")}] Pick up (${count})`
+                : `[${actionKeyLabel("action")}] Pick up`;
             this.actionPrompt.pos = ex.vec(worldX, worldY - TILE_SIZE / 2 - 4);
             this.actionPrompt.graphics.visible = true;
           }
@@ -1452,7 +1455,7 @@ export class GameWorld extends ex.Scene<GameWorldData> {
           const worldX = facing.x * TILE_SIZE + TILE_SIZE / 2;
           const worldY = facing.y * TILE_SIZE + TILE_SIZE / 2;
           if (this.actionPrompt) {
-            this.actionPrompt.text = "[E] Open";
+            this.actionPrompt.text = `[${actionKeyLabel("action")}] Open`;
             this.actionPrompt.pos = ex.vec(worldX, worldY - TILE_SIZE / 2 - 4);
             this.actionPrompt.graphics.visible = true;
           }
@@ -1471,7 +1474,7 @@ export class GameWorld extends ex.Scene<GameWorldData> {
           if (facingBuilding.isBurning) {
             // Fire is burning — offer cooking
             if (this.actionPrompt) {
-              this.actionPrompt.text = "[E] Cook";
+              this.actionPrompt.text = `[${actionKeyLabel("action")}] Cook`;
               this.actionPrompt.pos = ex.vec(worldX, worldY - TILE_SIZE / 2 - 4);
               this.actionPrompt.graphics.visible = true;
             }
@@ -1489,7 +1492,7 @@ export class GameWorld extends ex.Scene<GameWorldData> {
 
             if (canLight) {
               if (this.actionPrompt) {
-                this.actionPrompt.text = "[E] Light";
+                this.actionPrompt.text = `[${actionKeyLabel("action")}] Light`;
                 this.actionPrompt.pos = ex.vec(worldX, worldY - TILE_SIZE / 2 - 4);
                 this.actionPrompt.graphics.visible = true;
               }
@@ -1529,7 +1532,9 @@ export class GameWorld extends ex.Scene<GameWorldData> {
           if (facingEdge && facingEdge.type.interactable && facingEdge.state === "complete") {
             const worldX = facing.x * TILE_SIZE + TILE_SIZE / 2;
             const worldY = facing.y * TILE_SIZE + TILE_SIZE / 2;
-            const promptText = facingEdge.isOpen ? "[E] Close" : "[E] Open";
+            const promptText = facingEdge.isOpen
+              ? `[${actionKeyLabel("action")}] Close`
+              : `[${actionKeyLabel("action")}] Open`;
 
             if (this.actionPrompt) {
               this.actionPrompt.text = promptText;
@@ -1554,7 +1559,9 @@ export class GameWorld extends ex.Scene<GameWorldData> {
             // Tile-based building interaction (toggle open/close)
             const worldX = facing.x * TILE_SIZE + TILE_SIZE / 2;
             const worldY = facing.y * TILE_SIZE + TILE_SIZE / 2;
-            const promptText = facingBuilding.isOpen ? "[E] Close" : "[E] Open";
+            const promptText = facingBuilding.isOpen
+              ? `[${actionKeyLabel("action")}] Close`
+              : `[${actionKeyLabel("action")}] Open`;
 
             if (this.actionPrompt) {
               this.actionPrompt.text = promptText;
@@ -2202,7 +2209,11 @@ export class GameWorld extends ex.Scene<GameWorldData> {
         ctx.textAlign = "center";
         ctx.font = "9px monospace";
         ctx.fillStyle = "#666666";
-        ctx.fillText("[E] Take  [Esc] Cancel", w / 2, bottomDivY + 14);
+        ctx.fillText(
+          `[${actionKeyLabel("action")}] Take  [${actionKeyLabel("back")}] Cancel`,
+          w / 2,
+          bottomDivY + 14,
+        );
       },
     });
 
@@ -2845,10 +2856,22 @@ export class GameWorld extends ex.Scene<GameWorldData> {
         ctx.fillStyle = "#666666";
         const hintY = headerH + 6 + BUILDING_TYPES.length * lh + 12;
         if (menuOpen) {
-          ctx.fillText("[E] Select  [Esc] Cancel", w / 2, hintY);
+          ctx.fillText(
+            `[${actionKeyLabel("action")}] Select  [${actionKeyLabel("back")}] Cancel`,
+            w / 2,
+            hintY,
+          );
         } else {
-          ctx.fillText("[E] Place  [Q] Remove  [I] Menu", w / 2, hintY);
-          ctx.fillText("[R] Rotate  [B] Confirm  [Esc] Cancel", w / 2, hintY + 12);
+          ctx.fillText(
+            `[${actionKeyLabel("action")}] Place  [${actionKeyLabel("drop")}] Remove  [${actionKeyLabel("inventory")}] Menu`,
+            w / 2,
+            hintY,
+          );
+          ctx.fillText(
+            `[${actionKeyLabel("rotate")}] Rotate  [${actionKeyLabel("build")}] Confirm  [${actionKeyLabel("back")}] Cancel`,
+            w / 2,
+            hintY + 12,
+          );
         }
       },
     });
@@ -3050,9 +3073,13 @@ export class GameWorld extends ex.Scene<GameWorldData> {
         ctx.fillStyle = "#666666";
         const hintY = headerH + contentH + 14;
         if (cookable.length > 0) {
-          ctx.fillText("[E] Cook  [Esc] Cancel", w / 2, hintY);
+          ctx.fillText(
+            `[${actionKeyLabel("action")}] Cook  [${actionKeyLabel("back")}] Cancel`,
+            w / 2,
+            hintY,
+          );
         } else {
-          ctx.fillText("[Esc] Cancel", w / 2, hintY);
+          ctx.fillText(`[${actionKeyLabel("back")}] Cancel`, w / 2, hintY);
         }
       },
     });
@@ -3383,7 +3410,11 @@ export class GameWorld extends ex.Scene<GameWorldData> {
         ctx.font = "9px monospace";
         ctx.fillStyle = "#666666";
         const hintY1 = bottomDivY + 14;
-        ctx.fillText("[E] Transfer  [\u2190\u2192] Switch  [Esc] Close", pw / 2, hintY1);
+        ctx.fillText(
+          `[${actionKeyLabel("action")}] Transfer  [${actionKeyLabel("moveLeft")}/${actionKeyLabel("moveRight")}] Switch  [${actionKeyLabel("back")}] Close`,
+          pw / 2,
+          hintY1,
+        );
 
         // Weight display
         const curWeight = totalWeight(inv);
@@ -3506,7 +3537,7 @@ export class GameWorld extends ex.Scene<GameWorldData> {
 
   /**
    * Renders the bottom-left chat hint / text input panel.
-   * - When chat is closed: "Press [T] to chat" in dim text
+   * - When chat is closed: "Press [chat key] to chat" in dim text
    * - When chat is open + empty: placeholder "Currently talking [Press tab to cycle]" in mode color
    * - When chat is open + typing: user text in mode color with blinking cursor
    */
@@ -3530,11 +3561,11 @@ export class GameWorld extends ex.Scene<GameWorldData> {
         ctx.fill();
 
         if (!this.chatOpen) {
-          // Idle hint: "Press [T] to chat"
+          // Idle hint: "Press [chat key] to chat"
           ctx.font = "10px monospace";
           ctx.textBaseline = "middle";
           ctx.fillStyle = "#888888";
-          ctx.fillText("Press [T] to chat", 6, panelH / 2);
+          ctx.fillText(`Press [${actionKeyLabel("chat")}] to chat`, 6, panelH / 2);
           return;
         }
 
@@ -4760,9 +4791,17 @@ export class GameWorld extends ex.Scene<GameWorldData> {
         if (tab === "equipment") {
           if (submenuOpen) {
             if (submenuIdx < submenuItems.length) {
-              ctx.fillText("[E] Equip  [Esc] Back", pw / 2, hintY);
+              ctx.fillText(
+                `[${actionKeyLabel("action")}] Equip  [${actionKeyLabel("back")}] Back`,
+                pw / 2,
+                hintY,
+              );
             } else {
-              ctx.fillText("[E] Unequip  [Esc] Back", pw / 2, hintY);
+              ctx.fillText(
+                `[${actionKeyLabel("action")}] Unequip  [${actionKeyLabel("back")}] Back`,
+                pw / 2,
+                hintY,
+              );
             }
           } else {
             const selSlotForHint = ALL_EQUIPMENT_SLOTS[equipIdx];
@@ -4773,30 +4812,62 @@ export class GameWorld extends ex.Scene<GameWorldData> {
               selItemForHint.maxDurability != null &&
               selItemForHint.durability < selItemForHint.maxDurability
             ) {
-              ctx.fillText("[E] Select  [V] Repair  [I] Close", pw / 2, hintY);
+              ctx.fillText(
+                `[${actionKeyLabel("action")}] Select  [${actionKeyLabel("repair")}] Repair  [${actionKeyLabel("inventory")}] Close`,
+                pw / 2,
+                hintY,
+              );
             } else {
-              ctx.fillText("[E] Select  [\u2190\u2192] Tab  [I] Close", pw / 2, hintY);
+              ctx.fillText(
+                `[${actionKeyLabel("action")}] Select  [${actionKeyLabel("moveLeft")}/${actionKeyLabel("moveRight")}] Tab  [${actionKeyLabel("inventory")}] Close`,
+                pw / 2,
+                hintY,
+              );
             }
           }
         } else if (tab === "bag") {
           if (filterActive) {
             ctx.fillStyle = "#66cc66";
-            ctx.fillText("Type to search \u00b7 [Esc] Done", pw / 2, hintY);
+            ctx.fillText(`Type to search \u00b7 [${actionKeyLabel("back")}] Done`, pw / 2, hintY);
           } else if (onFilterBar) {
-            ctx.fillText("[E] Search  [X] Sort  [I] Close", pw / 2, hintY);
+            ctx.fillText(
+              `[${actionKeyLabel("action")}] Search  [X] Sort  [${actionKeyLabel("inventory")}] Close`,
+              pw / 2,
+              hintY,
+            );
           } else if (viewBag.length > 0) {
-            ctx.fillText("[E] Use  [Q] Drop  [X] Sort  [I] Close", pw / 2, hintY);
+            ctx.fillText(
+              `[${actionKeyLabel("action")}] Use  [${actionKeyLabel("drop")}] Drop  [X] Sort  [${actionKeyLabel("inventory")}] Close`,
+              pw / 2,
+              hintY,
+            );
           } else {
-            ctx.fillText("[\u2190\u2192] Tab  [I] Close", pw / 2, hintY);
+            ctx.fillText(
+              `[${actionKeyLabel("moveLeft")}/${actionKeyLabel("moveRight")}] Tab  [${actionKeyLabel("inventory")}] Close`,
+              pw / 2,
+              hintY,
+            );
           }
         } else if (tab === "craft") {
           if (RECIPES.length > 0 && craftIdx < RECIPES.length && canCraft(inv, RECIPES[craftIdx])) {
-            ctx.fillText("[E] Craft  [\u2190\u2192] Tab  [I] Close", pw / 2, hintY);
+            ctx.fillText(
+              `[${actionKeyLabel("action")}] Craft  [${actionKeyLabel("moveLeft")}/${actionKeyLabel("moveRight")}] Tab  [${actionKeyLabel("inventory")}] Close`,
+              pw / 2,
+              hintY,
+            );
           } else if (RECIPES.length > 0) {
             ctx.fillStyle = "#555555";
-            ctx.fillText("Missing materials  [\u2190\u2192] Tab  [I] Close", pw / 2, hintY);
+            ctx.fillText(
+              `Missing materials  [${actionKeyLabel("moveLeft")}/${actionKeyLabel("moveRight")}] Tab  [${actionKeyLabel("inventory")}] Close`,
+              pw / 2,
+              hintY,
+            );
           } else {
-            ctx.fillText("[\u2190\u2192] Tab  [I] Close", pw / 2, hintY);
+            ctx.fillText(
+              `[${actionKeyLabel("moveLeft")}/${actionKeyLabel("moveRight")}] Tab  [${actionKeyLabel("inventory")}] Close`,
+              pw / 2,
+              hintY,
+            );
           }
         }
       },

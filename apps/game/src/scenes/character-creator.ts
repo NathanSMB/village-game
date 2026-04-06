@@ -9,7 +9,7 @@ import {
   SEX_OPTIONS,
   SKIN_TONES,
 } from "../data/character-options.ts";
-import { wasActionPressed } from "../systems/keybinds.ts";
+import { actionKeyLabel, wasActionPressed } from "../systems/keybinds.ts";
 import { getCharacterPreviewSprite } from "../systems/character-compositor.ts";
 import { UI_REF_HEIGHT } from "../systems/ui-scale.ts";
 
@@ -273,7 +273,7 @@ export class CharacterCreator extends ex.Scene {
     } else if (this.playerName) {
       this.nameValueLabel.text = this.playerName;
     } else {
-      this.nameValueLabel.text = "(press Enter to type)";
+      this.nameValueLabel.text = `(press ${actionKeyLabel("confirm")} to type)`;
     }
   }
 

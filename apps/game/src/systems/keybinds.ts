@@ -141,6 +141,11 @@ const KEY_NAMES: Partial<Record<Keys, string>> = {
   [Keys.PageDown]: "Page Down",
 };
 
+/** Returns the display name for the primary (slot1) key bound to an action. */
+export function actionKeyLabel(action: ActionName): string {
+  return keyDisplayName(currentBindings[action].slot1);
+}
+
 export function keyDisplayName(key: Keys | null): string {
   if (key == null) return "None";
   const named = KEY_NAMES[key];

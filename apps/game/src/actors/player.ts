@@ -673,6 +673,17 @@ export class Player extends ex.Actor {
     return this.tileY;
   }
 
+  /** Instantly teleport to a tile position. */
+  teleportTo(tx: number, ty: number): void {
+    this.stopMovement();
+    this.tileX = tx;
+    this.tileY = ty;
+    this.targetX = tx;
+    this.targetY = ty;
+    this.pos.x = tileCenter(tx);
+    this.pos.y = tileCenter(ty);
+  }
+
   /** Enter bed: show idle frame facing the given direction (head on pillow), hide weapon. */
   enterBed(facing: Direction = "down"): void {
     this.sleeping = true;

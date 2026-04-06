@@ -841,7 +841,7 @@ export class GameWorld extends ex.Scene<GameWorldData> {
 
     // Lazily create NPC debug panel on first update (engine dimensions are reliable here)
     if (!this.npcDebugPanel) {
-      this.npcDebugPanel = new NPCDebugPanel(engine.drawWidth, engine.drawHeight);
+      this.npcDebugPanel = new NPCDebugPanel(engine.drawWidth, engine.drawHeight, this.uiScale);
       this.npcDebugPanel.graphics.visible = false;
       this.add(this.npcDebugPanel);
       this.npcDebugPanel.setNPCs(this.npcList.filter((n) => !n.isDead));
@@ -861,7 +861,42 @@ export class GameWorld extends ex.Scene<GameWorldData> {
       if (kb.wasPressed(ex.Keys.ArrowRight)) this.npcDebugPanel.cycleNPC(1);
       if (kb.wasPressed(ex.Keys.ArrowUp)) this.npcDebugPanel.scrollUp();
       if (kb.wasPressed(ex.Keys.ArrowDown)) this.npcDebugPanel.scrollDown();
+      if (kb.wasPressed(ex.Keys.T) && this.player) {
+        const npc = this.npcDebugPanel.getSelectedNPC();
+        if (npc) {
+          // Find nearest walkable tile adjacent to the NPC
+          const candidates = [
+            { x: npc.tileX - 1, y: npc.tileY },
+            { x: npc.tileX + 1, y: npc.tileY },
+            { x: npc.tileX, y: npc.tileY - 1 },
+            { x: npc.tileX, y: npc.tileY + 1 },
+          ].filter(
+            (c) =>
+              c.x >= 0 &&
+              c.x < MAP_COLS &&
+              c.y >= 0 &&
+              c.y < MAP_ROWS &&
+              !this.blockedTiles.has(tileKey(c.x, c.y)) &&
+              !this.waterTiles.has(tileKey(c.x, c.y)),
+          );
+          if (candidates.length > 0) {
+            const target = candidates[0];
+            this.player.teleportTo(target.x, target.y);
+          }
+        }
+      }
     }
+
+    // ── World simulation (always runs, even when UI menus are open) ──
+    this.updateChatCleanup();
+    this.updateTreeBranchDrops();
+    this.updateGroundItemDespawn(delta);
+    this.updateSheep(delta);
+    this.updateCows(delta);
+    this.updateBreeding(delta);
+    this.updateWildSpawn(delta);
+    this.updateCowWildSpawn(delta);
+    this.updateNPCs(delta);
 
     // Planning mode input handling
     if (this.planningMode) {
@@ -912,23 +947,6 @@ export class GameWorld extends ex.Scene<GameWorldData> {
       this.handleChatInput(kb);
       return; // Block all other input while chat is open
     }
-
-    // Chat message expiry cleanup
-    this.updateChatCleanup();
-
-    // Tree branch dropping
-    this.updateTreeBranchDrops();
-
-    // Despawn expired ground items
-    this.updateGroundItemDespawn(delta);
-
-    // Creature AI, breeding, and wild spawning
-    this.updateSheep(delta);
-    this.updateCows(delta);
-    this.updateBreeding(delta);
-    this.updateWildSpawn(delta);
-    this.updateCowWildSpawn(delta);
-    this.updateNPCs(delta);
 
     // Death check while inventory is open (game keeps running)
     if (this.inventoryMenuOpen && this.player && !isAlive(this.player.vitals)) {
@@ -5386,7 +5404,7 @@ export class GameWorld extends ex.Scene<GameWorldData> {
     const npc = new NPC(tileX, tileY, def, saved ?? undefined);
     npc.setBlockedCheck((fromX, fromY, toX, toY) => {
       const toKey = tileKey(toX, toY);
-      if (this.blockedTiles.has(toKey)) return true;
+      if (this.blockedTiles.has(toKey) || this.waterTiles.has(toKey)) return true;
       const ek = edgeKeyBetween(fromX, fromY, toX, toY);
       return ek !== null && this.blockedEdges.has(ek);
     });
@@ -6110,7 +6128,7 @@ export class GameWorld extends ex.Scene<GameWorldData> {
       findPathDirections: (fromX, fromY, toX, toY) => {
         const path = findPath(fromX, fromY, toX, toY, (fx, fy, tx, ty) => {
           const k = tileKey(tx, ty);
-          if (this.blockedTiles.has(k)) return true;
+          if (this.blockedTiles.has(k) || this.waterTiles.has(k)) return true;
           const ek = edgeKeyBetween(fx, fy, tx, ty);
           return ek !== null && this.blockedEdges.has(ek);
         });

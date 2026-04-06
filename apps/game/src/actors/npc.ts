@@ -382,7 +382,10 @@ export class NPC extends ex.Actor {
     this.targetY = tileY;
 
     if (saved?.facing) this.facing = saved.facing;
-    if (saved?.sleeping) this.sleeping = saved.sleeping;
+    if (saved?.sleeping) {
+      this.sleeping = true;
+      this.actionState = "sleeping";
+    }
     // Goal system: load currentGoal or migrate from old todoList
     if (saved?.currentGoal) {
       this.currentGoal = {
@@ -424,6 +427,23 @@ export class NPC extends ex.Actor {
     this.weaponActor = new ex.Actor({ anchor: ex.vec(0.5, 0.5), z: 11 });
     this.addChild(this.weaponActor);
     this.setupWeaponOverlay();
+
+    // Name label above head
+    const nameText = new ex.Text({
+      text: this.npcName,
+      font: new ex.Font({
+        family: "monospace",
+        size: 8,
+        bold: true,
+        color: ex.Color.White,
+        textAlign: ex.TextAlign.Center,
+        baseAlign: ex.BaseAlign.Bottom,
+        shadow: { offset: ex.vec(1, 1), color: ex.Color.Black },
+      }),
+    });
+    const nameLabel = new ex.Actor({ pos: ex.vec(0, -18), anchor: ex.vec(0, 0), z: 100 });
+    nameLabel.graphics.use(nameText);
+    this.addChild(nameLabel);
 
     this.showFrame(DIR_OFFSET[this.facing]);
   }

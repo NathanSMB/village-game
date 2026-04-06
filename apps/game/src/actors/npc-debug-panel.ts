@@ -7,6 +7,7 @@
  */
 
 import * as ex from "excalibur";
+import { UI_REF_HEIGHT } from "../systems/ui-scale.ts";
 import type { NPC } from "./npc.ts";
 
 const W = 340;
@@ -64,12 +65,15 @@ export class NPCDebugPanel extends ex.ScreenElement {
   private scrollOffset = 0;
   private canvas: ex.Canvas;
 
-  constructor(screenWidth: number, screenHeight: number) {
+  constructor(screenWidth: number, screenHeight: number, uiScale = 1) {
+    // ScreenElement coordinates are design-units × uiScale.
+    // The chat panel proves: left=8*uiScale, bottom=(600-8)*uiScale.
+    // The right edge in design units = 600 * (screenWidth / screenHeight) (aspect ratio).
+    const refWidth = UI_REF_HEIGHT * (screenWidth / screenHeight);
     super({
-      x: screenWidth - W - 8,
-      y: (screenHeight - H) / 2,
+      pos: ex.vec((refWidth - 8) * uiScale, (UI_REF_HEIGHT - 8) * uiScale),
       z: 300,
-      anchor: ex.vec(0, 0),
+      anchor: ex.vec(1, 1),
     });
 
     this.canvas = new ex.Canvas({
@@ -94,6 +98,10 @@ export class NPCDebugPanel extends ex.ScreenElement {
 
   scrollUp(): void {
     if (this.scrollOffset > 0) this.scrollOffset--;
+  }
+
+  getSelectedNPC(): NPC | null {
+    return this.npcs[this.selectedIndex] ?? null;
   }
 
   scrollDown(): void {
@@ -138,7 +146,9 @@ export class NPCDebugPanel extends ex.ScreenElement {
     ctx.font = "11px monospace";
     ctx.fillStyle = DIM_COLOR;
     if (this.npcs.length > 1) {
-      ctx.fillText("← →  to cycle", W / 2, y);
+      ctx.fillText("← →  cycle   T  teleport", W / 2, y);
+    } else {
+      ctx.fillText("T  teleport to NPC", W / 2, y);
     }
     y += LINE;
 

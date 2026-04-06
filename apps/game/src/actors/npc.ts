@@ -23,6 +23,7 @@ import type {
   NPCSaveState,
   NPCActionState,
   NPCTodoItem,
+  ActionLogEntry,
 } from "../types/npc.ts";
 import { compositeCharacter } from "../systems/character-compositor.ts";
 import { getWeaponSpriteSheet } from "../systems/sprite-loader.ts";
@@ -232,6 +233,18 @@ export class NPC extends ex.Actor {
     }
   }
 
+  // Action log — rolling log of actions + results sent to LLM for context
+  actionLog: ActionLogEntry[] = [];
+  private static readonly MAX_ACTION_LOG = 30;
+
+  /** Add an action log entry (keeps newest 30, FIFO). */
+  pushActionLog(tick: number, action: string, result: string, changes?: string): void {
+    this.actionLog.push({ tick, action, result, changes });
+    if (this.actionLog.length > NPC.MAX_ACTION_LOG) {
+      this.actionLog.splice(0, this.actionLog.length - NPC.MAX_ACTION_LOG);
+    }
+  }
+
   // Chat history — rolling log of recent messages (sent + received), kept across LLM calls
   chatHistory: ChatMessage[] = [];
   /** Timestamp of the last chat message this NPC sent (for cooldown). */
@@ -359,6 +372,7 @@ export class NPC extends ex.Actor {
     if (saved?.sleeping) this.sleeping = saved.sleeping;
     if (saved?.todoList) this.todoList = saved.todoList.map((t) => ({ ...t }));
     if (saved?.knownLocations) this.knownLocations = { ...saved.knownLocations };
+    if (saved?.actionLog) this.actionLog = saved.actionLog.map((e) => ({ ...e }));
     if (saved?.claimedBed) this.claimedBed = { ...saved.claimedBed };
 
     // Vitals & inventory
@@ -739,6 +753,7 @@ export class NPC extends ex.Actor {
       todoList: this.todoList.map((t) => ({ ...t })),
       claimedBed: this.claimedBed ? { ...this.claimedBed } : null,
       knownLocations: { ...this.knownLocations },
+      actionLog: this.actionLog.map((e) => ({ ...e })),
     };
   }
 }

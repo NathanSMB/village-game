@@ -5502,9 +5502,11 @@ export class GameWorld extends ex.Scene<GameWorldData> {
       const dir = dirs[Math.floor(Math.random() * 4)];
       npc.moveToTile(dir);
       npc.pushDebugHistory(`{"action":"move","direction":"${dir}"}`, "✓ fallback");
+      npc.pushActionLog(Date.now(), `move(${dir})`, "ok: fallback wander");
     } else {
       npc.startWaiting(2000 + Math.random() * 3000);
       npc.pushDebugHistory('{"action":"wait"}', "✓ fallback");
+      npc.pushActionLog(Date.now(), "wait", "ok: fallback");
     }
   }
 
@@ -5587,6 +5589,12 @@ export class GameWorld extends ex.Scene<GameWorldData> {
           const summary = todos.map((t) => t.task).join(" → ");
           npc.debugLastResult = `✓ Plan: ${summary.slice(0, 80)}`;
           npc.pushDebugHistory('{"action":"plan"}', `✓ ${todos.length} todos`, worldChanges);
+          npc.pushActionLog(
+            Date.now(),
+            "plan",
+            `ok: ${todos.length} todos — ${summary.slice(0, 80)}`,
+            worldChanges || undefined,
+          );
           this.npcInFlight.delete(npc.npcId);
           npc.debugThinking = false;
           return;
@@ -5599,6 +5607,12 @@ export class GameWorld extends ex.Scene<GameWorldData> {
           const answer = await thinkAboutQuestion(npc, snapshot, config, abortController.signal);
           npc.debugLastResult = `✓ Thought: ${answer.slice(0, 80)}`;
           npc.pushDebugHistory('{"action":"think"}', `✓ ${answer.slice(0, 60)}`, worldChanges);
+          npc.pushActionLog(
+            Date.now(),
+            "think",
+            `ok: ${answer.slice(0, 80)}`,
+            worldChanges || undefined,
+          );
           this.npcInFlight.delete(npc.npcId);
           npc.debugThinking = false;
           return;
@@ -5612,6 +5626,7 @@ export class GameWorld extends ex.Scene<GameWorldData> {
           : `✗ ${result.reason ?? "failed"}`;
         npc.debugLastResult = resultStr;
         npc.pushDebugHistory(actionJson, resultStr, worldChanges);
+        npc.pushActionLog(Date.now(), actionJson, resultStr, worldChanges || undefined);
 
         // Stuck detection: if same action fails 3+ times, force replan
         if (result.success) {
@@ -5730,7 +5745,7 @@ export class GameWorld extends ex.Scene<GameWorldData> {
             type: "sheep",
             x: tx,
             y: ty,
-            details: `sheep (HP: ${sheep.hp}/${sheep.maxHp}) — attack with {"action":"attack","targetType":"sheep","x":${tx},"y":${ty}}`,
+            details: `sheep (HP: ${sheep.hp}/${sheep.maxHp}) — attack with <attack targetType="sheep" x="${tx}" y="${ty}"/>`,
           });
         }
 
@@ -5741,7 +5756,7 @@ export class GameWorld extends ex.Scene<GameWorldData> {
             type: "cow",
             x: tx,
             y: ty,
-            details: `cow (HP: ${cow.hp}/${cow.maxHp}) — attack with {"action":"attack","targetType":"cow","x":${tx},"y":${ty}}`,
+            details: `cow (HP: ${cow.hp}/${cow.maxHp}) — attack with <attack targetType="cow" x="${tx}" y="${ty}"/>`,
           });
         }
 

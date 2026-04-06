@@ -324,15 +324,23 @@ async function callOpenRouter(
   let content = choice?.message?.content;
 
   // Reasoning models may put all tokens into reasoning with null content.
-  // Try to extract a JSON action from the reasoning text as a fallback.
+  // Try to extract an XML action or JSON action from the reasoning text as a fallback.
   if (!content && choice?.message?.reasoning) {
     const reasoning = choice.message.reasoning;
-    const jsonMatch = reasoning.match(/\{[^{}]*"action"\s*:\s*"[^"]+?"[^{}]*\}/);
-    if (jsonMatch) {
-      content = jsonMatch[0];
-      console.info("[LLM] Extracted action from reasoning:", content);
+    // Try XML self-closing element first: <action_name .../>
+    const xmlMatch = reasoning.match(/<(\w+)(?:\s+\w+="[^"]*")*\s*\/>/);
+    if (xmlMatch) {
+      content = xmlMatch[0];
+      console.info("[LLM] Extracted XML action from reasoning:", content);
     } else {
-      console.warn("[LLM] OpenRouter: content null, reasoning had no JSON action");
+      // Fallback to JSON extraction
+      const jsonMatch = reasoning.match(/\{[^{}]*"action"\s*:\s*"[^"]+?"[^{}]*\}/);
+      if (jsonMatch) {
+        content = jsonMatch[0];
+        console.info("[LLM] Extracted JSON action from reasoning:", content);
+      } else {
+        console.warn("[LLM] OpenRouter: content null, reasoning had no action");
+      }
     }
   }
 

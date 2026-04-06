@@ -697,7 +697,7 @@ function execBuildPlan(
     const loc = world.getHologramLocation();
     return {
       success: false,
-      reason: `Uncompleted hologram exists${loc ? ` at (${loc.x},${loc.y})` : ""}! Use {"action":"construct","x":${loc?.x ?? 0},"y":${loc?.y ?? 0}} to build it.`,
+      reason: `Uncompleted hologram exists${loc ? ` at (${loc.x},${loc.y})` : ""}! Use <construct x="${loc?.x ?? 0}" y="${loc?.y ?? 0}"/> to build it.`,
     };
   }
   const placed = world.npcPlaceBuilding(buildingId, x, y, rotation, orientation);

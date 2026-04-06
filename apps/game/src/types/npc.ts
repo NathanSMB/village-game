@@ -19,6 +19,15 @@ export interface NPCMemoryState {
   notes: string[];
 }
 
+// ── Action Log (for LLM context) ────────────────────────────────
+
+export interface ActionLogEntry {
+  tick: number;
+  action: string;
+  result: string;
+  changes?: string;
+}
+
 // ── Todo List ────────────────────────────────────────────────────
 
 export interface NPCTodoItem {
@@ -67,6 +76,7 @@ export interface NPCSaveState {
   todoList: NPCTodoItem[];
   claimedBed: { x: number; y: number } | null;
   knownLocations: Record<string, string>;
+  actionLog?: ActionLogEntry[];
 }
 
 // ── World Snapshot (what the NPC can see) ────────────────────────────

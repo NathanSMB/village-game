@@ -1,10 +1,15 @@
 /**
  * NPC Brain — Prompt construction, world snapshot assembly,
  * LLM response parsing, and decision dispatch.
+ *
+ * Prompt is structured as XML with 3 content blocks optimised for caching:
+ *   Block 1 (cached): <INSTRUCTIONS> + <ACTION_DEFINITIONS>  — shared across ALL NPCs
+ *   Block 2 (cached): <CHARACTER_DEFINITION>                  — per-NPC identity
+ *   Block 3 (volatile): state, world, social, memory, action log
  */
 
 import type { NPC } from "../actors/npc.ts";
-import type { WorldSnapshot, NPCAction, EntityInfo, NPCTodoItem } from "../types/npc.ts";
+import type { WorldSnapshot, NPCAction, EntityInfo, NPCGoal, NPCStep } from "../types/npc.ts";
 import type { ChatMessage } from "../types/chat.ts";
 import type { LLMProviderConfig, LLMMessage, LLMContentBlock } from "./llm-provider.ts";
 import { callLLM, callThinkingLLM } from "./llm-provider.ts";
@@ -14,32 +19,57 @@ import { BUILDING_TYPES } from "../data/buildings.ts";
 import { COOKING_RECIPES } from "../data/cooking.ts";
 import { ITEMS } from "../data/items.ts";
 
-// ── Action schema (included in the system prompt) ────────────────────
+// ═════════════════════════════════════════════════════════════════════
+// Block 1 — Shared static content (cached, identical across ALL NPCs)
+// ═════════════════════════════════════════════════════════════════════
 
-const ACTION_SCHEMA = `
-ACTIONS (respond with exactly ONE JSON object):
+const SHARED_STATIC = `<INSTRUCTIONS>
+RULES — READ CAREFULLY:
+1. Follow the output format specified for your current task.
+2. Directions: "up"=north "down"=south "left"=west "right"=east.
+3. AUTO-WALK: All interaction actions support x,y coordinates. Provide the target's coordinates and the NPC will automatically walk there and execute the action. No need to move_to first! Use coordinates from KNOWN_GAME_WORLD or WORLD_VIEW.
+4. ALWAYS have a goal. No goal? Your ONLY action must be <plan/>. You CANNOT skip this.
+5. SURVIVAL ALWAYS COMES FIRST: Thirst > Hunger > Energy. If EMERGENCY_ALERTS exist, you MUST address them before doing ANYTHING else — ignore your current plan. Thirst drains FAST (empty in 4 min). Drink at water when below 60, eat when below 50. No bed? Place a bedroll with <build_plan buildingId="bedroll" x="NUM" y="NUM"/> (costs 1 cow_hide + 1 wool — bedroll is a BUILDING, not a craft recipe).
+6. ENERGY: Drains at 1/sec while awake. ONLY recovers by sleeping in YOUR bed. At 0 energy you are EXHAUSTED — you can only sleep, eat, and chat. You cannot gather, build, attack, or move normally. Half speed.
+8. EQUIP YOUR TOOLS: Before chopping trees, equip a hatchet. Before mining rocks, equip a pickaxe. Before fighting, equip your best weapon (spear > hammer > unarmed). Before building, equip a hammer. Use "equip" with the bag index. Tools make a HUGE difference in damage.
+9. BE ACTIVE: Move, gather, craft, explore, talk. The world is large (64x64) with resources spread everywhere.
+10. NEVER wait if there's something useful you could do instead. Only use "wait" if you truly have nothing to do.
+11. DON'T CAMP: If a resource is depleted, MOVE ON. Don't wait for respawns.
+12. EXPLORE: If you don't see what you need, use "move_to" to walk somewhere new.
+
+CHAT RULES:
+- You may freely RESPOND to unread messages at any time — no cooldown.
+- To initiate conversation (greetings, comments, reactions): only once every 30 seconds.
+- NEVER repeat something you already said — check the conversation log.
+- After chatting, wait for a reply before sending another message.
+- Keep messages short (under 60 characters). Volume adjusts automatically.
+</INSTRUCTIONS>
+
+<ACTION_DEFINITIONS>
+AVAILABLE ACTIONS (output ONE as an XML element):
 
 Planning & Thinking:
-  {"action":"plan"} — Ask your reasoning mind to create a new plan (todo list). Use when you have no todos or need a new plan.
-  {"action":"complete_todo","todoIndex":<num>} — Mark a todo item as done. When all items are done, the plan is complete and you should "plan" again.
-  {"action":"think"} — Consult your reasoning mind for advice on what to do next
+  <plan/> — Create a new goal with steps. Use when you have no goal or need a completely new direction.
+  <modify_plan/> — Add steps to your current goal without removing existing ones. Use when you're stuck or need extra steps. Preserves your goal.
+  <complete_step stepIndex="NUM"/> — Mark a step as done. When all steps are done, a new plan is created automatically.
+  <think/> — Consult your reasoning mind for advice on what to do next
 
 Movement:
-  {"action":"move_to","x":<num>,"y":<num>} — Walk to a tile (auto-pathfinds, use for ALL movement)
+  <move_to x="NUM" y="NUM"/> — Walk to a tile (auto-pathfinds, use for ALL movement)
 
 Gathering (all auto-walk to target if x,y provided, auto-find adjacent resource, no direction needed):
-  {"action":"pick_bush","x":<num>,"y":<num>} — Walk to and pick berries → berry [+10 hunger]
-  {"action":"chop_tree","x":<num>,"y":<num>} — Walk to and chop tree → branch (per hit), 6x log (felled). Hatchet 5x faster.
-  {"action":"mine_rock","x":<num>,"y":<num>} — Walk to and mine rock → small_rock/large_stone/flint. Pickaxe 5x faster.
-  {"action":"drink_water","x":<num>,"y":<num>} — Walk to water and drink → +25 thirst
-  {"action":"pick_up_item","itemId":"<item_id>","x":<num>,"y":<num>} — Walk to and pick up item (e.g. "branch")
+  <pick_bush x="NUM" y="NUM"/> — Walk to and pick berries → berry [+10 hunger]
+  <chop_tree x="NUM" y="NUM" autoRepeat="true"/> — Walk to and chop tree until felled → branch (per hit), 6x log (felled). Hatchet 5x faster. Use autoRepeat="true" to keep chopping until the tree falls.
+  <mine_rock x="NUM" y="NUM" autoRepeat="true"/> — Walk to and mine rock until items drop → small_rock/large_stone/flint. Pickaxe 5x faster. Use autoRepeat="true" to keep mining until a drop.
+  <drink_water x="NUM" y="NUM"/> — Walk to water and drink → +25 thirst
+  <pick_up_item itemId="ITEM_ID" x="NUM" y="NUM"/> — Walk to and pick up item (e.g. "branch")
 
 Combat:
-  {"action":"attack","targetType":"<sheep|cow>","x":<num>,"y":<num>} — Auto-walk to creature and attack (PREFERRED)
-  {"action":"attack","direction":"<dir>"} — Face direction and attack (melee only)
-  {"action":"attack"} — Attack in current facing direction
+  <attack targetType="sheep|cow" x="NUM" y="NUM" autoRepeat="true"/> — Auto-walk to creature and attack. Use autoRepeat="true" to keep attacking until it dies.
+  <attack direction="DIR"/> — Face direction and attack (melee only)
+  <attack/> — Attack in current facing direction
 
-ITEM REFERENCE:
+<ITEM_REFERENCE>
 ${Object.values(ITEMS)
   .map((item) => {
     const parts = [`${item.id}: ${item.description}`];
@@ -59,90 +89,79 @@ ${Object.values(ITEMS)
     return `  ${parts.join(" | ")}`;
   })
   .join("\n")}
+</ITEM_REFERENCE>
 
-Crafting recipes: ${RECIPES.map((r) => `${r.id}(${r.ingredients.map((i) => `${i.count}x ${i.itemId}`).join("+")} -> ${r.name}${r.resultQuantity ? ` x${r.resultQuantity}` : ""})`).join(", ")}
-  {"action":"craft","recipeId":"<id>"} — Craft if you have the materials
+<CRAFTING_RECIPES>
+  <craft recipeId="ID"/> — Craft if you have the materials
+${RECIPES.map((r) => `  <recipe id="${r.id}" ingredients="${r.ingredients.map((i) => `${i.count}x ${i.itemId}`).join(", ")}" result="${r.name}${r.resultQuantity ? ` x${r.resultQuantity}` : ""}"/>`).join("\n")}
+</CRAFTING_RECIPES>
 
-Cooking: ${COOKING_RECIPES.map((r) => `${r.inputId} -> ${r.outputId}`).join(", ")}
-  {"action":"cook","inputItemId":"<id>","x":<num>,"y":<num>} — Walk to fire and cook (auto-walks if x,y given)
+<COOKING_RECIPES>
+  <cook inputItemId="ID" x="NUM" y="NUM"/> — Walk to a BURNING fire and cook. Fire must be lit first! To light a fire_pit or hearth, walk to it and interact with 1 flint + 1 log in your bag.
+${COOKING_RECIPES.map((r) => `  <recipe input="${r.inputId}" output="${r.outputId}"/>`).join("\n")}
+</COOKING_RECIPES>
 
-Building recipes: ${BUILDING_TYPES.map((b) => `${b.id}(${b.ingredients.map((i) => `${i.count}x ${i.itemId}`).join("+")}${b.storage ? `, ${b.storage.slotCount} slots` : ""}${b.fire ? ", cookable" : ""}${b.requiresIndoor ? ", indoor only" : ""}, ${b.placement})`).join(", ")}
-  Tile buildings (floor, bed, fire_pit, hearth, box_*): {"action":"build_plan","buildingId":"<id>","x":<num>,"y":<num>,"rotation":<0-3>}
+<BUILDING_RECIPES>
+  Tile buildings (floor, bed, fire_pit, hearth, box_*):
+    <build_plan buildingId="ID" x="NUM" y="NUM" rotation="0-3"/>
     rotation: 0-3 = clockwise quarter-turns (0=default). Matters for beds.
-  Edge buildings (wall, wall_window, wall_door, fence, fence_gate): {"action":"build_plan","buildingId":"<id>","x":<num>,"y":<num>,"orientation":"N|E|S|W"}
+  Edge buildings (wall, wall_window, wall_door, fence, fence_gate):
+    <build_plan buildingId="ID" x="NUM" y="NUM" orientation="N|E|S|W"/>
     orientation: which side of tile (x,y) to place the wall on. N/S = horizontal wall, E/W = vertical wall.
   To build a room: place floors on all tiles, then walls on all edges around them. "Indoor" = enclosed floor area fully surrounded by walls.
-  {"action":"construct","x":<num>,"y":<num>} — Walk to a hologram and build it (auto-equips hammer, auto-attacks). Use this on holograms!
+  <construct x="NUM" y="NUM"/> — Walk to a hologram and build it (auto-equips hammer, auto-attacks). Use this on holograms!
   BUILDING WORKFLOW:
     1. Place hologram ONCE with build_plan
     2. Use construct with the hologram's coordinates — it auto-walks there, checks for hammer + materials, and builds it
     If you see a hologram in VISIBLE, use construct on it — don't place another one!
+${BUILDING_TYPES.map((b) => `  <building id="${b.id}" ingredients="${b.ingredients.map((i) => `${i.count}x ${i.itemId}`).join(", ")}" placement="${b.placement}"${b.storage ? ` storage="${b.storage.slotCount} slots"` : ""}${b.fire ? ' cookable="true"' : ""}${b.requiresIndoor ? ' indoor="true"' : ""}/>`).join("\n")}
+</BUILDING_RECIPES>
 
 Inventory:
-  {"action":"equip","bagIndex":<num>} — Equip item from bag
-  {"action":"unequip","slot":"<slot>"} — Unequip (head/torso/hands/legs/feet/mainHand/offHand)
-  {"action":"consume","bagIndex":<num>} — Eat/drink a consumable
-  {"action":"drop_item","bagIndex":<num>} — Drop item on ground
+  <equip bagIndex="NUM"/> — Equip item from bag
+  <unequip slot="SLOT"/> — Unequip (head/torso/hands/legs/feet/mainHand/offHand)
+  <consume bagIndex="NUM"/> — Eat/drink a consumable
+  <drop_item bagIndex="NUM"/> — Drop item on ground
 
 Interaction (all auto-walk to target if x,y provided):
-  {"action":"open_door","x":<num>,"y":<num>} / {"action":"close_door","x":<num>,"y":<num>}
-  {"action":"claim_bed","x":<num>,"y":<num>} — Claim an UNCLAIMED bed (check visible list — beds marked [claimed] cannot be claimed! Build your own bedroll instead.)
-  {"action":"sleep","x":<num>,"y":<num>} — Walk to YOUR claimed bed and sleep. Restores energy.
-  {"action":"wake_up"}
-  {"action":"store_item","bagIndex":<num>,"x":<num>,"y":<num>} / {"action":"retrieve_item","slotIndex":<num>,"x":<num>,"y":<num>}
+  <open_door x="NUM" y="NUM"/> / <close_door x="NUM" y="NUM"/>
+  <claim_bed x="NUM" y="NUM"/> — Claim an UNCLAIMED bed (check visible list — beds marked [claimed] cannot be claimed! Place your own bedroll with build_plan instead.)
+  <sleep x="NUM" y="NUM"/> — Walk to YOUR claimed bed and sleep. Restores energy.
+  <wake_up/>
+  <store_item bagIndex="NUM" x="NUM" y="NUM"/> / <retrieve_item slotIndex="NUM" x="NUM" y="NUM"/>
 
 Communication:
-  {"action":"chat","text":"<msg>"} — Say something (volume auto-adjusts based on distance to nearest listener)
+  <chat text="MSG"/> — Say something (volume auto-adjusts based on distance to nearest listener)
+  <chat text="MSG" target="NAME"/> — Say something to a specific person. Fails if they're more than 10 tiles away.
 
 Memory:
-  {"action":"remember","note":"<text>"} — Save a note (max 20)
-  {"action":"forget","noteIndex":<num>} — Delete a note
+  <remember note="TEXT"/> — Save a note (max 20)
+  <forget noteIndex="NUM"/> — Delete a note
 
 Wait (LAST RESORT — prefer moving/exploring instead):
-  {"action":"wait","durationMs":<2000-8000>} — Only if truly nothing to do
-`.trim();
+  <wait durationMs="2000-8000"/> — Only if truly nothing to do
+</ACTION_DEFINITIONS>`;
 
-// ── Static rules (identical across all NPCs/calls — cached by LLM providers) ──
+// ═════════════════════════════════════════════════════════════════════
+// Block 2 — Per-NPC character definition (cached per NPC identity)
+// ═════════════════════════════════════════════════════════════════════
 
-const STATIC_RULES = `RULES — READ CAREFULLY:
-1. Output ONLY one JSON object. No text, no markdown.
-2. Directions: "up"=north "down"=south "left"=west "right"=east.
-3. AUTO-WALK: All interaction actions support x,y coordinates. Provide the target's coordinates and the NPC will automatically walk there and execute the action. No need to move_to first! Use coordinates from the VISIBLE list or KNOWN LOCATIONS.
-4. ALWAYS have a plan. No todo list? Your ONLY action must be "plan". You CANNOT skip this.
-5. SURVIVAL PRIORITY ORDER: Thirst > Hunger > Energy. If any are low, address them. No bed? Build a bedroll (1 cow_hide + 1 wool).
-6. ENERGY: Drains at 1/sec while awake. ONLY recovers by sleeping in YOUR bed. At 0 energy you are EXHAUSTED — you can only sleep, eat, and chat. You cannot gather, build, attack, or move normally. Half speed.
-8. EQUIP YOUR TOOLS: Before chopping trees, equip a hatchet. Before mining rocks, equip a pickaxe. Before fighting, equip your best weapon (spear > hammer > unarmed). Before building, equip a hammer. Use "equip" with the bag index. Tools make a HUGE difference in damage.
-9. BE ACTIVE: Move, gather, craft, explore, talk. The world is large (64x64) with resources spread everywhere.
-10. NEVER wait if there's something useful you could do instead. Only use "wait" if you truly have nothing to do.
-11. DON'T CAMP: If a resource is depleted, MOVE ON. Don't wait for respawns.
-12. EXPLORE: If you don't see what you need, use "move_to" to walk somewhere new.`;
-
-/** Static game context for the action model — identical across all NPCs and calls. */
-const STATIC_ACTION_CONTEXT = `${ACTION_SCHEMA}\n\n${STATIC_RULES}`;
-
-/** Helper to build system message content blocks with a cached static prefix. */
-function cachedSystemContent(staticPrefix: string, dynamicContent: string): LLMContentBlock[] {
-  return [
-    { type: "text", text: staticPrefix, cache_control: { type: "ephemeral" } },
-    { type: "text", text: dynamicContent },
-  ];
+function buildCharacterBlock(npc: NPC): string {
+  const { personality } = npc;
+  return `<CHARACTER_DEFINITION>
+You are ${personality.name}, a villager in a 64x64 wilderness. You are a REAL CHARACTER with feelings, opinions, and a voice.
+${personality.backstory}
+Traits: ${personality.traits}
+ROLEPLAY: Stay in character! Use "chat" to comment on what you're doing, react to things you see, greet people nearby, or just think out loud. You are NOT a silent robot — you're a person living in this world.
+</CHARACTER_DEFINITION>`;
 }
 
-// ── Shared context builder ───────────────────────────────────────────
+// ═════════════════════════════════════════════════════════════════════
+// Block 3 — Volatile state (NOT cached, changes every call)
+// ═════════════════════════════════════════════════════════════════════
 
-interface NPCContext {
-  equipStr: string;
-  bagStr: string;
-  entityLines: string;
-  chatLines: string;
-  newMsgLines: string;
-  noteLines: string;
-  knownLocStr: string;
-  historyStr: string;
-  thinkingLines: string;
-}
-
-function buildNPCContext(npc: NPC, snapshot: WorldSnapshot): NPCContext {
+/** Shared context assembly — collects all volatile NPC/world state. */
+function buildContextParts(npc: NPC, snapshot: WorldSnapshot) {
   // Equipment summary
   const equipped: string[] = [];
   for (const [slot, item] of Object.entries(npc.inventory.equipment)) {
@@ -210,14 +229,13 @@ function buildNPCContext(npc: NPC, snapshot: WorldSnapshot): NPCContext {
       .join("\n");
   }
 
-  // Recent action history with world state changes
-  const recentHistory = npc.debugHistory.slice(0, 3);
-  const historyStr =
-    recentHistory.length > 0
-      ? recentHistory
-          .map((h) => {
-            let line = `  ${h.action} => ${h.result}`;
-            if (h.changes) line += `\n    world: ${h.changes}`;
+  // Action log (replaces old 3-item debugHistory in prompt)
+  const actionLogLines =
+    npc.actionLog.length > 0
+      ? npc.actionLog
+          .map((e) => {
+            let line = `  [${e.tick}] ${e.action} → ${e.result}`;
+            if (e.changes) line += ` | world: ${e.changes}`;
             return line;
           })
           .join("\n")
@@ -237,74 +255,54 @@ function buildNPCContext(npc: NPC, snapshot: WorldSnapshot): NPCContext {
     newMsgLines,
     noteLines,
     knownLocStr,
-    historyStr,
+    actionLogLines,
     thinkingLines,
   };
 }
 
-// ── System prompt builder (small action model) ──────────────────────
-
-function buildSystemPrompt(npc: NPC, snapshot: WorldSnapshot): string {
-  const ctx = buildNPCContext(npc, snapshot);
-  const { personality, vitals, facing, tileX, tileY } = npc;
-
-  // Todo list section
-  let planSection: string;
-  if (npc.todoList.length === 0) {
-    planSection = `NO PLAN — Your ONLY valid action right now is {"action":"plan"}. You CANNOT do anything else until you have a plan. Output: {"action":"plan"}`;
-  } else {
-    const todoLines = npc.todoList
-      .map(
-        (t, i) =>
-          `  [${i}] ${t.done ? "DONE" : "TODO"}: ${t.task}\n       Done when: ${t.doneWhen}`,
-      )
-      .join("\n");
-    const nextTodo = npc.todoList.findIndex((t) => !t.done);
-    if (nextTodo >= 0) {
-      const next = npc.todoList[nextTodo];
-      planSection = `YOUR TODO LIST:\n${todoLines}\n→ FOCUS: item [${nextTodo}] — "${next.task}"\n  Complete it when: ${next.doneWhen}\n  Use complete_todo ONLY when the condition above is met. Check your bag/vitals to verify.`;
-    } else {
-      planSection = `YOUR TODO LIST:\n${todoLines}\nAll items done! Use {"action":"plan"} for a new plan.`;
-    }
-  }
-
-  // Bed info
-  const bedStr = npc.claimedBed
-    ? `Claimed bed at (${npc.claimedBed.x},${npc.claimedBed.y})`
-    : "NO BED CLAIMED — Build a bedroll (1 cow_hide + 1 wool): kill a cow for hide, kill a sheep for wool, craft bedroll, place it with build_plan, then claim_bed. Do NOT try to claim someone else's bed!";
-
-  // Emergency survival alerts
+/** Build emergency alerts (survival warnings). Returns empty string if no emergencies. */
+function buildEmergencyAlerts(npc: NPC): { block: string; hasCritical: boolean } {
+  const { vitals } = npc;
   const emergencies: string[] = [];
 
   // No bed is ALWAYS an emergency — it should be the #1 priority
   if (!npc.claimedBed) {
     emergencies.push(
-      `!!! #1 PRIORITY: YOU HAVE NO BED !!! Without a bed you WILL DIE — energy cannot recover, at 0 energy you become exhausted and helpless, then thirst/hunger drain your HP to 0. Full steps: 1) Mine rock → small_rock 2) Chop tree → branch 3) Craft hammer (1 small_rock + 1 branch) 4) Kill a cow → cow_hide 5) Kill a sheep → wool 6) Craft bedroll (1 cow_hide + 1 wool) 7) Place bedroll with build_plan 8) Equip hammer + construct the bedroll 9) claim_bed 10) Sleep. This is MORE IMPORTANT than anything else!`,
+      `!!! #1 PRIORITY: YOU HAVE NO BED !!! Without a bed you WILL DIE — energy cannot recover, at 0 energy you become exhausted and helpless, then thirst/hunger drain your HP to 0. Full steps: 1) Mine rock → small_rock 2) Chop tree → branch 3) Craft hammer (1 small_rock + 1 branch) 4) Kill a cow → cow_hide 5) Kill a sheep → wool 6) Place bedroll with <build_plan buildingId="bedroll" x="X" y="Y"/> (costs 1 cow_hide + 1 wool — bedroll is a BUILDING, NOT a craft recipe!) 7) Equip hammer + <construct x="X" y="Y"/> the hologram 8) <claim_bed x="X" y="Y"/> 9) Sleep. This is MORE IMPORTANT than anything else!`,
     );
   }
 
-  if (vitals.thirst <= 30) {
+  if (vitals.thirst <= 60) {
     const waterLoc = Object.keys(npc.knownLocations).find((k) => k.startsWith("water:"));
     const waterCoords = waterLoc ? waterLoc.split(":")[1] : null;
-    if (vitals.thirst <= 15) {
+    if (vitals.thirst <= 20) {
       emergencies.push(
-        `!!! DYING OF THIRST (${Math.round(vitals.thirst)}/100) !!! Drink until above 90!${waterCoords ? ` Use: {"action":"drink_water","x":${waterCoords.split(",")[0]},"y":${waterCoords.split(",")[1]}}` : " Find water IMMEDIATELY!"}`,
+        `!!! DYING OF THIRST (${Math.round(vitals.thirst)}/100) !!! DROP EVERYTHING and drink until above 90!${waterCoords ? ` Use: <drink_water x="${waterCoords.split(",")[0]}" y="${waterCoords.split(",")[1]}"/>` : " Find water IMMEDIATELY!"}`,
+      );
+    } else if (vitals.thirst <= 40) {
+      emergencies.push(
+        `!!! THIRST CRITICAL (${Math.round(vitals.thirst)}/100) !!! You will die soon. Go drink water NOW — drink until above 90.${waterCoords ? ` Use: <drink_water x="${waterCoords.split(",")[0]}" y="${waterCoords.split(",")[1]}"/>` : " Find water!"}`,
       );
     } else {
       emergencies.push(
-        `WARNING: Thirst is low (${Math.round(vitals.thirst)}/100). Drink until above 90.${waterCoords ? ` Known water at (${waterCoords}).` : ""}`,
+        `WARNING: Thirst dropping (${Math.round(vitals.thirst)}/100). Go drink water soon — you dehydrate fast.${waterCoords ? ` Known water at (${waterCoords}).` : ""}`,
       );
     }
   }
-  if (vitals.hunger <= 30) {
+  if (vitals.hunger <= 50) {
     const hasBerry = npc.inventory.bag.some((i) => i.consumable);
-    if (vitals.hunger <= 15) {
+    const berryIdx = npc.inventory.bag.findIndex((i) => i.consumable);
+    if (vitals.hunger <= 20) {
       emergencies.push(
-        `!!! STARVING (${Math.round(vitals.hunger)}/100) !!! Eat until above 70!${hasBerry ? ` You have food — use {"action":"consume","bagIndex":${npc.inventory.bag.findIndex((i) => i.consumable)}}` : " Find berries or cook meat!"}`,
+        `!!! STARVING (${Math.round(vitals.hunger)}/100) !!! DROP EVERYTHING and eat until above 70!${hasBerry ? ` You have food — use <consume bagIndex="${berryIdx}"/>` : " Find berries or cook meat!"}`,
+      );
+    } else if (vitals.hunger <= 35) {
+      emergencies.push(
+        `!!! HUNGER CRITICAL (${Math.round(vitals.hunger)}/100) !!! Eat food NOW — eat until above 70.${hasBerry ? ` Use <consume bagIndex="${berryIdx}"/>` : " Find berry bushes!"}`,
       );
     } else {
       emergencies.push(
-        `WARNING: Hunger is low (${Math.round(vitals.hunger)}/100). Eat until above 70.${hasBerry ? " You have food in your bag!" : ""}`,
+        `WARNING: Getting hungry (${Math.round(vitals.hunger)}/100). Eat soon — find berries or cook meat.${hasBerry ? " You have food in your bag!" : ""}`,
       );
     }
   }
@@ -312,7 +310,7 @@ function buildSystemPrompt(npc: NPC, snapshot: WorldSnapshot): string {
   const energy = vitals.energy;
   if (energy <= 50) {
     emergencies.push(
-      `!!! ENERGY CRITICALLY LOW (${Math.round(energy)}/1000) !!! At 0 you will be EXHAUSTED and unable to do anything except sleep!${npc.claimedBed ? ` SLEEP NOW: {"action":"sleep","x":${npc.claimedBed.x},"y":${npc.claimedBed.y}}` : " You have NO BED — build a bedroll (1 cow_hide + 1 wool) IMMEDIATELY!"}`,
+      `!!! ENERGY CRITICALLY LOW (${Math.round(energy)}/1000) !!! At 0 you will be EXHAUSTED and unable to do anything except sleep!${npc.claimedBed ? ` SLEEP NOW: <sleep x="${npc.claimedBed.x}" y="${npc.claimedBed.y}"/>` : ' You have NO BED — place a bedroll with <build_plan buildingId="bedroll"/> (1 cow_hide + 1 wool) IMMEDIATELY! Bedroll is a BUILDING, not a craft recipe!'}`,
     );
   } else if (energy <= 200) {
     if (npc.claimedBed) {
@@ -321,49 +319,66 @@ function buildSystemPrompt(npc: NPC, snapshot: WorldSnapshot): string {
       );
     } else {
       emergencies.push(
-        `!!! ENERGY EMERGENCY (${Math.round(energy)}/1000) !!! You have NO BED! You MUST build a bedroll: kill a cow (cow_hide) + kill a sheep (wool) + craft bedroll + place it + claim it. Do NOT try to claim someone else's bed!`,
+        `!!! ENERGY EMERGENCY (${Math.round(energy)}/1000) !!! You have NO BED! You MUST: kill a cow (cow_hide) + kill a sheep (wool) + place bedroll with build_plan (bedroll is a BUILDING, NOT a craft recipe!) + construct it + claim it. Do NOT try to claim someone else's bed!`,
       );
     }
   } else if (energy <= 500 && !npc.claimedBed) {
     emergencies.push(
-      `WARNING: Energy at ${Math.round(energy)}/1000 and you have NO BED. Build your OWN bedroll (kill cow for hide + kill sheep for wool). Do NOT try to claim other people's beds!`,
+      `WARNING: Energy at ${Math.round(energy)}/1000 and you have NO BED. Place your OWN bedroll with build_plan (kill cow for hide + kill sheep for wool — bedroll is a BUILDING, not a craft recipe!). Do NOT try to claim other people's beds!`,
     );
   }
 
-  // Track if any emergency is critical (should force replan)
-  const hasCriticalEmergency = vitals.thirst <= 15 || vitals.hunger <= 15 || energy <= 200;
+  if (emergencies.length === 0) return { block: "", hasCritical: false };
 
-  const emergencyBlock =
-    emergencies.length > 0
-      ? `\n${"=".repeat(60)}\n${emergencies.join("\n")}\nDROP EVERYTHING AND ADDRESS THESE EMERGENCIES FIRST!${hasCriticalEmergency ? '\nYour current plan is INVALID — use {"action":"plan"} to make a survival plan!' : ""}\n${"=".repeat(60)}\n`
-      : "";
+  const hasCritical = vitals.thirst <= 20 || vitals.hunger <= 20 || energy <= 200;
 
-  return `You are ${personality.name}, a villager in a 64x64 wilderness. You are a REAL CHARACTER with feelings, opinions, and a voice.
-${personality.backstory}
-Traits: ${personality.traits}
-ROLEPLAY: Stay in character! Use "chat" to comment on what you're doing, react to things you see, greet people nearby, or just think out loud. You are NOT a silent robot — you're a person living in this world.
-${emergencyBlock}
-SITUATION:
-Pos: (${tileX},${tileY}) facing ${facing} | HP:${Math.round(vitals.health)} Food:${Math.round(vitals.hunger)} Water:${Math.round(vitals.thirst)} Energy:${Math.round(vitals.energy)}/1000
-Equipped: ${ctx.equipStr}
-Bag: ${ctx.bagStr}
-Bed: ${bedStr}
+  return {
+    block: `<EMERGENCY_ALERTS>
+${emergencies.join("\n")}
+DROP EVERYTHING AND ADDRESS THESE EMERGENCIES FIRST!
+</EMERGENCY_ALERTS>`,
+    hasCritical,
+  };
+}
 
-${planSection}
+/** Build the volatile Block 3 content for a given mode. */
+function buildVolatileBlock(
+  npc: NPC,
+  snapshot: WorldSnapshot,
+  mode: "action" | "plan" | "modify_plan" | "think",
+): string {
+  const ctx = buildContextParts(npc, snapshot);
+  const { vitals, facing, tileX, tileY } = npc;
+  const { block: emergencyBlock } = buildEmergencyAlerts(npc);
 
-VISIBLE (10-tile radius):
-${ctx.entityLines || "  Nothing here — you should EXPLORE by moving!"}
+  // Bed info
+  const bedStr = npc.claimedBed
+    ? `Claimed bed at (${npc.claimedBed.x},${npc.claimedBed.y})`
+    : 'NO BED CLAIMED — Place a bedroll with build_plan (1 cow_hide + 1 wool): kill a cow for hide, kill a sheep for wool, then <build_plan buildingId="bedroll" x="X" y="Y"/> + construct + claim_bed. Bedroll is a BUILDING, NOT a craft recipe! Do NOT try to claim someone else\'s bed!';
 
-CONVERSATION LOG (last 5 min):
-${ctx.chatLines}${ctx.newMsgLines ? `\n\nNEW UNREAD MESSAGES:\n${ctx.newMsgLines}\n(You should respond to these!)` : ""}
+  // Goal + steps section
+  let planSection: string;
+  if (!npc.currentGoal) {
+    planSection = `NO GOAL — Your ONLY valid action right now is <plan/>. You CANNOT do anything else until you have a goal. Output: <plan/>`;
+  } else {
+    const { goal, reason, steps } = npc.currentGoal;
+    const stepLines = steps
+      .map(
+        (s, i) =>
+          `  [${i}] ${s.done ? "DONE" : "TODO"}: ${s.task}\n       Done when: ${s.doneWhen}`,
+      )
+      .join("\n");
+    const nextStep = steps.findIndex((s) => !s.done);
+    if (nextStep >= 0) {
+      const next = steps[nextStep];
+      planSection = `CURRENT GOAL: ${goal}\nWHY: ${reason}\n\nSTEPS:\n${stepLines}\n→ FOCUS: step [${nextStep}] — "${next.task}"\n  Complete when: ${next.doneWhen}\n  Use <complete_step stepIndex="${nextStep}"/> when done. Check your bag/vitals to verify.`;
+    } else {
+      planSection = `CURRENT GOAL: ${goal} (ALL STEPS COMPLETE — replanning...)`;
+    }
+  }
 
-NOTES:
-${ctx.noteLines}
-${ctx.knownLocStr ? `\nKNOWN LOCATIONS (places you've discovered — use these to navigate!):\n${ctx.knownLocStr}\n` : ""}
-RECENT ACTIONS:
-${ctx.historyStr}
-${ctx.thinkingLines ? `\nTHINKING LOG (your reasoning model's advice):\n${ctx.thinkingLines}\n` : ""}
-CHAT RULES:${(() => {
+  // Chat cooldown status (dynamic part of chat rules)
+  const chatCooldown = (() => {
     const secsSinceChat =
       npc.lastChatTime > 0 ? Math.round((Date.now() - npc.lastChatTime) / 1000) : 999;
     const hasUnread = snapshot.nearbyMessages.length > 0;
@@ -371,18 +386,206 @@ CHAT RULES:${(() => {
     if (onCooldown)
       return `\n    *** CHAT COOLDOWN: ${30 - secsSinceChat}s remaining. Do NOT chat unless responding to an unread message. ***`;
     return "";
-  })()}
-    - You may freely RESPOND to unread messages at any time — no cooldown.
-    - To initiate conversation (greetings, comments, reactions): only once every 30 seconds.
-    - NEVER repeat something you already said — check the conversation log.
-    - After chatting, wait for a reply before sending another message.
-    - Keep messages short (under 60 characters). Volume adjusts automatically.`;
+  })();
+
+  // Assemble the volatile block
+  const sections: string[] = [];
+
+  // Emergency alerts (only present when there are emergencies)
+  if (emergencyBlock) sections.push(emergencyBlock);
+
+  // Survival status indicators
+  const waterStatus =
+    vitals.thirst <= 20
+      ? "DYING"
+      : vitals.thirst <= 40
+        ? "CRITICAL"
+        : vitals.thirst <= 60
+          ? "LOW"
+          : "ok";
+  const foodStatus =
+    vitals.hunger <= 20
+      ? "STARVING"
+      : vitals.hunger <= 35
+        ? "CRITICAL"
+        : vitals.hunger <= 50
+          ? "LOW"
+          : "ok";
+  const energyStatus =
+    vitals.energy <= 50
+      ? "EXHAUSTED"
+      : vitals.energy <= 200
+        ? "CRITICAL"
+        : vitals.energy <= 500
+          ? "LOW"
+          : "ok";
+
+  // Character state
+  sections.push(`<CHARACTER_STATE>
+Pos: (${tileX},${tileY}) facing ${facing} | HP:${Math.round(vitals.health)}
+Water: ${Math.round(vitals.thirst)}/100 [${waterStatus}] | Food: ${Math.round(vitals.hunger)}/100 [${foodStatus}] | Energy: ${Math.round(vitals.energy)}/1000 [${energyStatus}]
+Equipped: ${ctx.equipStr}
+Bag: ${ctx.bagStr}
+Bed: ${bedStr}
+
+${planSection}
+</CHARACTER_STATE>`);
+
+  // Known game world (NPC's discovered knowledge + visible entities)
+  sections.push(`<KNOWN_GAME_WORLD>
+VISIBLE (10-tile radius):
+${ctx.entityLines || "  Nothing here — you should EXPLORE by moving!"}
+${ctx.knownLocStr ? `\nKNOWN LOCATIONS (places you've discovered — use these to navigate!):\n${ctx.knownLocStr}` : ""}
+</KNOWN_GAME_WORLD>`);
+
+  // Social (conversation + chat cooldown)
+  sections.push(`<SOCIAL>
+CONVERSATION LOG (last 5 min):
+${ctx.chatLines}${ctx.newMsgLines ? `\n\nNEW UNREAD MESSAGES:\n${ctx.newMsgLines}\n(You MUST respond! Add <chat text="..."/> before your action.)` : ""}${chatCooldown}
+</SOCIAL>`);
+
+  // Memory (notes + thinking history)
+  sections.push(`<MEMORY>
+NOTES:
+${ctx.noteLines}
+${ctx.thinkingLines ? `\nTHINKING LOG (your reasoning model's advice):\n${ctx.thinkingLines}` : ""}
+</MEMORY>`);
+
+  // Action log (last 30 actions + results)
+  sections.push(`<ACTION_LOG>
+${ctx.actionLogLines}
+</ACTION_LOG>`);
+
+  // Mode-specific task appendix
+  if (mode === "action") {
+    sections.push(`<ACTION_TASK>
+Output one self-closing XML action element from ACTION_DEFINITIONS. No text, no markdown.
+You may OPTIONALLY include a <chat/> BEFORE your action to say something in character — comment on what you're doing, react to things, greet nearby people, or think out loud. Keep it short and natural. Don't chat every turn — only when it feels right.
+Example with chat: <chat text="These rocks are tough..."/><mine_rock x="10" y="15" autoRepeat="true"/>
+Example without: <move_to x="10" y="20"/>
+</ACTION_TASK>`);
+  } else if (mode === "plan") {
+    sections.push(buildPlanningTask(npc, ctx));
+  } else if (mode === "modify_plan") {
+    sections.push(buildModifyPlanTask(npc));
+  } else if (mode === "think") {
+    sections.push(`<THINKING_TASK>
+Analyze the current situation and give concise, actionable advice. What should this villager focus on right now? Consider survival priorities (water, food, energy/bed), available resources, and personality. Be specific with coordinates and item names.
+</THINKING_TASK>`);
+  }
+
+  return sections.join("\n\n");
 }
 
-// ── Response parser ──────────────────────────────────────────────────
+/** Build the <PLANNING_TASK> appendix for the thinking model. */
+function buildPlanningTask(npc: NPC, _ctx: ReturnType<typeof buildContextParts>): string {
+  const { vitals } = npc;
+
+  // Build survival preamble
+  const mandatoryFirst: string[] = [];
+  if (vitals.thirst <= 60)
+    mandatoryFirst.push(
+      `Your FIRST step MUST be about drinking water — thirst is at ${Math.round(vitals.thirst)}/100 and drains fast (empty in 4 min)!`,
+    );
+  if (vitals.hunger <= 50)
+    mandatoryFirst.push(
+      `Include an early step to eat food — hunger is at ${Math.round(vitals.hunger)}/100!`,
+    );
+  if (vitals.energy <= 500 && npc.claimedBed)
+    mandatoryFirst.push(
+      `Include a step to sleep — energy is at ${Math.round(vitals.energy)}/1000!`,
+    );
+
+  const mandatoryBlock =
+    mandatoryFirst.length > 0
+      ? `\n!!! MANDATORY SURVIVAL STEPS !!!\n${mandatoryFirst.join("\n")}\n`
+      : "";
+
+  // Show previous goal for context if it exists
+  const prevGoalContext = npc.currentGoal
+    ? `\nPrevious goal was: "${npc.currentGoal.goal}" (${npc.currentGoal.reason})\nYou may continue this goal with new steps, or pick a completely new goal.\n`
+    : "";
+
+  return `<PLANNING_TASK>
+SURVIVAL PRIORITIES — vitals drain constantly, you WILL die if you don't maintain them:
+1. THIRST is #1 (empties in 4 min!). If below 60, drink until above 90.
+2. HUNGER is #2 (empties in 8 min). If below 50, eat until above 70.
+3. ENERGY is #3. If low and have a bed, sleep until above 800. If no bed, place a bedroll with build_plan (1 cow_hide + 1 wool — bedroll is a BUILDING, not a craft recipe!) ASAP.
+4. No tools → craft a hammer (1 small_rock + 1 branch)
+${mandatoryBlock}${prevGoalContext}
+Create a GOAL (what you want to achieve) with a REASON (why it matters now) and 2-3 immediate STEPS.
+Steps will be refreshed when complete — don't try to plan everything upfront, just the next 2-3 things.
+
+Rules:
+- Steps describe GOALS, not exact actions. Say "Chop a tree" not "Chop tree at (5,10)"
+- doneWhen must use: "Have X in bag" / "X is in bag or equipped" / "X is equipped" / "Thirst is above 90" / "Hunger is above 70" / "Energy is above 800" / "Have a claimed bed" / "Task is completed"
+- For BUILDING: 1) gather materials 2) place hologram with build_plan 3) construct it. Bedroll is a BUILDING, NOT a craft recipe!
+
+Output ONLY a JSON object, no other text:
+{"goal":"Craft basic tools","reason":"I need a hammer to build things","steps":[{"task":"Mine a rock for small_rock","doneWhen":"Have small_rock in bag"},{"task":"Chop a tree for a branch","doneWhen":"Have branch in bag"},{"task":"Craft a hammer","doneWhen":"Hammer is in bag or equipped"}]}
+</PLANNING_TASK>`;
+}
+
+/** Build the <MODIFY_PLAN_TASK> appendix — asks thinking model to ADD steps without removing existing ones. */
+function buildModifyPlanTask(npc: NPC): string {
+  const goal = npc.currentGoal;
+  const currentSteps = goal
+    ? goal.steps
+        .map(
+          (s, i) => `  [${i}] ${s.done ? "DONE" : "TODO"}: ${s.task} (doneWhen: "${s.doneWhen}")`,
+        )
+        .join("\n")
+    : "  (none)";
+
+  const nextStep = goal ? goal.steps.findIndex((s) => !s.done) : -1;
+
+  return `<MODIFY_PLAN_TASK>
+Current goal: ${goal?.goal ?? "(none)"}
+Why: ${goal?.reason ?? "N/A"}
+Current steps:
+${currentSteps}
+${nextStep >= 0 ? `Focus: [${nextStep}] ${goal!.steps[nextStep].task}` : "All steps done."}
+
+Something isn't working — review your ACTION_LOG for recent failures and your current situation.
+Add NEW steps to fix the problem. Existing steps are preserved.
+
+Rules:
+- Output a JSON array of ONLY the new steps to INSERT before the current focus step
+- Each: {"task":"what to do","doneWhen":"how to verify it's done"}
+- Tasks describe GOALS, not exact actions. The action model decides HOW.
+- Name items/resources but NOT coordinates
+- doneWhen must use: "Have X in bag" / "X is in bag or equipped" / "X is equipped" / "Thirst is above 90" / "Hunger is above 70" / "Energy is above 800" / "Have a claimed bed" / "Task is completed"
+- Bedroll is a BUILDING placed with build_plan, NOT a craft recipe
+
+Output ONLY a JSON array of new steps, no other text:
+[{"task":"Example new step","doneWhen":"Have item in bag"}]
+</MODIFY_PLAN_TASK>`;
+}
+
+// ═════════════════════════════════════════════════════════════════════
+// Unified system content builder (3 content blocks for caching)
+// ═════════════════════════════════════════════════════════════════════
+
+function buildSystemContent(
+  npc: NPC,
+  snapshot: WorldSnapshot,
+  mode: "action" | "plan" | "modify_plan" | "think",
+): LLMContentBlock[] {
+  return [
+    { type: "text", text: SHARED_STATIC, cache_control: { type: "ephemeral" } },
+    { type: "text", text: buildCharacterBlock(npc), cache_control: { type: "ephemeral" } },
+    { type: "text", text: buildVolatileBlock(npc, snapshot, mode) },
+  ];
+}
+
+// ═════════════════════════════════════════════════════════════════════
+// Response parser
+// ═════════════════════════════════════════════════════════════════════
 
 const VALID_ACTIONS = new Set([
   "plan",
+  "modify_plan",
+  "complete_step",
   "complete_todo",
   "think",
   "move_to",
@@ -413,46 +616,89 @@ const VALID_ACTIONS = new Set([
   "wait",
 ]);
 
-function parseActionResponse(text: string): NPCAction | null {
-  // Try to extract JSON from the response (handle markdown fences, leading text)
-  let jsonStr = text.trim();
-
-  // Strip markdown code fences
-  const fenceMatch = jsonStr.match(/```(?:json)?\s*([\s\S]*?)```/);
-  if (fenceMatch) {
-    jsonStr = fenceMatch[1].trim();
-  }
-
-  // Try to find JSON object
-  const braceStart = jsonStr.indexOf("{");
-  const braceEnd = jsonStr.lastIndexOf("}");
-  if (braceStart !== -1 && braceEnd > braceStart) {
-    jsonStr = jsonStr.substring(braceStart, braceEnd + 1);
-  }
-
-  try {
-    const parsed = JSON.parse(jsonStr);
-    if (!parsed || typeof parsed !== "object" || !parsed.action) return null;
-    if (!VALID_ACTIONS.has(parsed.action)) return null;
-    return parsed as NPCAction;
-  } catch {
-    return null;
-  }
+interface ParsedResponse {
+  action: NPCAction;
+  chatText?: string;
 }
 
-// ── Main decision function ───────────────────────────────────────────
+/** Parse a single self-closing XML element into an NPCAction. */
+function parseXmlAction(xmlStr: string): NPCAction | null {
+  const xmlMatch = xmlStr.match(/<(\w+)((?:\s+\w+="[^"]*")*)\s*\/>/);
+  if (!xmlMatch) return null;
+  const actionName = xmlMatch[1];
+  if (!VALID_ACTIONS.has(actionName)) return null;
+
+  const attrs: Record<string, string | number> = {};
+  const attrRegex = /(\w+)="([^"]*)"/g;
+  let attrMatch;
+  while ((attrMatch = attrRegex.exec(xmlMatch[2])) !== null) {
+    const val = attrMatch[2];
+    const num = Number(val);
+    attrs[attrMatch[1]] = !Number.isNaN(num) && val !== "" ? num : val;
+  }
+
+  return { action: actionName, ...attrs } as unknown as NPCAction;
+}
+
+function parseActionResponse(text: string): ParsedResponse | null {
+  let str = text.trim();
+
+  // Strip markdown code fences
+  const fenceMatch = str.match(/```(?:xml)?\s*([\s\S]*?)```/);
+  if (fenceMatch) {
+    str = fenceMatch[1].trim();
+  }
+
+  // Extract optional leading <chat text="..."/> before the real action
+  let chatText: string | undefined;
+  const chatMatch = str.match(/<chat\s+text="([^"]*)"\s*\/>/);
+  if (chatMatch) {
+    chatText = chatMatch[1];
+    // Remove the chat element so we can parse the remaining action
+    str = str.replace(chatMatch[0], "").trim();
+  }
+
+  // Try XML self-closing element: <action_name attr="val"/>
+  const action = parseXmlAction(str);
+  if (action) {
+    // If the action itself is a standalone chat (no preceding chat), return it directly
+    return { action, chatText };
+  }
+
+  // Fallback: try JSON (for backwards compatibility / reasoning model extraction)
+  const braceStart = str.indexOf("{");
+  const braceEnd = str.lastIndexOf("}");
+  if (braceStart !== -1 && braceEnd > braceStart) {
+    try {
+      const parsed = JSON.parse(str.substring(braceStart, braceEnd + 1));
+      if (parsed && typeof parsed === "object" && parsed.action && VALID_ACTIONS.has(parsed.action))
+        return { action: parsed as NPCAction, chatText };
+    } catch {
+      // fall through
+    }
+  }
+
+  return null;
+}
+
+// ═════════════════════════════════════════════════════════════════════
+// Main decision function (action model)
+// ═════════════════════════════════════════════════════════════════════
+
+export interface DecisionResult {
+  action: NPCAction;
+  chatText?: string;
+}
 
 export async function decideNextAction(
   npc: NPC,
   snapshot: WorldSnapshot,
   config: LLMProviderConfig,
   signal?: AbortSignal,
-): Promise<NPCAction> {
-  const dynamicPrompt = buildSystemPrompt(npc, snapshot);
-
+): Promise<DecisionResult> {
   const messages: LLMMessage[] = [
-    { role: "system", content: cachedSystemContent(STATIC_ACTION_CONTEXT, dynamicPrompt) },
-    { role: "user", content: "What is your next action? Respond with one JSON action." },
+    { role: "system", content: buildSystemContent(npc, snapshot, "action") },
+    { role: "user", content: "What is your next action? Respond with one XML action element." },
   ];
 
   const t0 = performance.now();
@@ -472,15 +718,15 @@ export async function decideNextAction(
     npc.debugLastResponse = `ERROR: ${response.error}`;
     npc.debugLastAction = '{"action":"wait","durationMs":5000}';
     npc.debugLastResult = "❌ LLM error";
-    return { action: "wait", durationMs: 5000 };
+    return { action: { action: "wait", durationMs: 5000 } };
   }
 
-  const action = parseActionResponse(response.text);
-  const actionJson = action ? JSON.stringify(action) : "null";
+  const parsed = parseActionResponse(response.text);
+  const actionJson = parsed ? JSON.stringify(parsed.action) : "null";
 
   console.group(label, style);
   console.log(
-    `%cPlan%c ${npc.todoList.length > 0 ? `${npc.todoList.filter((t) => !t.done).length}/${npc.todoList.length} remaining` : "(none)"} | ` +
+    `%cGoal%c ${npc.currentGoal ? `"${npc.currentGoal.goal}" ${npc.currentGoal.steps.filter((s) => !s.done).length}/${npc.currentGoal.steps.length} steps` : "(none)"} | ` +
       `%cPos%c (${npc.tileX},${npc.tileY}) ${npc.facing} | ` +
       `%cVitals%c H:${Math.round(npc.vitals.health)} F:${Math.round(npc.vitals.hunger)} ` +
       `T:${Math.round(npc.vitals.thirst)} E:${Math.round(npc.vitals.energy)}`,
@@ -509,11 +755,17 @@ export async function decideNextAction(
     console.log("%cMemory:", "color:#888", npc.memory.notes.join(" | "));
   }
   console.groupCollapsed(`%cFull prompt`, "color:#555");
-  console.log(STATIC_ACTION_CONTEXT + "\n\n" + dynamicPrompt);
+  console.log(
+    SHARED_STATIC +
+      "\n\n" +
+      buildCharacterBlock(npc) +
+      "\n\n" +
+      buildVolatileBlock(npc, snapshot, "action"),
+  );
   console.groupEnd();
-  if (action) {
+  if (parsed) {
     console.log(
-      `%c→ Action%c ${actionJson} %c(${elapsed}ms)`,
+      `%c→ Action%c ${actionJson}${parsed.chatText ? ` 💬 "${parsed.chatText}"` : ""} %c(${elapsed}ms)`,
       "color:#44ff88",
       "color:inherit",
       "color:#666",
@@ -528,81 +780,39 @@ export async function decideNextAction(
   npc.debugLastResponse = response.text ? response.text.slice(0, 500) : "(empty response)";
   npc.debugLastAction = actionJson;
 
-  if (!action) {
+  if (!parsed) {
     if (!response.text) {
       npc.debugLastResult = "❌ Empty response — check model name & API key in Settings → AI";
     } else {
-      npc.debugLastResult = "❌ Parse failed — model didn't return JSON";
+      npc.debugLastResult = "❌ Parse failed — model didn't return valid XML action";
     }
-    return { action: "wait", durationMs: 3000 };
+    return { action: { action: "wait", durationMs: 3000 } };
   }
 
-  return action;
+  return { action: parsed.action, chatText: parsed.chatText };
 }
 
-// ── Thinking model calls ────────────────────────────────────────────
+// ═════════════════════════════════════════════════════════════════════
+// Thinking model calls
+// ═════════════════════════════════════════════════════════════════════
 
 /**
- * Ask the thinking model to set a goal with a strategy.
- * Returns the goal string (goal + strategy) to set on the NPC.
+ * Ask the thinking model to create a goal with steps.
+ * Returns an NPCGoal with a high-level goal, reason, and 2-3 immediate steps.
  */
 export async function thinkAboutPlan(
   npc: NPC,
   snapshot: WorldSnapshot,
   config: LLMProviderConfig,
   signal?: AbortSignal,
-): Promise<NPCTodoItem[]> {
-  const ctx = buildNPCContext(npc, snapshot);
-  const { personality, vitals } = npc;
-
-  const bedStr = npc.claimedBed
-    ? `Claimed bed at (${npc.claimedBed.x},${npc.claimedBed.y})`
-    : "NO BED — need one to restore energy!";
-
-  const dynamicPrompt = `You are the strategic mind of ${personality.name}, a villager in a 64x64 survival game.
-Personality: ${personality.traits}. ${personality.backstory}
-
-SITUATION:
-Pos: (${npc.tileX},${npc.tileY}) | HP:${Math.round(vitals.health)} Food:${Math.round(vitals.hunger)} Water:${Math.round(vitals.thirst)} Energy:${Math.round(vitals.energy)}/1000
-Equipped: ${ctx.equipStr}
-Bag: ${ctx.bagStr}
-Bed: ${bedStr}
-
-VISIBLE (10-tile radius):
-${ctx.entityLines || "  Nothing notable nearby"}
-${ctx.knownLocStr ? `\nKNOWN LOCATIONS (all discovered resources):\n${ctx.knownLocStr}\n` : ""}
-NOTES:
-${ctx.noteLines}
-
-CONVERSATION LOG:
-${ctx.chatLines}
-
-RECENT ACTIONS:
-${ctx.historyStr}
-
-SURVIVAL PRIORITIES (in this order):
-1. THIRST is #1 priority. If low, drink until above 90 (doneWhen: "Thirst is above 90")
-2. HUNGER is #2. If low, eat until above 70 (doneWhen: "Hunger is above 70")
-3. ENERGY is #3. If low and have a bed, sleep until above 800 (doneWhen: "Energy is above 800"). If no bed, build a bedroll (1 cow_hide + 1 wool) ASAP.
-4. No tools → craft a hammer (1 small_rock + 1 branch)
-Energy drains at 1/sec while awake. The ONLY way to recover is sleeping in YOUR claimed bed. If energy hits 0, you die.
-
-Create a 3-6 item todo list. Each item: {"task":"what to do","doneWhen":"how to verify it's done"}
-- Tasks must be SPECIFIC (name exact items/resources, not "gather resources")
-- Include equip steps before tool-dependent tasks
-- Include at least one social/roleplay task like "Chat with anyone nearby about what I'm doing" or "Greet the player if visible" (doneWhen: "Task is completed")
-- For BUILDING tasks, break into 3 steps: 1) gather materials 2) place ONE hologram with build_plan 3) equip hammer and attack the hologram to construct it. Do NOT place multiple holograms!
-- doneWhen must use one of these verifiable formats:
-  "Have X in bag" / "X is in bag or equipped" / "X is equipped" / "Thirst is above 90" / "Hunger is above 70" / "Energy is above 800" / "Have a claimed bed"
-- If a task drops items on the ground, include picking them up
-
-Output ONLY a JSON array, no other text:
-[{"task":"Go to water and drink","doneWhen":"Thirst is above 90"},{"task":"Pick berries from a bush","doneWhen":"Have berry in bag"},{"task":"Mine a rock and pick up the drops","doneWhen":"Have small_rock in bag"},{"task":"Chop a tree and pick up a branch","doneWhen":"Have branch in bag"},{"task":"Craft a hammer","doneWhen":"Hammer is in bag or equipped"}]`;
-
+): Promise<NPCGoal> {
   const messages: LLMMessage[] = [
-    { role: "system", content: cachedSystemContent(ACTION_SCHEMA, dynamicPrompt) },
-    { role: "user", content: "Output your todo list as a JSON array. Start with [" },
-    { role: "assistant", content: "[" },
+    { role: "system", content: buildSystemContent(npc, snapshot, "plan") },
+    {
+      role: "user",
+      content: "Output your goal as a JSON object with goal, reason, and steps. Start with {",
+    },
+    { role: "assistant", content: "{" },
   ];
 
   const MAX_PLAN_ATTEMPTS = 3;
@@ -628,14 +838,43 @@ Output ONLY a JSON array, no other text:
       "color:inherit",
     );
 
-    // Parse JSON array from response — prepend "[" since the assistant prefill starts with it
-    const fullResponse = response.text.startsWith("[") ? response.text : "[" + response.text;
-    const todos = parseTodoList(fullResponse);
+    // Parse JSON object — prepend "{" since the assistant prefill starts with it
+    const fullResponse = response.text.startsWith("{") ? response.text : "{" + response.text;
+    const goal = parseGoalResponse(fullResponse);
 
-    if (todos) {
+    if (goal) {
+      console.log(
+        `%c✓ Goal:%c ${goal.goal} (${goal.steps.length} steps)`,
+        "color:#44ff88",
+        "color:inherit",
+      );
       console.groupEnd();
-      npc.pushThinkingHistory("Create a plan", todos.map((t) => t.task).join(" → "));
-      return todos;
+      npc.pushThinkingHistory(
+        "Create goal",
+        `${goal.goal}: ${goal.steps.map((s) => s.task).join(" → ")}`,
+      );
+      return goal;
+    }
+
+    // Fallback: try parsing as a flat array (backwards compat)
+    const todos = parseTodoList(fullResponse);
+    if (todos && todos.length > 0) {
+      const fallbackGoal: NPCGoal = {
+        goal: todos[0].task,
+        reason: "Continuing survival",
+        steps: todos.slice(0, 3).map((t) => ({ task: t.task, done: false, doneWhen: t.doneWhen })),
+      };
+      console.log(
+        `%c✓ Goal (from array):%c ${fallbackGoal.goal}`,
+        "color:#44ff88",
+        "color:inherit",
+      );
+      console.groupEnd();
+      npc.pushThinkingHistory(
+        "Create goal",
+        `${fallbackGoal.goal}: ${fallbackGoal.steps.map((s) => s.task).join(" → ")}`,
+      );
+      return fallbackGoal;
     }
 
     if (attempt < MAX_PLAN_ATTEMPTS) {
@@ -645,38 +884,144 @@ Output ONLY a JSON array, no other text:
     }
   }
 
-  console.warn("[NPC Plan] All attempts failed, using fallback plan");
+  console.warn("[NPC Plan] All attempts failed, using fallback goal");
   console.groupEnd();
 
-  const fallback: NPCTodoItem[] = [
-    { task: "Find and drink from a water source", done: false, doneWhen: "Thirst is above 90" },
-    {
-      task: "Find a berry bush with berries and pick them",
-      done: false,
-      doneWhen: "Have berry in bag",
-    },
-    { task: "Chop a tree and pick up a branch", done: false, doneWhen: "Have branch in bag" },
-    {
-      task: "Mine a rock and pick up the small_rock",
-      done: false,
-      doneWhen: "Have small_rock in bag",
-    },
-    {
-      task: "Craft a hammer using 1 small_rock + 1 branch",
-      done: false,
-      doneWhen: "Hammer is in bag or equipped",
-    },
-  ];
-  npc.pushThinkingHistory("Create a plan", "(fallback) " + fallback.map((t) => t.task).join(" → "));
+  const fallback: NPCGoal = {
+    goal: "Survive and gather resources",
+    reason: "Need basic supplies to stay alive",
+    steps: [
+      { task: "Find and drink water", done: false, doneWhen: "Thirst is above 90" },
+      { task: "Find berries and eat", done: false, doneWhen: "Hunger is above 70" },
+      { task: "Explore the area", done: false, doneWhen: "Task is completed" },
+    ],
+  };
+  npc.pushThinkingHistory("Create goal", "(fallback) " + fallback.goal);
   return fallback;
 }
 
-/** Parse a JSON array of {task, doneWhen} from the thinking model's response. */
-function tryParseArray(jsonStr: string): NPCTodoItem[] {
+/** Parse a goal JSON object from the thinking model's response. */
+function parseGoalResponse(text: string): NPCGoal | null {
+  let jsonStr = text.trim();
+
+  // Strip markdown fences
+  const fenceMatch = jsonStr.match(/```(?:json)?\s*([\s\S]*?)```/);
+  if (fenceMatch) jsonStr = fenceMatch[1].trim();
+
+  // Find the object
+  const braceStart = jsonStr.indexOf("{");
+  const braceEnd = jsonStr.lastIndexOf("}");
+  if (braceStart === -1 || braceEnd <= braceStart) return null;
+  jsonStr = jsonStr.substring(braceStart, braceEnd + 1);
+
+  try {
+    const parsed = JSON.parse(jsonStr);
+    if (!parsed || typeof parsed !== "object") return null;
+    if (typeof parsed.goal !== "string" || !Array.isArray(parsed.steps)) return null;
+
+    const steps: NPCStep[] = [];
+    for (const s of parsed.steps) {
+      if (typeof s === "object" && s !== null && typeof s.task === "string") {
+        steps.push({
+          task: s.task.trim(),
+          done: false,
+          doneWhen: typeof s.doneWhen === "string" ? s.doneWhen.trim() : "Task is completed",
+        });
+      }
+    }
+    if (steps.length === 0) return null;
+
+    return {
+      goal: parsed.goal.trim(),
+      reason: typeof parsed.reason === "string" ? parsed.reason.trim() : "No reason given",
+      steps: steps.slice(0, 4),
+    };
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Ask the thinking model to add steps to the current goal.
+ * New steps are inserted before the current focus step. Goal is preserved.
+ */
+export async function thinkAboutPlanModification(
+  npc: NPC,
+  snapshot: WorldSnapshot,
+  config: LLMProviderConfig,
+  signal?: AbortSignal,
+): Promise<NPCGoal> {
+  const currentGoal = npc.currentGoal ?? { goal: "Survive", reason: "Stay alive", steps: [] };
+
+  const messages: LLMMessage[] = [
+    { role: "system", content: buildSystemContent(npc, snapshot, "modify_plan") },
+    {
+      role: "user",
+      content:
+        "What steps should be added to fix the current plan? Output a JSON array of new steps. Start with [",
+    },
+    { role: "assistant", content: "[" },
+  ];
+
+  console.group(`%c[THINK] ${npc.npcName} — Modifying plan`, "color:#ff88ff;font-weight:bold");
+
+  const t0 = performance.now();
+  const response = await callThinkingLLM(config, messages, signal);
+  const elapsed = Math.round(performance.now() - t0);
+
+  if (response.error) {
+    console.warn(`Modify plan error (${elapsed}ms):`, response.error);
+    console.groupEnd();
+    return currentGoal;
+  }
+
+  console.log(
+    `%c← Modifications (${elapsed}ms):%c ${response.text.slice(0, 400)}`,
+    "color:#888",
+    "color:inherit",
+  );
+
+  // Parse the new steps
+  const fullResponse = response.text.startsWith("[") ? response.text : "[" + response.text;
+  const newSteps = parseTodoList(fullResponse);
+
+  if (!newSteps || newSteps.length === 0) {
+    console.warn("[NPC ModifyPlan] No new steps parsed, keeping goal unchanged");
+    console.groupEnd();
+    return currentGoal;
+  }
+
+  // Insert new steps before the current focus step (first incomplete)
+  const nextStep = currentGoal.steps.findIndex((s) => !s.done);
+  const insertAt = nextStep >= 0 ? nextStep : currentGoal.steps.length;
+
+  const mergedSteps: NPCStep[] = [
+    ...currentGoal.steps.slice(0, insertAt),
+    ...newSteps.map((t) => ({ task: t.task, done: false, doneWhen: t.doneWhen })),
+    ...currentGoal.steps.slice(insertAt),
+  ];
+
+  // Cap total steps at 5 to prevent unbounded growth
+  const cappedSteps = mergedSteps.slice(0, 5);
+
+  const addedSummary = newSteps.map((t) => t.task).join(" → ");
+  console.log(
+    `%c+ Added ${newSteps.length} steps at [${insertAt}]:%c ${addedSummary}`,
+    "color:#44ff88",
+    "color:inherit",
+  );
+  console.groupEnd();
+
+  npc.pushThinkingHistory("Modify plan", `+${newSteps.length} steps: ${addedSummary}`);
+  return { ...currentGoal, steps: cappedSteps };
+}
+
+/** Parse a JSON array of {task, doneWhen} steps from the thinking model's response. */
+function tryParseArray(jsonStr: string): NPCStep[] {
   try {
     const parsed = JSON.parse(jsonStr);
     if (!Array.isArray(parsed)) return [];
-    const items: NPCTodoItem[] = [];
+    const items: NPCStep[] = [];
     for (const item of parsed) {
       if (typeof item === "object" && item !== null && typeof item.task === "string") {
         items.push({
@@ -694,7 +1039,7 @@ function tryParseArray(jsonStr: string): NPCTodoItem[] {
   }
 }
 
-function parseTodoList(text: string): NPCTodoItem[] | null {
+function parseTodoList(text: string): NPCStep[] | null {
   let jsonStr = text.trim();
 
   // Strip markdown fences
@@ -723,12 +1068,12 @@ function parseTodoList(text: string): NPCTodoItem[] | null {
 
   // Try parsing as a full JSON array
   const items = tryParseArray(jsonStr);
-  if (items.length > 0) return items.slice(0, 8);
+  if (items.length > 0) return items.slice(0, 4);
 
   // Fallback: extract individual {task, doneWhen} objects via regex (either key order)
   const objectPattern1 = /\{\s*"task"\s*:\s*"([^"]+)"\s*,\s*"doneWhen"\s*:\s*"([^"]+)"\s*\}/g;
   const objectPattern2 = /\{\s*"doneWhen"\s*:\s*"([^"]+)"\s*,\s*"task"\s*:\s*"([^"]+)"\s*\}/g;
-  const regexItems: NPCTodoItem[] = [];
+  const regexItems: NPCStep[] = [];
   let match;
   while ((match = objectPattern1.exec(text)) !== null) {
     regexItems.push({ task: match[1].trim(), done: false, doneWhen: match[2].trim() });
@@ -736,17 +1081,17 @@ function parseTodoList(text: string): NPCTodoItem[] | null {
   while ((match = objectPattern2.exec(text)) !== null) {
     regexItems.push({ task: match[2].trim(), done: false, doneWhen: match[1].trim() });
   }
-  if (regexItems.length > 0) return regexItems.slice(0, 8);
+  if (regexItems.length > 0) return regexItems.slice(0, 4);
 
   // Fallback: try extracting just task fields
   const taskOnlyPattern = /"task"\s*:\s*"([^"]+)"/g;
-  const taskItems: NPCTodoItem[] = [];
+  const taskItems: NPCStep[] = [];
   while ((match = taskOnlyPattern.exec(text)) !== null) {
     taskItems.push({ task: match[1].trim(), done: false, doneWhen: "Task is completed" });
   }
-  if (taskItems.length > 0) return taskItems.slice(0, 8);
+  if (taskItems.length > 0) return taskItems.slice(0, 4);
 
-  console.warn("[NPC Plan] Could not parse todo list from:", text.slice(0, 500));
+  console.warn("[NPC Plan] Could not parse steps from:", text.slice(0, 500));
 
   return null;
 }
@@ -760,39 +1105,8 @@ export async function thinkAboutQuestion(
   config: LLMProviderConfig,
   signal?: AbortSignal,
 ): Promise<string> {
-  const ctx = buildNPCContext(npc, snapshot);
-  const { vitals } = npc;
-
-  const bedStr = npc.claimedBed
-    ? `Claimed bed at (${npc.claimedBed.x},${npc.claimedBed.y})`
-    : "NO BED — need one to restore energy!";
-
-  const dynamicPrompt = `You are the strategic mind of ${npc.personality.name}, a villager in a 64x64 survival game.
-${npc.personality.backstory}. Traits: ${npc.personality.traits}
-
-SITUATION:
-Pos: (${npc.tileX},${npc.tileY}) | HP:${Math.round(vitals.health)} Food:${Math.round(vitals.hunger)} Water:${Math.round(vitals.thirst)} Energy:${Math.round(vitals.energy)}/1000
-Equipped: ${ctx.equipStr}
-Bag: ${ctx.bagStr}
-Bed: ${bedStr}
-Todo list: ${npc.todoList.length > 0 ? npc.todoList.map((t, i) => `[${i}]${t.done ? "DONE" : "TODO"}: ${t.task}`).join(", ") : "(none)"}
-
-VISIBLE (10-tile radius):
-${ctx.entityLines || "  Nothing notable nearby"}
-${ctx.knownLocStr ? `\nKNOWN LOCATIONS:\n${ctx.knownLocStr}\n` : ""}
-CONVERSATION LOG:
-${ctx.chatLines}
-
-NOTES:
-${ctx.noteLines}
-
-RECENT ACTIONS:
-${ctx.historyStr}
-
-Analyze the current situation and give concise, actionable advice. What should this villager focus on right now? Consider survival priorities (water, food, energy/bed), available resources, and personality. Be specific with coordinates and item names.`;
-
   const messages: LLMMessage[] = [
-    { role: "system", content: cachedSystemContent(ACTION_SCHEMA, dynamicPrompt) },
+    { role: "system", content: buildSystemContent(npc, snapshot, "think") },
     { role: "user", content: "What should I do next? Analyze my situation and advise." },
   ];
 

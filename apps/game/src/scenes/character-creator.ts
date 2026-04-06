@@ -353,6 +353,13 @@ export class CharacterCreator extends ex.Scene {
     this.updateSelection();
   }
 
+  override onDeactivate(): void {
+    // Clean up capture-phase DOM listeners so they don't steal keyboard
+    // events from Excalibur when another scene is active.
+    this.nameFocused = false;
+    this.removeNameListener();
+  }
+
   override onPreUpdate(engine: ex.Engine): void {
     // Name typing captures all input via native keydown listener
     if (this.nameFocused) return;

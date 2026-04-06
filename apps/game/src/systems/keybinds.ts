@@ -177,13 +177,19 @@ export async function persistKeybinds(): Promise<void> {
 export async function loadKeybinds(): Promise<void> {
   const data = (await loadSettings("keybinds")) as SerializedBindings | null;
   if (!data) return;
+  const defaults = makeDefaults();
   for (const action of ALL_ACTIONS) {
     const saved = data[action];
     if (saved) {
-      currentBindings[action] = {
-        slot1: (saved.slot1 as Keys) ?? null,
-        slot2: (saved.slot2 as Keys) ?? null,
-      };
+      const slot1 = (saved.slot1 as Keys) ?? null;
+      const slot2 = (saved.slot2 as Keys) ?? null;
+      // If both slots are null the action is completely unbound — restore
+      // defaults so the player isn't silently locked out of core actions.
+      if (slot1 == null && slot2 == null) {
+        currentBindings[action] = { ...defaults[action] };
+      } else {
+        currentBindings[action] = { slot1, slot2 };
+      }
     }
   }
 }

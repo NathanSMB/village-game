@@ -167,7 +167,7 @@ export type NPCAction =
   | { action: "wake_up" }
   | { action: "store_item"; bagIndex: number; x?: number; y?: number }
   | { action: "retrieve_item"; slotIndex: number; x?: number; y?: number }
-  | { action: "chat"; text: string }
+  | { action: "chat"; text: string; target?: string }
   | { action: "remember"; note: string }
   | { action: "forget"; noteIndex: number }
   | { action: "wait"; durationMs: number };

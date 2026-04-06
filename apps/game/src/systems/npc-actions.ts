@@ -68,6 +68,8 @@ export interface GameWorldNPCInterface {
   npcShootArrow(npc: NPC, direction: Direction): void;
   /** Get the Chebyshev distance to the nearest listener (player or other NPC). */
   getNearestListenerDistance(npc: NPC): number;
+  /** Get the Chebyshev distance to a named entity (player name or NPC name). Returns Infinity if not found. */
+  getDistanceToNamed(npc: NPC, name: string): number;
   /** Check if any hologram buildings exist on the map. */
   hasUncompletedHolograms(): boolean;
   /** Get the position of the first uncompleted hologram, or null. */
@@ -339,7 +341,7 @@ export function executeNPCAction(
       return execRetrieveItem(npc, action.slotIndex, world, action.x, action.y);
 
     case "chat":
-      return execChat(npc, action.text, world);
+      return execChat(npc, action.text, world, action.target);
 
     case "remember":
       return execRemember(npc, action.note);
@@ -974,9 +976,27 @@ function execRetrieveItem(
   return { success: true };
 }
 
-function execChat(npc: NPC, text: string, world: GameWorldNPCInterface): ActionResult {
-  // Auto-select mode based on distance to nearest listener
-  const dist = world.getNearestListenerDistance(npc);
+function execChat(
+  npc: NPC,
+  text: string,
+  world: GameWorldNPCInterface,
+  target?: string,
+): ActionResult {
+  // If a target is specified, use distance to that target; otherwise nearest listener
+  const dist = target
+    ? world.getDistanceToNamed(npc, target)
+    : world.getNearestListenerDistance(npc);
+
+  if (target && dist === Infinity) {
+    return { success: false, reason: `Can't find "${target}" — they may not be nearby` };
+  }
+  if (target && dist > 10) {
+    return {
+      success: false,
+      reason: `"${target}" is ${dist} tiles away — too far to reach even by yelling (max 10). Move closer first.`,
+    };
+  }
+
   let mode: ChatMode;
   if (dist <= 1) {
     mode = "whisper";

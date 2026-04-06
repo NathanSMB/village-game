@@ -5661,12 +5661,23 @@ export class GameWorld extends ex.Scene<GameWorldData> {
     }
 
     decideNextAction(npc, snapshot, config, abortController.signal)
-      .then(async (action) => {
+      .then(async (decision) => {
         if (npc.isDead) {
           this.npcInFlight.delete(npc.npcId);
           npc.debugThinking = false;
           return;
         }
+
+        // Execute optional parallel chat before the action
+        if (decision.chatText) {
+          executeNPCAction(
+            npc,
+            { action: "chat", text: decision.chatText },
+            this.getNPCInterface(),
+          );
+        }
+
+        const action = decision.action;
 
         // Clear chat inbox since the brain has consumed them
         npc.chatInbox = [];
@@ -6079,8 +6090,19 @@ export class GameWorld extends ex.Scene<GameWorldData> {
           timestamp: Date.now(),
         };
         npc2.lastChatTime = Date.now();
-        this.chatMessages.push(msg);
-        this.chatLog?.scrollToBottom();
+        // Only show in player's chat log if within chat mode range
+        if (
+          this.player &&
+          chebyshevDistance(
+            npc2.tileX,
+            npc2.tileY,
+            this.player.getTileX(),
+            this.player.getTileY(),
+          ) <= CHAT_MODE_RADIUS[mode]
+        ) {
+          this.chatMessages.push(msg);
+          this.chatLog?.scrollToBottom();
+        }
         new SpeechBubble(msg.text, npc2, msg.mode);
         // Add to sender's own chat history so they remember what they said
         npc2.pushChatHistory(msg);
@@ -6255,6 +6277,26 @@ export class GameWorld extends ex.Scene<GameWorldData> {
             npc2.refreshSprite();
           }
         }
+      },
+      getDistanceToNamed: (npc2, name) => {
+        const lowerName = name.toLowerCase();
+        // Check player
+        if (this.player && this.playerName.toLowerCase() === lowerName) {
+          return chebyshevDistance(
+            npc2.tileX,
+            npc2.tileY,
+            this.player.getTileX(),
+            this.player.getTileY(),
+          );
+        }
+        // Check other NPCs
+        for (const other of this.npcList) {
+          if (other === npc2 || other.isDead) continue;
+          if (other.npcName.toLowerCase() === lowerName) {
+            return chebyshevDistance(npc2.tileX, npc2.tileY, other.tileX, other.tileY);
+          }
+        }
+        return Infinity;
       },
       getNearestListenerDistance: (npc2) => {
         let minDist = Infinity;

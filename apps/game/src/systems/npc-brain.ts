@@ -132,6 +132,7 @@ Interaction (all auto-walk to target if x,y provided):
 
 Communication:
   <chat text="MSG"/> — Say something (volume auto-adjusts based on distance to nearest listener)
+  <chat text="MSG" target="NAME"/> — Say something to a specific person. Fails if they're more than 10 tiles away.
 
 Memory:
   <remember note="TEXT"/> — Save a note (max 20)
@@ -440,7 +441,7 @@ ${ctx.knownLocStr ? `\nKNOWN LOCATIONS (places you've discovered — use these t
   // Social (conversation + chat cooldown)
   sections.push(`<SOCIAL>
 CONVERSATION LOG (last 5 min):
-${ctx.chatLines}${ctx.newMsgLines ? `\n\nNEW UNREAD MESSAGES:\n${ctx.newMsgLines}\n(You should respond to these!)` : ""}${chatCooldown}
+${ctx.chatLines}${ctx.newMsgLines ? `\n\nNEW UNREAD MESSAGES:\n${ctx.newMsgLines}\n(You MUST respond! Add <chat text="..."/> before your action.)` : ""}${chatCooldown}
 </SOCIAL>`);
 
   // Memory (notes + thinking history)
@@ -458,8 +459,10 @@ ${ctx.actionLogLines}
   // Mode-specific task appendix
   if (mode === "action") {
     sections.push(`<ACTION_TASK>
-Output ONLY one self-closing XML action element from ACTION_DEFINITIONS. No text, no markdown, no explanation.
-Example: <move_to x="10" y="20"/>
+Output one self-closing XML action element from ACTION_DEFINITIONS. No text, no markdown.
+You may OPTIONALLY include a <chat/> BEFORE your action to say something in character — comment on what you're doing, react to things, greet nearby people, or think out loud. Keep it short and natural. Don't chat every turn — only when it feels right.
+Example with chat: <chat text="These rocks are tough..."/><mine_rock x="10" y="15" autoRepeat="true"/>
+Example without: <move_to x="10" y="20"/>
 </ACTION_TASK>`);
   } else if (mode === "plan") {
     sections.push(buildPlanningTask(npc, ctx));
@@ -613,7 +616,31 @@ const VALID_ACTIONS = new Set([
   "wait",
 ]);
 
-function parseActionResponse(text: string): NPCAction | null {
+interface ParsedResponse {
+  action: NPCAction;
+  chatText?: string;
+}
+
+/** Parse a single self-closing XML element into an NPCAction. */
+function parseXmlAction(xmlStr: string): NPCAction | null {
+  const xmlMatch = xmlStr.match(/<(\w+)((?:\s+\w+="[^"]*")*)\s*\/>/);
+  if (!xmlMatch) return null;
+  const actionName = xmlMatch[1];
+  if (!VALID_ACTIONS.has(actionName)) return null;
+
+  const attrs: Record<string, string | number> = {};
+  const attrRegex = /(\w+)="([^"]*)"/g;
+  let attrMatch;
+  while ((attrMatch = attrRegex.exec(xmlMatch[2])) !== null) {
+    const val = attrMatch[2];
+    const num = Number(val);
+    attrs[attrMatch[1]] = !Number.isNaN(num) && val !== "" ? num : val;
+  }
+
+  return { action: actionName, ...attrs } as unknown as NPCAction;
+}
+
+function parseActionResponse(text: string): ParsedResponse | null {
   let str = text.trim();
 
   // Strip markdown code fences
@@ -622,24 +649,20 @@ function parseActionResponse(text: string): NPCAction | null {
     str = fenceMatch[1].trim();
   }
 
-  // Try XML self-closing element: <action_name attr="val" attr2="val2"/>
-  const xmlMatch = str.match(/<(\w+)((?:\s+\w+="[^"]*")*)\s*\/>/);
-  if (xmlMatch) {
-    const actionName = xmlMatch[1];
-    if (!VALID_ACTIONS.has(actionName)) return null;
+  // Extract optional leading <chat text="..."/> before the real action
+  let chatText: string | undefined;
+  const chatMatch = str.match(/<chat\s+text="([^"]*)"\s*\/>/);
+  if (chatMatch) {
+    chatText = chatMatch[1];
+    // Remove the chat element so we can parse the remaining action
+    str = str.replace(chatMatch[0], "").trim();
+  }
 
-    // Parse attributes into key-value pairs
-    const attrs: Record<string, string | number> = {};
-    const attrRegex = /(\w+)="([^"]*)"/g;
-    let attrMatch;
-    while ((attrMatch = attrRegex.exec(xmlMatch[2])) !== null) {
-      const val = attrMatch[2];
-      // Convert numeric strings to numbers
-      const num = Number(val);
-      attrs[attrMatch[1]] = !Number.isNaN(num) && val !== "" ? num : val;
-    }
-
-    return { action: actionName, ...attrs } as unknown as NPCAction;
+  // Try XML self-closing element: <action_name attr="val"/>
+  const action = parseXmlAction(str);
+  if (action) {
+    // If the action itself is a standalone chat (no preceding chat), return it directly
+    return { action, chatText };
   }
 
   // Fallback: try JSON (for backwards compatibility / reasoning model extraction)
@@ -649,7 +672,7 @@ function parseActionResponse(text: string): NPCAction | null {
     try {
       const parsed = JSON.parse(str.substring(braceStart, braceEnd + 1));
       if (parsed && typeof parsed === "object" && parsed.action && VALID_ACTIONS.has(parsed.action))
-        return parsed as NPCAction;
+        return { action: parsed as NPCAction, chatText };
     } catch {
       // fall through
     }
@@ -662,12 +685,17 @@ function parseActionResponse(text: string): NPCAction | null {
 // Main decision function (action model)
 // ═════════════════════════════════════════════════════════════════════
 
+export interface DecisionResult {
+  action: NPCAction;
+  chatText?: string;
+}
+
 export async function decideNextAction(
   npc: NPC,
   snapshot: WorldSnapshot,
   config: LLMProviderConfig,
   signal?: AbortSignal,
-): Promise<NPCAction> {
+): Promise<DecisionResult> {
   const messages: LLMMessage[] = [
     { role: "system", content: buildSystemContent(npc, snapshot, "action") },
     { role: "user", content: "What is your next action? Respond with one XML action element." },
@@ -690,11 +718,11 @@ export async function decideNextAction(
     npc.debugLastResponse = `ERROR: ${response.error}`;
     npc.debugLastAction = '{"action":"wait","durationMs":5000}';
     npc.debugLastResult = "❌ LLM error";
-    return { action: "wait", durationMs: 5000 };
+    return { action: { action: "wait", durationMs: 5000 } };
   }
 
-  const action = parseActionResponse(response.text);
-  const actionJson = action ? JSON.stringify(action) : "null";
+  const parsed = parseActionResponse(response.text);
+  const actionJson = parsed ? JSON.stringify(parsed.action) : "null";
 
   console.group(label, style);
   console.log(
@@ -735,9 +763,9 @@ export async function decideNextAction(
       buildVolatileBlock(npc, snapshot, "action"),
   );
   console.groupEnd();
-  if (action) {
+  if (parsed) {
     console.log(
-      `%c→ Action%c ${actionJson} %c(${elapsed}ms)`,
+      `%c→ Action%c ${actionJson}${parsed.chatText ? ` 💬 "${parsed.chatText}"` : ""} %c(${elapsed}ms)`,
       "color:#44ff88",
       "color:inherit",
       "color:#666",
@@ -752,16 +780,16 @@ export async function decideNextAction(
   npc.debugLastResponse = response.text ? response.text.slice(0, 500) : "(empty response)";
   npc.debugLastAction = actionJson;
 
-  if (!action) {
+  if (!parsed) {
     if (!response.text) {
       npc.debugLastResult = "❌ Empty response — check model name & API key in Settings → AI";
     } else {
       npc.debugLastResult = "❌ Parse failed — model didn't return valid XML action";
     }
-    return { action: "wait", durationMs: 3000 };
+    return { action: { action: "wait", durationMs: 3000 } };
   }
 
-  return action;
+  return { action: parsed.action, chatText: parsed.chatText };
 }
 
 // ═════════════════════════════════════════════════════════════════════

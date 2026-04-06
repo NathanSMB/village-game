@@ -41,12 +41,30 @@ const FONT_VALUE = new ex.Font({
   baseAlign: ex.BaseAlign.Middle,
 });
 
+const FONT_VALUE_LEFT = new ex.Font({
+  family: "monospace",
+  size: 18,
+  bold: true,
+  color: ex.Color.White,
+  textAlign: ex.TextAlign.Left,
+  baseAlign: ex.BaseAlign.Middle,
+});
+
 const FONT_VALUE_SELECTED = new ex.Font({
   family: "monospace",
   size: 18,
   bold: true,
   color: ex.Color.fromHex("#f0c040"),
   textAlign: ex.TextAlign.Center,
+  baseAlign: ex.BaseAlign.Middle,
+});
+
+const FONT_VALUE_SELECTED_LEFT = new ex.Font({
+  family: "monospace",
+  size: 18,
+  bold: true,
+  color: ex.Color.fromHex("#f0c040"),
+  textAlign: ex.TextAlign.Left,
   baseAlign: ex.BaseAlign.Middle,
 });
 
@@ -237,8 +255,8 @@ export class CharacterCreator extends ex.Scene {
 
     this.nameValueLabel = new ex.Label({
       text: "(click to type)",
-      pos: ex.vec(this.optionsX + 75, y),
-      font: FONT_VALUE.clone(),
+      pos: ex.vec(this.optionsX + 10, y),
+      font: FONT_VALUE_LEFT.clone(),
     });
     this.nameValueLabel.on("pointerdown", () => {
       this.selectedRow = 0;
@@ -250,7 +268,7 @@ export class CharacterCreator extends ex.Scene {
   private refreshNameDisplay(): void {
     if (this.nameFocused) {
       this.nameValueLabel.text = (this.playerName || "") + "_";
-      this.nameValueLabel.font = FONT_VALUE_SELECTED.clone();
+      this.nameValueLabel.font = FONT_VALUE_SELECTED_LEFT.clone();
       this.nameValueLabel.color = ex.Color.fromHex("#ff8844");
     } else if (this.playerName) {
       this.nameValueLabel.text = this.playerName;
@@ -526,7 +544,9 @@ export class CharacterCreator extends ex.Scene {
     // Name row (index 0)
     const nameSelected = this.selectedRow === 0;
     if (!this.nameFocused) {
-      this.nameValueLabel.font = nameSelected ? FONT_VALUE_SELECTED.clone() : FONT_VALUE.clone();
+      this.nameValueLabel.font = nameSelected
+        ? FONT_VALUE_SELECTED_LEFT.clone()
+        : FONT_VALUE_LEFT.clone();
       this.nameValueLabel.color = nameSelected ? ex.Color.fromHex("#f0c040") : ex.Color.White;
       this.refreshNameDisplay();
     }

@@ -125,6 +125,10 @@ export class NPC extends ex.Actor {
       if (e.details.includes("water") && e.details.includes("drinkable")) {
         this.knownLocations[`water:${e.x},${e.y}`] = "water";
       }
+      // Buildings and holograms
+      if (e.type === "building" && !e.details.includes("water")) {
+        this.knownLocations[`building:${e.x},${e.y}`] = e.details;
+      }
     }
   }
 

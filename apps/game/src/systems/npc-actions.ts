@@ -209,6 +209,26 @@ export function executeNPCAction(
   action: NPCAction,
   world: GameWorldNPCInterface,
 ): ActionResult {
+  // Exhaustion: when energy is 0, only sleep, wake_up, plan, think, consume, chat are allowed
+  if (npc.vitals.energy <= 0) {
+    const allowed = new Set([
+      "sleep",
+      "wake_up",
+      "plan",
+      "think",
+      "complete_todo",
+      "consume",
+      "chat",
+      "claim_bed",
+    ]);
+    if (!allowed.has(action.action)) {
+      return {
+        success: false,
+        reason: "Too exhausted! You can only sleep, eat, or chat. Find a bed!",
+      };
+    }
+  }
+
   switch (action.action) {
     case "plan":
       // Handled by GameWorld — routed to thinking model

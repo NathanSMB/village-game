@@ -253,7 +253,7 @@ function buildSystemPrompt(npc: NPC, snapshot: WorldSnapshot): string {
   // No bed is ALWAYS an emergency — it should be the #1 priority
   if (!npc.claimedBed) {
     emergencies.push(
-      `!!! #1 PRIORITY: YOU HAVE NO BED !!! Without a bed you WILL die — energy cannot recover. Steps: 1) Kill a cow → get cow_hide 2) Kill a sheep → get wool 3) Craft bedroll 4) Place bedroll with build_plan 5) Construct it 6) Claim it with claim_bed 7) Sleep. This is MORE IMPORTANT than any other task!`,
+      `!!! #1 PRIORITY: YOU HAVE NO BED !!! Without a bed you WILL DIE — energy cannot recover, at 0 energy you become exhausted and helpless, then thirst/hunger drain your HP to 0. Full steps: 1) Mine rock → small_rock 2) Chop tree → branch 3) Craft hammer (1 small_rock + 1 branch) 4) Kill a cow → cow_hide 5) Kill a sheep → wool 6) Craft bedroll (1 cow_hide + 1 wool) 7) Place bedroll with build_plan 8) Equip hammer + construct the bedroll 9) claim_bed 10) Sleep. This is MORE IMPORTANT than anything else!`,
     );
   }
 
@@ -286,7 +286,7 @@ function buildSystemPrompt(npc: NPC, snapshot: WorldSnapshot): string {
   const energy = vitals.energy;
   if (energy <= 50) {
     emergencies.push(
-      `!!! ENERGY CRITICALLY LOW (${Math.round(energy)}/1000) !!! You will DIE very soon!${npc.claimedBed ? ` SLEEP NOW: {"action":"sleep","x":${npc.claimedBed.x},"y":${npc.claimedBed.y}}` : " You have NO BED — build a bedroll (1 cow_hide + 1 wool) IMMEDIATELY!"}`,
+      `!!! ENERGY CRITICALLY LOW (${Math.round(energy)}/1000) !!! At 0 you will be EXHAUSTED and unable to do anything except sleep!${npc.claimedBed ? ` SLEEP NOW: {"action":"sleep","x":${npc.claimedBed.x},"y":${npc.claimedBed.y}}` : " You have NO BED — build a bedroll (1 cow_hide + 1 wool) IMMEDIATELY!"}`,
     );
   } else if (energy <= 200) {
     if (npc.claimedBed) {
@@ -345,7 +345,7 @@ RULES — READ CAREFULLY:
 3. AUTO-WALK: All interaction actions support x,y coordinates. Provide the target's coordinates and the NPC will automatically walk there and execute the action. No need to move_to first! Use coordinates from the VISIBLE list or KNOWN LOCATIONS.
 4. ALWAYS have a plan. No todo list? Your ONLY action must be "plan". You CANNOT skip this.
 5. SURVIVAL PRIORITY ORDER: Thirst > Hunger > Energy. If any are low, address them. No bed? Build a bedroll (1 cow_hide + 1 wool).
-6. ENERGY: Drains at 1/sec while awake. ONLY recovers by sleeping in YOUR bed. 0 = death.
+6. ENERGY: Drains at 1/sec while awake. ONLY recovers by sleeping in YOUR bed. At 0 energy you are EXHAUSTED — you can only sleep, eat, and chat. You cannot gather, build, attack, or move normally. Half speed.
 8. EQUIP YOUR TOOLS: Before chopping trees, equip a hatchet. Before mining rocks, equip a pickaxe. Before fighting, equip your best weapon (spear > hammer > unarmed). Before building, equip a hammer. Use "equip" with the bag index. Tools make a HUGE difference in damage.
 9. BE ACTIVE: Move, gather, craft, explore, talk. The world is large (64x64) with resources spread everywhere.
 10. NEVER wait if there's something useful you could do instead. Only use "wait" if you truly have nothing to do.

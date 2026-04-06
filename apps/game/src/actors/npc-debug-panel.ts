@@ -61,6 +61,7 @@ function vitalsBar(
 export class NPCDebugPanel extends ex.ScreenElement {
   private npcs: NPC[] = [];
   private selectedIndex = 0;
+  private scrollOffset = 0;
   private canvas: ex.Canvas;
 
   constructor(screenWidth: number, screenHeight: number) {
@@ -88,6 +89,15 @@ export class NPCDebugPanel extends ex.ScreenElement {
   cycleNPC(dir: number): void {
     if (this.npcs.length === 0) return;
     this.selectedIndex = (this.selectedIndex + dir + this.npcs.length) % this.npcs.length;
+    this.scrollOffset = 0;
+  }
+
+  scrollUp(): void {
+    if (this.scrollOffset > 0) this.scrollOffset--;
+  }
+
+  scrollDown(): void {
+    this.scrollOffset++;
   }
 
   private draw(ctx: CanvasRenderingContext2D): void {
@@ -165,16 +175,33 @@ export class NPCDebugPanel extends ex.ScreenElement {
     ctx.textAlign = "left";
     ctx.font = "bold 10px monospace";
     ctx.fillStyle = LABEL_COLOR;
-    ctx.fillText(`PLAN (${npc.todoList.length} items)`, PAD, y);
+    const maxTodoVisible = 4;
+    const todoCount = npc.todoList.length;
+    // Clamp scroll offset
+    const maxScroll = Math.max(0, todoCount - maxTodoVisible);
+    if (this.scrollOffset > maxScroll) this.scrollOffset = maxScroll;
+
+    ctx.fillText(
+      `PLAN (${todoCount} items)${todoCount > maxTodoVisible ? ` [↑↓ scroll ${this.scrollOffset + 1}-${Math.min(this.scrollOffset + maxTodoVisible, todoCount)}/${todoCount}]` : ""}`,
+      PAD,
+      y,
+    );
     y += LINE;
-    if (npc.todoList.length === 0) {
+    if (todoCount === 0) {
       ctx.font = "9px monospace";
       ctx.fillStyle = ERR_COLOR;
       ctx.fillText("(no plan)", PAD, y);
       y += LINE - 1;
     } else {
       ctx.font = "9px monospace";
-      for (let i = 0; i < Math.min(3, npc.todoList.length); i++) {
+      const startIdx = this.scrollOffset;
+      const endIdx = Math.min(startIdx + maxTodoVisible, todoCount);
+      if (startIdx > 0) {
+        ctx.fillStyle = DIM_COLOR;
+        ctx.fillText(`  ▲ ${startIdx} more above`, PAD, y);
+        y += LINE - 2;
+      }
+      for (let i = startIdx; i < endIdx; i++) {
         const t = npc.todoList[i];
         ctx.fillStyle = t.done ? DIM_COLOR : "#ffdd66";
         ctx.fillText(`${t.done ? "✓" : "○"} [${i}] ${truncate(t.task, 36)}`, PAD, y);
@@ -183,9 +210,9 @@ export class NPCDebugPanel extends ex.ScreenElement {
         ctx.fillText(`     ↳ ${truncate(t.doneWhen, 33)}`, PAD, y);
         y += LINE - 2;
       }
-      if (npc.todoList.length > 3) {
+      if (endIdx < todoCount) {
         ctx.fillStyle = DIM_COLOR;
-        ctx.fillText(`  +${npc.todoList.length - 3} more`, PAD, y);
+        ctx.fillText(`  ▼ ${todoCount - endIdx} more below`, PAD, y);
         y += LINE - 2;
       }
     }

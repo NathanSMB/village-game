@@ -230,11 +230,39 @@ export class NPC extends ex.Actor {
 
   // Chat history — rolling log of recent messages (sent + received), kept across LLM calls
   chatHistory: ChatMessage[] = [];
+  /** Timestamp of the last chat message this NPC sent (for cooldown). */
+  lastChatTime = 0;
   private static readonly MAX_CHAT_HISTORY = 50;
 
   // Brain coordination
   private waitTimer = 0;
   pendingPath: Direction[] = []; // for move_to multi-step
+  /** Action to execute after pendingPath completes (auto-walk-then-do pattern). */
+  pendingAction: import("../types/npc.ts").NPCAction | null = null;
+
+  /** Which emergency types have already triggered a replan (to avoid re-triggering every tick). */
+  emergencyReplanned = new Set<string>();
+
+  // Stuck detection — consecutive failures of the same action trigger replan
+  private lastFailedAction = "";
+  private consecutiveFailures = 0;
+
+  /** Track action failure. Returns true if stuck (3+ consecutive same failures). */
+  trackFailure(actionJson: string): boolean {
+    if (actionJson === this.lastFailedAction) {
+      this.consecutiveFailures++;
+    } else {
+      this.lastFailedAction = actionJson;
+      this.consecutiveFailures = 1;
+    }
+    return this.consecutiveFailures >= 3;
+  }
+
+  /** Reset stuck detection on success. */
+  trackSuccess(): void {
+    this.lastFailedAction = "";
+    this.consecutiveFailures = 0;
+  }
 
   // ── Debug state ────────────────────────────────────────────────────
   /** Whether an LLM call is currently in-flight (set externally by GameWorld). */
@@ -419,7 +447,8 @@ export class NPC extends ex.Actor {
     const vy = goalY - this.pos.y;
     const len = Math.sqrt(vx * vx + vy * vy);
     if (len > 0) {
-      this.vel = ex.vec((vx / len) * MOVE_SPEED, (vy / len) * MOVE_SPEED);
+      const speed = this.vitals.energy <= 0 ? MOVE_SPEED / 2 : MOVE_SPEED;
+      this.vel = ex.vec((vx / len) * speed, (vy / len) * speed);
     }
 
     return true;
@@ -584,8 +613,13 @@ export class NPC extends ex.Actor {
       this.regenAccum = 0;
     }
 
-    // --- Sleeping ---
-    if (this.sleeping) return;
+    // --- Sleeping — auto-wake when full energy or survival emergency ---
+    if (this.sleeping) {
+      if (this.vitals.energy >= 1000 || this.vitals.thirst <= 20 || this.vitals.hunger <= 10) {
+        this.exitSleep();
+      }
+      return;
+    }
 
     // --- Animation state machines ---
     if (this.actionState === "picking") {

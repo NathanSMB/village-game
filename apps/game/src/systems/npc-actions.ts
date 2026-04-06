@@ -12,7 +12,13 @@ import type { ChatMode } from "../types/chat.ts";
 import type { NPCAction, ActionResult } from "../types/npc.ts";
 import { EquipmentSlot } from "../types/item.ts";
 import type { Item } from "../types/item.ts";
-import { addItemToBag, equipItem, unequipItem, consumeItem } from "../types/inventory.ts";
+import {
+  addItemToBag,
+  equipItem,
+  unequipItem,
+  consumeItem,
+  consumeArrow,
+} from "../types/inventory.ts";
 import { canCraft, craft } from "../types/crafting.ts";
 import { RECIPES } from "../data/recipes.ts";
 import { COOKING_RECIPE_MAP } from "../data/cooking.ts";
@@ -38,6 +44,8 @@ export interface GameWorldNPCInterface {
   isWaterTile(x: number, y: number): boolean;
   isBlockedTile(x: number, y: number): boolean;
   getPlayerInfo(): { tileX: number; tileY: number; name: string } | null;
+  /** Get the current tile position of a creature by type and last-known position. */
+  getCreaturePosition(targetType: string, x: number, y: number): { x: number; y: number } | null;
 
   // Mutating actions
   npcDropItem(npc: NPC, item: Item, tileX: number, tileY: number): void;
@@ -56,6 +64,136 @@ export interface GameWorldNPCInterface {
   isBedClaimed(x: number, y: number): boolean;
   claimBed(npc: NPC, x: number, y: number): boolean;
   npcAttackAt(npc: NPC, x: number, y: number): void;
+  /** Spawn an arrow projectile from the NPC in the given direction. */
+  npcShootArrow(npc: NPC, direction: Direction): void;
+  /** Get the Chebyshev distance to the nearest listener (player or other NPC). */
+  getNearestListenerDistance(npc: NPC): number;
+  /** Check if any hologram buildings exist on the map. */
+  hasUncompletedHolograms(): boolean;
+  /** Get the position of the first uncompleted hologram, or null. */
+  getHologramLocation(): { x: number; y: number } | null;
+}
+
+// ── Helpers ──────────────────────────────────────────────────────────
+
+const DIR_DX: Record<Direction, number> = { left: -1, right: 1, up: 0, down: 0 };
+const DIR_DY: Record<Direction, number> = { up: -1, down: 1, left: 0, right: 0 };
+const CARDINAL_DIRS: Direction[] = ["up", "down", "left", "right"];
+
+/** Find which adjacent tile has a resource, and return the direction to face it. */
+function findAdjacentDir(
+  npcX: number,
+  npcY: number,
+  test: (x: number, y: number) => boolean,
+): Direction | null {
+  for (const dir of CARDINAL_DIRS) {
+    const tx = npcX + DIR_DX[dir];
+    const ty = npcY + DIR_DY[dir];
+    if (test(tx, ty)) return dir;
+  }
+  return null;
+}
+
+/** Get the direction from (fromX,fromY) to an adjacent tile (toX,toY), or null if not adjacent. */
+function directionTo(fromX: number, fromY: number, toX: number, toY: number): Direction | null {
+  const dx = toX - fromX;
+  const dy = toY - fromY;
+  if (dx === 1 && dy === 0) return "right";
+  if (dx === -1 && dy === 0) return "left";
+  if (dx === 0 && dy === 1) return "down";
+  if (dx === 0 && dy === -1) return "up";
+  return null;
+}
+
+/**
+ * If the target (x,y) is adjacent, return the direction. If not, pathfind to an
+ * adjacent tile and queue the action as pendingAction. Returns "queued" if walking,
+ * the Direction if adjacent, or null if unreachable.
+ */
+function walkToTargetOrAct(
+  npc: NPC,
+  tx: number,
+  ty: number,
+  queuedAction: import("../types/npc.ts").NPCAction,
+  world: GameWorldNPCInterface,
+): Direction | "queued" | null {
+  // Already adjacent?
+  const adj = directionTo(npc.tileX, npc.tileY, tx, ty);
+  if (adj) return adj;
+
+  // Pathfind to a tile adjacent to the target
+  for (const dir of CARDINAL_DIRS) {
+    const ax = tx + DIR_DX[dir];
+    const ay = ty + DIR_DY[dir];
+    const dirs = world.findPathDirections(npc.tileX, npc.tileY, ax, ay);
+    if (dirs && dirs.length > 0) {
+      npc.pendingPath = dirs;
+      npc.pendingAction = queuedAction;
+      npc.moveToTile(npc.pendingPath.shift()!);
+      return "queued";
+    }
+  }
+  return null;
+}
+
+const BOW_RANGE = 5;
+const SHOOT_ITEM_IDS = new Set(["bow"]);
+
+function hasRangedWeapon(npc: NPC): boolean {
+  const mainHand = npc.inventory.equipment[EquipmentSlot.MainHand];
+  return mainHand != null && SHOOT_ITEM_IDS.has(mainHand.id);
+}
+
+function hasAmmo(npc: NPC): boolean {
+  const offHand = npc.inventory.equipment[EquipmentSlot.OffHand];
+  return offHand != null && offHand.id === "arrow";
+}
+
+/**
+ * Like walkToTargetOrAct but stops within `range` tiles (Chebyshev distance)
+ * instead of adjacent. Used for ranged attacks.
+ */
+function walkToRangeAndAct(
+  npc: NPC,
+  tx: number,
+  ty: number,
+  range: number,
+  queuedAction: import("../types/npc.ts").NPCAction,
+  world: GameWorldNPCInterface,
+): Direction | "queued" | null {
+  // Already in range?
+  const dist = Math.max(Math.abs(npc.tileX - tx), Math.abs(npc.tileY - ty));
+  if (dist <= range) {
+    // Face toward target
+    const dx = tx - npc.tileX;
+    const dy = ty - npc.tileY;
+    // Pick dominant axis for facing
+    if (Math.abs(dx) >= Math.abs(dy)) {
+      return dx > 0 ? "right" : "left";
+    }
+    return dy > 0 ? "down" : "up";
+  }
+
+  // Need to walk closer — find a tile within range
+  // Try tiles along cardinal directions from target, at range distance
+  for (let r = range; r >= 1; r--) {
+    const candidates = [
+      { x: tx - r, y: ty },
+      { x: tx + r, y: ty },
+      { x: tx, y: ty - r },
+      { x: tx, y: ty + r },
+    ];
+    for (const c of candidates) {
+      const dirs = world.findPathDirections(npc.tileX, npc.tileY, c.x, c.y);
+      if (dirs && dirs.length > 0) {
+        npc.pendingPath = dirs;
+        npc.pendingAction = queuedAction;
+        npc.moveToTile(npc.pendingPath.shift()!);
+        return "queued";
+      }
+    }
+  }
+  return null;
 }
 
 // ── Timing constants (same as player) ────────────────────────────────
@@ -87,28 +225,28 @@ export function executeNPCAction(
       return execMoveTo(npc, action.x, action.y, world);
 
     case "pick_bush":
-      return execPickBush(npc, action.direction, world);
+      return execPickBush(npc, world, action.x, action.y);
 
     case "chop_tree":
-      return execChopTree(npc, action.direction, world);
+      return execChopTree(npc, world, action.x, action.y);
 
     case "mine_rock":
-      return execMineRock(npc, action.direction, world);
+      return execMineRock(npc, world, action.x, action.y);
 
     case "drink_water":
-      return execDrinkWater(npc, action.direction, world);
+      return execDrinkWater(npc, world, action.x, action.y);
 
     case "pick_up_item":
-      return execPickUpItem(npc, action.direction, world);
+      return execPickUpItem(npc, action.itemId, world, action.x, action.y);
 
     case "attack":
-      return execAttack(npc, action.direction, world);
+      return execAttack(npc, world, action.direction, action.targetType, action.x, action.y);
 
     case "craft":
       return execCraft(npc, action.recipeId);
 
     case "cook":
-      return execCook(npc, action.direction, action.inputItemId, world);
+      return execCook(npc, action.inputItemId, world, action.x, action.y);
 
     case "build_plan":
       return execBuildPlan(
@@ -120,6 +258,9 @@ export function executeNPCAction(
         action.orientation,
         world,
       );
+
+    case "construct":
+      return execConstruct(npc, action.x, action.y, world);
 
     case "equip":
       return execEquip(npc, action.bagIndex);
@@ -135,25 +276,25 @@ export function executeNPCAction(
 
     case "open_door":
     case "close_door":
-      return execToggleDoor(npc, action.direction, world);
+      return execToggleDoor(npc, world, action.x, action.y);
 
     case "claim_bed":
-      return execClaimBed(npc, action.direction, world);
+      return execClaimBed(npc, world, action.x, action.y);
 
     case "sleep":
-      return execSleep(npc, action.direction, world);
+      return execSleep(npc, world, action.x, action.y);
 
     case "wake_up":
       return execWakeUp(npc);
 
     case "store_item":
-      return execStoreItem(npc, action.direction, action.bagIndex, world);
+      return execStoreItem(npc, action.bagIndex, world, action.x, action.y);
 
     case "retrieve_item":
-      return execRetrieveItem(npc, action.direction, action.slotIndex, world);
+      return execRetrieveItem(npc, action.slotIndex, world, action.x, action.y);
 
     case "chat":
-      return execChat(npc, action.text, action.mode, world);
+      return execChat(npc, action.text, world);
 
     case "remember":
       return execRemember(npc, action.note);
@@ -205,49 +346,64 @@ function execMoveTo(npc: NPC, x: number, y: number, world: GameWorldNPCInterface
   return { success: true };
 }
 
-function execPickBush(npc: NPC, direction: Direction, world: GameWorldNPCInterface): ActionResult {
-  npc.face(direction);
-  const facing = npc.getFacingTile();
-  const bush = world.getBushAt(facing.x, facing.y);
-  if (!bush || !bush.canPick()) {
-    return { success: false, reason: "No bush with berries" };
-  }
+// ── Auto-walk interaction executors ──────────────────────────────────
+// All these follow the same pattern: if target coords are provided and not adjacent,
+// pathfind there and queue as pendingAction. Otherwise execute immediately.
 
+function execPickBush(
+  npc: NPC,
+  world: GameWorldNPCInterface,
+  x?: number,
+  y?: number,
+): ActionResult {
+  if (x != null && y != null) {
+    const result = walkToTargetOrAct(npc, x, y, { action: "pick_bush" }, world);
+    if (result === "queued") return { success: true, reason: "Walking to bush" };
+    if (result === null) return { success: false, reason: "Cannot reach bush" };
+  }
+  const dir = findAdjacentDir(npc.tileX, npc.tileY, (bx, by) => {
+    const b = world.getBushAt(bx, by);
+    return b != null && b.canPick();
+  });
+  if (!dir) return { success: false, reason: "No berry bush with berries nearby" };
+  npc.face(dir);
   npc.startPicking();
-
-  // Schedule the actual pick after animation
+  const facing = npc.getFacingTile();
   setTimeout(() => {
-    const berry = bush.pick();
-    if (berry) {
-      addItemToBag(npc.inventory, berry);
-    }
+    const bush = world.getBushAt(facing.x, facing.y);
+    const berry = bush?.pick();
+    if (berry) addItemToBag(npc.inventory, berry);
   }, PICK_DELAY);
-
   return { success: true };
 }
 
-function execChopTree(npc: NPC, direction: Direction, world: GameWorldNPCInterface): ActionResult {
-  npc.face(direction);
-  const facing = npc.getFacingTile();
-  const tree = world.getTreeAt(facing.x, facing.y);
-  if (!tree || tree.isChoppedDown()) {
-    return { success: false, reason: "No tree to chop" };
+function execChopTree(
+  npc: NPC,
+  world: GameWorldNPCInterface,
+  x?: number,
+  y?: number,
+): ActionResult {
+  if (x != null && y != null) {
+    const result = walkToTargetOrAct(npc, x, y, { action: "chop_tree" }, world);
+    if (result === "queued") return { success: true, reason: "Walking to tree" };
+    if (result === null) return { success: false, reason: "Cannot reach tree" };
   }
-
+  const dir = findAdjacentDir(npc.tileX, npc.tileY, (tx, ty) => {
+    const t = world.getTreeAt(tx, ty);
+    return t != null && !t.isChoppedDown();
+  });
+  if (!dir) return { success: false, reason: "No tree nearby" };
+  npc.face(dir);
   npc.startAttack();
-
-  // Apply damage after a short delay
+  const facing = npc.getFacingTile();
   setTimeout(() => {
+    const tree = world.getTreeAt(facing.x, facing.y);
+    if (!tree) return;
     const mainHand = npc.inventory.equipment[EquipmentSlot.MainHand];
     const canonical = mainHand ? ITEMS[mainHand.id] : null;
     const baseDamage = canonical ? (canonical.stats.attack ?? 0) : UNARMED_DAMAGE;
-    const mult = canonical?.toolMultipliers?.tree ?? 1;
-    const damage = baseDamage * mult;
-    const result = tree.takeDamage(damage);
-    for (const drop of result.drops) {
-      world.dropResourceNear(tree.tileX, tree.tileY, drop);
-    }
-    // Degrade weapon
+    const result = tree.takeDamage(baseDamage * (canonical?.toolMultipliers?.tree ?? 1));
+    for (const drop of result.drops) world.dropResourceNear(tree.tileX, tree.tileY, drop);
     if (mainHand && mainHand.durability != null) {
       mainHand.durability -= 1;
       if (mainHand.durability <= 0) {
@@ -256,30 +412,33 @@ function execChopTree(npc: NPC, direction: Direction, world: GameWorldNPCInterfa
       }
     }
   }, 200);
-
   return { success: true };
 }
 
-function execMineRock(npc: NPC, direction: Direction, world: GameWorldNPCInterface): ActionResult {
-  npc.face(direction);
-  const facing = npc.getFacingTile();
-  const rock = world.getRockAt(facing.x, facing.y);
-  if (!rock) {
-    return { success: false, reason: "No rock to mine" };
+function execMineRock(
+  npc: NPC,
+  world: GameWorldNPCInterface,
+  x?: number,
+  y?: number,
+): ActionResult {
+  if (x != null && y != null) {
+    const result = walkToTargetOrAct(npc, x, y, { action: "mine_rock" }, world);
+    if (result === "queued") return { success: true, reason: "Walking to rock" };
+    if (result === null) return { success: false, reason: "Cannot reach rock" };
   }
-
+  const dir = findAdjacentDir(npc.tileX, npc.tileY, (rx, ry) => world.getRockAt(rx, ry) != null);
+  if (!dir) return { success: false, reason: "No rock nearby" };
+  npc.face(dir);
   npc.startAttack();
-
+  const facing = npc.getFacingTile();
   setTimeout(() => {
+    const rock = world.getRockAt(facing.x, facing.y);
+    if (!rock) return;
     const mainHand = npc.inventory.equipment[EquipmentSlot.MainHand];
     const canonical = mainHand ? ITEMS[mainHand.id] : null;
     const baseDamage = canonical ? (canonical.stats.attack ?? 0) : UNARMED_DAMAGE;
-    const mult = canonical?.toolMultipliers?.mineable ?? 1;
-    const damage = baseDamage * mult;
-    const drops = rock.takeDamage(damage);
-    for (const drop of drops) {
-      world.dropResourceNear(rock.tileX, rock.tileY, drop);
-    }
+    const drops = rock.takeDamage(baseDamage * (canonical?.toolMultipliers?.mineable ?? 1));
+    for (const drop of drops) world.dropResourceNear(rock.tileX, rock.tileY, drop);
     if (mainHand && mainHand.durability != null) {
       mainHand.durability -= 1;
       if (mainHand.durability <= 0) {
@@ -288,69 +447,139 @@ function execMineRock(npc: NPC, direction: Direction, world: GameWorldNPCInterfa
       }
     }
   }, 200);
-
   return { success: true };
 }
 
 function execDrinkWater(
   npc: NPC,
-  direction: Direction,
   world: GameWorldNPCInterface,
+  x?: number,
+  y?: number,
 ): ActionResult {
-  npc.face(direction);
-  const facing = npc.getFacingTile();
-  if (!world.isWaterTile(facing.x, facing.y)) {
-    return { success: false, reason: "No water there" };
+  if (x != null && y != null) {
+    const result = walkToTargetOrAct(npc, x, y, { action: "drink_water" }, world);
+    if (result === "queued") return { success: true, reason: "Walking to water" };
+    if (result === null) return { success: false, reason: "Cannot reach water" };
   }
-
+  const dir = findAdjacentDir(npc.tileX, npc.tileY, (wx, wy) => world.isWaterTile(wx, wy));
+  if (!dir) return { success: false, reason: "No water nearby" };
+  npc.face(dir);
   npc.startDrinking();
-  // Thirst restore is handled inside NPC.onPreUpdate when drink animation completes
   return { success: true };
 }
 
 function execPickUpItem(
   npc: NPC,
-  direction: Direction,
+  itemId: string,
   world: GameWorldNPCInterface,
+  x?: number,
+  y?: number,
 ): ActionResult {
-  npc.face(direction);
-  const facing = npc.getFacingTile();
-  const stack = world.getGroundItemsAt(facing.x, facing.y);
-  if (!stack || stack.isEmpty()) {
-    return { success: false, reason: "No items on the ground" };
+  if (x != null && y != null) {
+    const result = walkToTargetOrAct(npc, x, y, { action: "pick_up_item", itemId }, world);
+    if (result === "queued") return { success: true, reason: `Walking to pick up ${itemId}` };
+    if (result === null) return { success: false, reason: `Cannot reach ${itemId}` };
   }
-
-  npc.startPickingUpItem();
-
-  setTimeout(() => {
-    const item = stack.removeItem(0);
-    if (item) {
-      addItemToBag(npc.inventory, item);
+  // Search own tile + adjacent
+  const tilesToCheck: { tx: number; ty: number; dir: Direction | null }[] = [
+    { tx: npc.tileX, ty: npc.tileY, dir: null },
+    ...CARDINAL_DIRS.map((d) => ({ tx: npc.tileX + DIR_DX[d], ty: npc.tileY + DIR_DY[d], dir: d })),
+  ];
+  for (const { tx, ty, dir } of tilesToCheck) {
+    const stack = world.getGroundItemsAt(tx, ty);
+    if (!stack || stack.isEmpty()) continue;
+    const idx = stack.getItems().findIndex((i) => i.id === itemId);
+    if (idx >= 0) {
+      if (dir) npc.face(dir);
+      npc.startPickingUpItem();
+      setTimeout(() => {
+        const s = world.getGroundItemsAt(tx, ty);
+        if (!s || s.isEmpty()) return;
+        const item = s.removeItem(idx);
+        if (item) addItemToBag(npc.inventory, item);
+      }, PICKUP_DELAY);
+      return { success: true };
     }
-  }, PICKUP_DELAY);
-
-  return { success: true };
+  }
+  return { success: false, reason: `No ${itemId} nearby` };
 }
 
-function execAttack(npc: NPC, direction: Direction, world: GameWorldNPCInterface): ActionResult {
-  npc.face(direction);
+function execAttack(
+  npc: NPC,
+  world: GameWorldNPCInterface,
+  direction?: Direction,
+  targetType?: string,
+  x?: number,
+  y?: number,
+): ActionResult {
+  const ranged = hasRangedWeapon(npc);
+  const ammo = hasAmmo(npc);
+
+  // Target-based attack: auto-walk to creature and attack (melee or ranged)
+  if (targetType && x != null && y != null) {
+    const pos = world.getCreaturePosition(targetType, x, y);
+    if (!pos) return { success: false, reason: `Target ${targetType} not found` };
+
+    if (ranged && ammo) {
+      // Ranged: walk to within BOW_RANGE, then shoot
+      const result = walkToRangeAndAct(
+        npc,
+        pos.x,
+        pos.y,
+        BOW_RANGE,
+        { action: "attack", targetType, x: pos.x, y: pos.y },
+        world,
+      );
+      if (result === "queued") return { success: true, reason: `Moving into range` };
+      if (result === null) return { success: false, reason: `Cannot get in range` };
+      // In range — face and shoot
+      npc.face(result);
+      npc.startAttack();
+      consumeArrow(npc.inventory);
+      npc.refreshSprite();
+      setTimeout(() => world.npcShootArrow(npc, result), 200);
+      return { success: true, reason: "Shooting" };
+    }
+
+    // Melee: walk adjacent
+    const result = walkToTargetOrAct(
+      npc,
+      pos.x,
+      pos.y,
+      { action: "attack", targetType, x: pos.x, y: pos.y },
+      world,
+    );
+    if (result === "queued") return { success: true, reason: `Chasing ${targetType}` };
+    if (result === null) return { success: false, reason: `Cannot reach ${targetType}` };
+    npc.face(result);
+    npc.startAttack();
+    setTimeout(() => world.npcAttackAt(npc, pos.x, pos.y), 200);
+    return { success: true };
+  }
+
+  // Direction-based or default facing attack
+  if (direction) npc.face(direction);
   npc.startAttack();
 
-  // Apply damage after animation delay (same timing as player)
-  const facing = npc.getFacingTile();
-  setTimeout(() => {
-    world.npcAttackAt(npc, facing.x, facing.y);
-  }, 200);
+  if (ranged && ammo) {
+    // Shoot arrow in facing direction
+    const facing = npc.getFacing();
+    consumeArrow(npc.inventory);
+    npc.refreshSprite();
+    setTimeout(() => world.npcShootArrow(npc, facing), 200);
+    return { success: true, reason: "Shooting" };
+  }
 
+  // Melee
+  const facing = npc.getFacingTile();
+  setTimeout(() => world.npcAttackAt(npc, facing.x, facing.y), 200);
   return { success: true };
 }
 
 function execCraft(npc: NPC, recipeId: string): ActionResult {
   const recipe = RECIPES.find((r) => r.id === recipeId);
   if (!recipe) return { success: false, reason: "Unknown recipe" };
-  if (!canCraft(npc.inventory, recipe)) {
-    return { success: false, reason: "Missing materials" };
-  }
+  if (!canCraft(npc.inventory, recipe)) return { success: false, reason: "Missing materials" };
   craft(npc.inventory, recipe);
   npc.refreshSprite();
   return { success: true };
@@ -358,30 +587,80 @@ function execCraft(npc: NPC, recipeId: string): ActionResult {
 
 function execCook(
   npc: NPC,
-  direction: Direction,
   inputItemId: string,
   world: GameWorldNPCInterface,
+  x?: number,
+  y?: number,
 ): ActionResult {
-  npc.face(direction);
-  const facing = npc.getFacingTile();
-  const building = world.getBuildingAt(facing.x, facing.y);
-  if (!building || !building.isBurning) {
-    return { success: false, reason: "No burning fire nearby" };
+  if (x != null && y != null) {
+    const result = walkToTargetOrAct(npc, x, y, { action: "cook", inputItemId }, world);
+    if (result === "queued") return { success: true, reason: "Walking to fire" };
+    if (result === null) return { success: false, reason: "Cannot reach fire" };
   }
-
+  const dir = findAdjacentDir(npc.tileX, npc.tileY, (fx, fy) => {
+    const b = world.getBuildingAt(fx, fy);
+    return b != null && b.isBurning;
+  });
+  if (!dir) return { success: false, reason: "No burning fire nearby" };
+  npc.face(dir);
   const recipe = COOKING_RECIPE_MAP[inputItemId];
-  if (!recipe) return { success: false, reason: "Cannot cook that item" };
-
+  if (!recipe) return { success: false, reason: "Cannot cook that" };
   const bagIdx = npc.inventory.bag.findIndex((item) => item.id === inputItemId);
   if (bagIdx === -1) return { success: false, reason: "Item not in inventory" };
-
   npc.inventory.bag.splice(bagIdx, 1);
   const cookedItem = ITEMS[recipe.outputId];
-  if (cookedItem) {
-    addItemToBag(npc.inventory, createItemCopy(recipe.outputId));
+  if (cookedItem) addItemToBag(npc.inventory, createItemCopy(recipe.outputId));
+  return { success: true };
+}
+
+function execConstruct(npc: NPC, x: number, y: number, world: GameWorldNPCInterface): ActionResult {
+  // Check if hammer is equipped
+  const mainHand = npc.inventory.equipment[EquipmentSlot.MainHand];
+  const hasHammerEquipped = mainHand != null && mainHand.id === "hammer";
+
+  if (!hasHammerEquipped) {
+    // Try to auto-equip hammer from bag
+    const hammerIdx = npc.inventory.bag.findIndex((i) => i.id === "hammer");
+    if (hammerIdx >= 0) {
+      equipItem(npc.inventory, hammerIdx);
+      npc.refreshSprite();
+      return { success: true, reason: "Equipped hammer — now use construct again" };
+    }
+    return {
+      success: false,
+      reason: "No hammer! Craft one first (1 small_rock + 1 branch) then equip it.",
+    };
   }
 
-  return { success: true };
+  // Check if target is a hologram
+  const building = world.getBuildingAt(x, y);
+  if (!building || building.state !== "hologram") {
+    return { success: false, reason: `No hologram at (${x},${y})` };
+  }
+
+  // Auto-walk to adjacent tile and attack (same pattern as other auto-walk actions)
+  const result = walkToTargetOrAct(npc, x, y, { action: "construct", x, y }, world);
+  if (result === "queued") return { success: true, reason: "Walking to hologram" };
+  if (result === null) return { success: false, reason: "Cannot reach hologram" };
+
+  // Adjacent — check if we have the next required material
+  const nextRequired = building.getNextRequired();
+  if (nextRequired) {
+    const hasMaterial = npc.inventory.bag.some((i) => i.id === nextRequired);
+    if (!hasMaterial) {
+      const itemName = ITEMS[nextRequired]?.name ?? nextRequired;
+      return {
+        success: false,
+        reason: `Need [${itemName}] (${nextRequired}) in bag to deliver! Gather it first.`,
+      };
+    }
+  }
+
+  // Face and attack the hologram to deliver materials
+  npc.face(result);
+  npc.startAttack();
+  setTimeout(() => world.npcAttackAt(npc, x, y), 200);
+  return { success: true, reason: `Constructing — delivering ${nextRequired ?? "materials"}` };
 }
 
 function execBuildPlan(
@@ -393,6 +672,14 @@ function execBuildPlan(
   orientation: string | undefined,
   world: GameWorldNPCInterface,
 ): ActionResult {
+  // Prevent placing more holograms when uncompleted ones already exist
+  if (world.hasUncompletedHolograms()) {
+    const loc = world.getHologramLocation();
+    return {
+      success: false,
+      reason: `Uncompleted hologram exists${loc ? ` at (${loc.x},${loc.y})` : ""}! Use {"action":"construct","x":${loc?.x ?? 0},"y":${loc?.y ?? 0}} to build it.`,
+    };
+  }
   const placed = world.npcPlaceBuilding(buildingId, x, y, rotation, orientation);
   if (!placed) return { success: false, reason: "Cannot place building there" };
   return { success: true };
@@ -441,61 +728,93 @@ function execDropItem(npc: NPC, bagIndex: number, world: GameWorldNPCInterface):
 
 function execToggleDoor(
   npc: NPC,
-  direction: Direction,
   world: GameWorldNPCInterface,
+  x?: number,
+  y?: number,
 ): ActionResult {
-  npc.face(direction);
-  const facing = npc.getFacingTile();
-
-  // Try edge building first (wall doors)
-  const edge = world.getEdgeBetween(npc.tileX, npc.tileY, facing.x, facing.y);
-  if (edge && edge.type.interactable && edge.state === "complete") {
-    world.npcToggleDoor(edge);
-    return { success: true };
+  if (x != null && y != null) {
+    const result = walkToTargetOrAct(npc, x, y, { action: "open_door" }, world);
+    if (result === "queued") return { success: true, reason: "Walking to door" };
+    if (result === null) return { success: false, reason: "Cannot reach door" };
   }
-
-  // Try tile building (interactable building on tile)
-  const building = world.getBuildingAt(facing.x, facing.y);
-  if (building && building.type.interactable && building.state === "complete") {
-    world.npcToggleTileDoor(building);
-    return { success: true };
+  // Auto-find adjacent door
+  for (const dir of CARDINAL_DIRS) {
+    const fx = npc.tileX + DIR_DX[dir];
+    const fy = npc.tileY + DIR_DY[dir];
+    const edge = world.getEdgeBetween(npc.tileX, npc.tileY, fx, fy);
+    if (edge && edge.type.interactable && edge.state === "complete") {
+      npc.face(dir);
+      world.npcToggleDoor(edge);
+      return { success: true };
+    }
+    const building = world.getBuildingAt(fx, fy);
+    if (building && building.type.interactable && building.state === "complete") {
+      npc.face(dir);
+      world.npcToggleTileDoor(building);
+      return { success: true };
+    }
   }
-
-  return { success: false, reason: "No door to toggle" };
+  return { success: false, reason: "No door nearby" };
 }
 
-function execClaimBed(npc: NPC, direction: Direction, world: GameWorldNPCInterface): ActionResult {
-  npc.face(direction);
+function execClaimBed(
+  npc: NPC,
+  world: GameWorldNPCInterface,
+  x?: number,
+  y?: number,
+): ActionResult {
+  if (x != null && y != null) {
+    // Check if the target bed is already claimed BEFORE walking there
+    if (world.isBedClaimed(x, y)) {
+      return {
+        success: false,
+        reason: `Bed at (${x},${y}) is already claimed! Build your own bedroll (1 cow_hide + 1 wool) instead.`,
+      };
+    }
+    const result = walkToTargetOrAct(npc, x, y, { action: "claim_bed" }, world);
+    if (result === "queued") return { success: true, reason: "Walking to bed" };
+    if (result === null) return { success: false, reason: "Cannot reach bed" };
+  }
+  // Auto-find adjacent bed
+  const dir = findAdjacentDir(npc.tileX, npc.tileY, (bx, by) => {
+    const b = world.getBuildingAt(bx, by);
+    return (
+      b != null &&
+      (b.type.id === "bed" || b.type.id === "bedroll") &&
+      b.state === "complete" &&
+      !world.isBedClaimed(bx, by)
+    );
+  });
+  if (!dir) return { success: false, reason: "No unclaimed bed nearby" };
+  npc.face(dir);
   const facing = npc.getFacingTile();
-  const building = world.getBuildingAt(facing.x, facing.y);
-  const isBedType = building && (building.type.id === "bed" || building.type.id === "bedroll");
-  if (!isBedType || building.state !== "complete") {
-    return { success: false, reason: "No bed or bedroll there" };
-  }
-  if (world.isBedClaimed(facing.x, facing.y)) {
-    return { success: false, reason: "Already claimed by someone" };
-  }
   const ok = world.claimBed(npc, facing.x, facing.y);
   if (!ok) return { success: false, reason: "Could not claim" };
   npc.claimedBed = { x: facing.x, y: facing.y };
   return { success: true, reason: `Claimed at (${facing.x},${facing.y})` };
 }
 
-function execSleep(npc: NPC, direction: Direction, world: GameWorldNPCInterface): ActionResult {
-  npc.face(direction);
+function execSleep(npc: NPC, world: GameWorldNPCInterface, x?: number, y?: number): ActionResult {
+  if (x != null && y != null) {
+    const result = walkToTargetOrAct(npc, x, y, { action: "sleep" }, world);
+    if (result === "queued") return { success: true, reason: "Walking to bed" };
+    if (result === null) return { success: false, reason: "Cannot reach bed" };
+  }
+  const dir = findAdjacentDir(npc.tileX, npc.tileY, (bx, by) => {
+    const b = world.getBuildingAt(bx, by);
+    if (!b || (b.type.id !== "bed" && b.type.id !== "bedroll") || b.state !== "complete")
+      return false;
+    if (
+      world.isBedClaimed(bx, by) &&
+      (!npc.claimedBed || npc.claimedBed.x !== bx || npc.claimedBed.y !== by)
+    )
+      return false;
+    return true;
+  });
+  if (!dir) return { success: false, reason: "No usable bed nearby" };
+  npc.face(dir);
   const facing = npc.getFacingTile();
-  const building = world.getBuildingAt(facing.x, facing.y);
-  const isBedType = building && (building.type.id === "bed" || building.type.id === "bedroll");
-  if (!isBedType || building.state !== "complete") {
-    return { success: false, reason: "No bed or bedroll there" };
-  }
-  // Can only sleep in your own claimed bed
-  if (
-    world.isBedClaimed(facing.x, facing.y) &&
-    (!npc.claimedBed || npc.claimedBed.x !== facing.x || npc.claimedBed.y !== facing.y)
-  ) {
-    return { success: false, reason: "This bed belongs to someone else" };
-  }
+  const building = world.getBuildingAt(facing.x, facing.y)!;
   npc.sleepEnergyRate = building.type.id === "bedroll" ? 3 : 5;
   npc.enterSleep();
   return { success: true };
@@ -509,61 +828,74 @@ function execWakeUp(npc: NPC): ActionResult {
 
 function execStoreItem(
   npc: NPC,
-  direction: Direction,
   bagIndex: number,
   world: GameWorldNPCInterface,
+  x?: number,
+  y?: number,
 ): ActionResult {
-  npc.face(direction);
+  if (x != null && y != null) {
+    const result = walkToTargetOrAct(npc, x, y, { action: "store_item", bagIndex }, world);
+    if (result === "queued") return { success: true, reason: "Walking to storage" };
+    if (result === null) return { success: false, reason: "Cannot reach storage" };
+  }
+  const dir = findAdjacentDir(npc.tileX, npc.tileY, (sx, sy) => {
+    const b = world.getBuildingAt(sx, sy);
+    return b != null && b.type.storage != null && b.state === "complete";
+  });
+  if (!dir) return { success: false, reason: "No storage nearby" };
+  npc.face(dir);
   const facing = npc.getFacingTile();
   const building = world.getBuildingAt(facing.x, facing.y);
-  if (!building || !building.type.storage || building.state !== "complete") {
-    return { success: false, reason: "No storage there" };
-  }
-  if (bagIndex < 0 || bagIndex >= npc.inventory.bag.length) {
+  if (!building?.storageSlots) return { success: false, reason: "No storage" };
+  if (bagIndex < 0 || bagIndex >= npc.inventory.bag.length)
     return { success: false, reason: "Invalid bag index" };
-  }
-  const slots = building.storageSlots;
-  if (!slots) return { success: false, reason: "No storage slots" };
-
-  const emptyIdx = slots.indexOf(null);
-  if (emptyIdx === -1) return { success: false, reason: "Storage is full" };
-
-  const item = npc.inventory.bag.splice(bagIndex, 1)[0];
-  slots[emptyIdx] = item;
+  const emptyIdx = building.storageSlots.indexOf(null);
+  if (emptyIdx === -1) return { success: false, reason: "Storage full" };
+  building.storageSlots[emptyIdx] = npc.inventory.bag.splice(bagIndex, 1)[0];
   return { success: true };
 }
 
 function execRetrieveItem(
   npc: NPC,
-  direction: Direction,
   slotIndex: number,
   world: GameWorldNPCInterface,
+  x?: number,
+  y?: number,
 ): ActionResult {
-  npc.face(direction);
+  if (x != null && y != null) {
+    const result = walkToTargetOrAct(npc, x, y, { action: "retrieve_item", slotIndex }, world);
+    if (result === "queued") return { success: true, reason: "Walking to storage" };
+    if (result === null) return { success: false, reason: "Cannot reach storage" };
+  }
+  const dir = findAdjacentDir(npc.tileX, npc.tileY, (sx, sy) => {
+    const b = world.getBuildingAt(sx, sy);
+    return b != null && b.type.storage != null && b.state === "complete";
+  });
+  if (!dir) return { success: false, reason: "No storage nearby" };
+  npc.face(dir);
   const facing = npc.getFacingTile();
   const building = world.getBuildingAt(facing.x, facing.y);
-  if (!building || !building.type.storage || building.state !== "complete") {
-    return { success: false, reason: "No storage there" };
-  }
-  const slots = building.storageSlots;
-  if (!slots) return { success: false, reason: "No storage slots" };
-  if (slotIndex < 0 || slotIndex >= slots.length) {
-    return { success: false, reason: "Invalid slot index" };
-  }
-  const item = slots[slotIndex];
-  if (!item) return { success: false, reason: "Slot is empty" };
-
-  slots[slotIndex] = null;
+  if (!building?.storageSlots) return { success: false, reason: "No storage" };
+  if (slotIndex < 0 || slotIndex >= building.storageSlots.length)
+    return { success: false, reason: "Invalid slot" };
+  const item = building.storageSlots[slotIndex];
+  if (!item) return { success: false, reason: "Slot empty" };
+  building.storageSlots[slotIndex] = null;
   addItemToBag(npc.inventory, item);
   return { success: true };
 }
 
-function execChat(
-  npc: NPC,
-  text: string,
-  mode: ChatMode,
-  world: GameWorldNPCInterface,
-): ActionResult {
+function execChat(npc: NPC, text: string, world: GameWorldNPCInterface): ActionResult {
+  // Auto-select mode based on distance to nearest listener
+  const dist = world.getNearestListenerDistance(npc);
+  let mode: ChatMode;
+  if (dist <= 1) {
+    mode = "whisper";
+  } else if (dist <= 5) {
+    mode = "talk";
+  } else {
+    mode = "yell";
+  }
   world.npcChat(npc, text, mode);
   return { success: true };
 }

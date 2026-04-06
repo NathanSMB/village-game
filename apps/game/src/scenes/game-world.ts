@@ -858,6 +858,8 @@ export class GameWorld extends ex.Scene<GameWorldData> {
     if (this.npcDebugVisible && this.npcDebugPanel) {
       if (kb.wasPressed(ex.Keys.ArrowLeft)) this.npcDebugPanel.cycleNPC(-1);
       if (kb.wasPressed(ex.Keys.ArrowRight)) this.npcDebugPanel.cycleNPC(1);
+      if (kb.wasPressed(ex.Keys.ArrowUp)) this.npcDebugPanel.scrollUp();
+      if (kb.wasPressed(ex.Keys.ArrowDown)) this.npcDebugPanel.scrollDown();
     }
 
     // Planning mode input handling
@@ -5460,13 +5462,22 @@ export class GameWorld extends ex.Scene<GameWorldData> {
 
       // Decision trigger — only if NPC is idle and no in-flight LLM call
       if (!npc.isBusy() && !this.npcInFlight.has(npc.npcId)) {
-        // Check for pending path from move_to
+        // Check for pending path from move_to or attack chase
         if (npc.pendingPath.length > 0) {
           const nextDir = npc.pendingPath.shift()!;
           const moved = npc.moveToTile(nextDir);
           if (!moved) {
-            npc.pendingPath = []; // Path blocked, clear it
+            npc.pendingPath = [];
+            npc.pendingAction = null;
           }
+          continue;
+        }
+
+        // If we just finished an auto-walk path, execute the queued action
+        if (npc.pendingAction) {
+          const action = npc.pendingAction;
+          npc.pendingAction = null;
+          executeNPCAction(npc, action, this.getNPCInterface());
           continue;
         }
 
@@ -5505,6 +5516,35 @@ export class GameWorld extends ex.Scene<GameWorldData> {
     const snapshot = this.getWorldSnapshotForNPC(npc);
     // Auto-complete todos whose conditions are already met
     npc.autoCheckTodos();
+
+    // Force replan when a NEW emergency threshold is crossed
+    const currentEmergencies = new Set<string>();
+    if (npc.vitals.thirst <= 15) currentEmergencies.add("thirst");
+    if (npc.vitals.hunger <= 15) currentEmergencies.add("hunger");
+    if (npc.vitals.energy <= 200) currentEmergencies.add("energy");
+
+    // Check for newly triggered emergencies
+    let newEmergency = false;
+    for (const e of currentEmergencies) {
+      if (!npc.emergencyReplanned.has(e)) {
+        newEmergency = true;
+        npc.emergencyReplanned.add(e);
+      }
+    }
+    // Clear resolved emergencies so they can trigger again if they recur
+    for (const e of npc.emergencyReplanned) {
+      if (!currentEmergencies.has(e)) {
+        npc.emergencyReplanned.delete(e);
+      }
+    }
+    if (newEmergency && npc.todoList.length > 0) {
+      console.warn(`[NPC ${npc.npcName}] New emergency — forcing replan`);
+      npc.todoList = [];
+      npc.todoGracePeriod = 0;
+      npc.pendingPath = [];
+      npc.pendingAction = null;
+    }
+
     // Diff visible entity states (HP changes, bush picked, etc.)
     const worldChanges = npc.diffVisibleEntities(snapshot.entities);
     const config = this.llmConfig;
@@ -5519,6 +5559,23 @@ export class GameWorld extends ex.Scene<GameWorldData> {
 
         // Clear chat inbox since the brain has consumed them
         npc.chatInbox = [];
+
+        // Hard enforcement: if NPC has no plan, force plan action regardless of what the model chose
+        if (
+          npc.todoList.length === 0 &&
+          action.action !== "plan" &&
+          action.action !== "think" &&
+          action.action !== "consume" &&
+          action.action !== "drink_water"
+        ) {
+          console.warn(`[NPC ${npc.npcName}] No plan but chose ${action.action} — forcing plan`);
+          // Allow survival actions (consume/drink) even without a plan, but redirect everything else
+          const forcedAction = { action: "plan" as const };
+          npc.debugLastAction = JSON.stringify(action);
+          npc.debugLastResult = "→ Redirected to plan (no todo list)";
+          // Fall through to plan handler below
+          Object.assign(action, forcedAction);
+        }
 
         // Intercept plan → route through thinking model to create todo list
         if (action.action === "plan") {
@@ -5555,6 +5612,18 @@ export class GameWorld extends ex.Scene<GameWorldData> {
           : `✗ ${result.reason ?? "failed"}`;
         npc.debugLastResult = resultStr;
         npc.pushDebugHistory(actionJson, resultStr, worldChanges);
+
+        // Stuck detection: if same action fails 3+ times, force replan
+        if (result.success) {
+          npc.trackSuccess();
+        } else {
+          const stuck = npc.trackFailure(actionJson);
+          if (stuck) {
+            console.warn(`[NPC ${npc.npcName}] Stuck on: ${actionJson} — forcing replan`);
+            npc.todoList = [];
+            npc.trackSuccess(); // reset counter
+          }
+        }
         this.npcInFlight.delete(npc.npcId);
         npc.debugThinking = false;
       })
@@ -5661,7 +5730,7 @@ export class GameWorld extends ex.Scene<GameWorldData> {
             type: "sheep",
             x: tx,
             y: ty,
-            details: `sheep (HP: ${sheep.hp}/${sheep.maxHp})`,
+            details: `sheep (HP: ${sheep.hp}/${sheep.maxHp}) — attack with {"action":"attack","targetType":"sheep","x":${tx},"y":${ty}}`,
           });
         }
 
@@ -5672,7 +5741,7 @@ export class GameWorld extends ex.Scene<GameWorldData> {
             type: "cow",
             x: tx,
             y: ty,
-            details: `cow (HP: ${cow.hp}/${cow.maxHp})`,
+            details: `cow (HP: ${cow.hp}/${cow.maxHp}) — attack with {"action":"attack","targetType":"cow","x":${tx},"y":${ty}}`,
           });
         }
 
@@ -5742,6 +5811,28 @@ export class GameWorld extends ex.Scene<GameWorldData> {
           name: this.playerName,
         };
       },
+      getCreaturePosition: (targetType, x, y) => {
+        const key = tileKey(x, y);
+        // Check last-known position first
+        if (targetType === "sheep") {
+          const sheep = this.sheepByTile.get(key);
+          if (sheep && !sheep.isDead) return { x: sheep.tileX, y: sheep.tileY };
+        } else if (targetType === "cow") {
+          const cow = this.cowByTile.get(key);
+          if (cow && !cow.isDead) return { x: cow.tileX, y: cow.tileY };
+        }
+        // Creature may have moved — find nearest of that type
+        if (targetType === "sheep") {
+          for (const s of this.sheepList) {
+            if (!s.isDead) return { x: s.tileX, y: s.tileY };
+          }
+        } else if (targetType === "cow") {
+          for (const c of this.cowList) {
+            if (!c.isDead) return { x: c.tileX, y: c.tileY };
+          }
+        }
+        return null;
+      },
       npcDropItem: (_npc, item, tx, ty) => {
         this.dropItemAt(tx, ty, item, false);
       },
@@ -5775,6 +5866,7 @@ export class GameWorld extends ex.Scene<GameWorldData> {
           mode,
           timestamp: Date.now(),
         };
+        npc2.lastChatTime = Date.now();
         this.chatMessages.push(msg);
         this.chatLog?.scrollToBottom();
         new SpeechBubble(msg.text, npc2, msg.mode);
@@ -5884,6 +5976,30 @@ export class GameWorld extends ex.Scene<GameWorldData> {
           return;
         }
 
+        // Building construction / repair
+        const building = this.buildingByTile.get(key);
+        if (building) {
+          if (building.state === "hologram" && mainHand?.id === "hammer") {
+            const delivered = building.deliverMaterial(npc2.inventory);
+            if (delivered) {
+              if ((building.state as string) === "complete") {
+                if (building.isSolid()) {
+                  this.blockedTiles.add(key);
+                }
+                this.recalculateIndoorLighting();
+              }
+            }
+            return;
+          } else if (building.state === "complete" && mainHand?.id === "hammer") {
+            // Repair
+            if (building.hp < building.type.maxHp) {
+              building.hp = Math.min(building.type.maxHp, building.hp + 10);
+              building.updateGraphic();
+            }
+            return;
+          }
+        }
+
         // Degrade weapon durability
         if (mainHand && mainHand.durability != null) {
           mainHand.durability -= 1;
@@ -5892,6 +6008,76 @@ export class GameWorld extends ex.Scene<GameWorldData> {
             npc2.refreshSprite();
           }
         }
+      },
+      npcShootArrow: (npc2, direction) => {
+        const facingTile = npc2.getFacingTile();
+        const bow = npc2.inventory.equipment[EquipmentSlot.MainHand];
+        if (!bow) return;
+        const canonical = ITEMS[bow.id] ?? bow;
+        const baseDamage = canonical.stats.attack ?? 0;
+
+        // Check if edge to facing tile is blocked
+        const ek = edgeKeyBetween(npc2.tileX, npc2.tileY, facingTile.x, facingTile.y);
+        if (ek !== null && this.blockedEdges.has(ek)) return; // blocked by wall
+
+        const arrow = new ArrowProjectile({
+          startTileX: facingTile.x,
+          startTileY: facingTile.y,
+          direction,
+          maxRange: 5,
+          onTileReached: (tx: number, ty: number) => {
+            return this.applyArrowDamageAt(tx, ty, baseDamage, canonical);
+          },
+          isEdgeBlocked: (fromTX: number, fromTY: number, toTX: number, toTY: number) => {
+            const edgeK = edgeKeyBetween(fromTX, fromTY, toTX, toTY);
+            return edgeK !== null && this.blockedEdges.has(edgeK);
+          },
+        });
+        this.add(arrow);
+
+        // Bow durability loss
+        if (bow.durability != null) {
+          bow.durability -= 1;
+          if (bow.durability <= 0) {
+            npc2.inventory.equipment[EquipmentSlot.MainHand] = null;
+            npc2.refreshSprite();
+          }
+        }
+      },
+      getNearestListenerDistance: (npc2) => {
+        let minDist = Infinity;
+        // Check player
+        if (this.player) {
+          const d = chebyshevDistance(
+            npc2.tileX,
+            npc2.tileY,
+            this.player.getTileX(),
+            this.player.getTileY(),
+          );
+          if (d < minDist) minDist = d;
+        }
+        // Check other NPCs
+        for (const other of this.npcList) {
+          if (other === npc2 || other.isDead) continue;
+          const d = chebyshevDistance(npc2.tileX, npc2.tileY, other.tileX, other.tileY);
+          if (d < minDist) minDist = d;
+        }
+        return minDist;
+      },
+      hasUncompletedHolograms: () => {
+        for (const b of this.buildings) {
+          if (b.state === "hologram") return true;
+        }
+        for (const e of this.edgeBuildingsList) {
+          if (e.state === "hologram") return true;
+        }
+        return false;
+      },
+      getHologramLocation: () => {
+        for (const b of this.buildings) {
+          if (b.state === "hologram") return { x: b.tileX, y: b.tileY };
+        }
+        return null;
       },
     };
   }

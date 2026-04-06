@@ -27,15 +27,17 @@ Planning & Thinking:
 Movement:
   {"action":"move_to","x":<num>,"y":<num>} — Walk to a tile (auto-pathfinds, use for ALL movement)
 
-Gathering:
-  {"action":"pick_bush","direction":"<dir>"} — Pick berries from adjacent bush → gives: berry [consumable, +10 hunger]
-  {"action":"chop_tree","direction":"<dir>"} — Chop adjacent tree → drops: branch (per hit), 6x log (when felled). Hatchet is much faster.
-  {"action":"mine_rock","direction":"<dir>"} — Mine adjacent rock → drops: small_rock (40%), large_stone (40%), flint (20%). Pickaxe is much faster.
-  {"action":"drink_water","direction":"<dir>"} — Drink from adjacent water tile → +25 thirst
-  {"action":"pick_up_item","direction":"<dir>"} — Pick up item from ADJACENT tile (you must stand NEXT TO the item, not on top of it!)
+Gathering (all auto-walk to target if x,y provided, auto-find adjacent resource, no direction needed):
+  {"action":"pick_bush","x":<num>,"y":<num>} — Walk to and pick berries → berry [+10 hunger]
+  {"action":"chop_tree","x":<num>,"y":<num>} — Walk to and chop tree → branch (per hit), 6x log (felled). Hatchet 5x faster.
+  {"action":"mine_rock","x":<num>,"y":<num>} — Walk to and mine rock → small_rock/large_stone/flint. Pickaxe 5x faster.
+  {"action":"drink_water","x":<num>,"y":<num>} — Walk to water and drink → +25 thirst
+  {"action":"pick_up_item","itemId":"<item_id>","x":<num>,"y":<num>} — Walk to and pick up item (e.g. "branch")
 
 Combat:
-  {"action":"attack","direction":"<dir>"} — Attack creature. Sheep drops: mutton+wool. Cow drops: raw_beef+cow_hide.
+  {"action":"attack","targetType":"<sheep|cow>","x":<num>,"y":<num>} — Auto-walk to creature and attack (PREFERRED)
+  {"action":"attack","direction":"<dir>"} — Face direction and attack (melee only)
+  {"action":"attack"} — Attack in current facing direction
 
 ITEM REFERENCE:
 ${Object.values(ITEMS)
@@ -62,7 +64,7 @@ Crafting recipes: ${RECIPES.map((r) => `${r.id}(${r.ingredients.map((i) => `${i.
   {"action":"craft","recipeId":"<id>"} — Craft if you have the materials
 
 Cooking: ${COOKING_RECIPES.map((r) => `${r.inputId} -> ${r.outputId}`).join(", ")}
-  {"action":"cook","direction":"<dir>","inputItemId":"<id>"} — Cook at adjacent burning fire
+  {"action":"cook","inputItemId":"<id>","x":<num>,"y":<num>} — Walk to fire and cook (auto-walks if x,y given)
 
 Building recipes: ${BUILDING_TYPES.map((b) => `${b.id}(${b.ingredients.map((i) => `${i.count}x ${i.itemId}`).join("+")}${b.storage ? `, ${b.storage.slotCount} slots` : ""}${b.fire ? ", cookable" : ""}${b.requiresIndoor ? ", indoor only" : ""}, ${b.placement})`).join(", ")}
   Tile buildings (floor, bed, fire_pit, hearth, box_*): {"action":"build_plan","buildingId":"<id>","x":<num>,"y":<num>,"rotation":<0-3>}
@@ -70,7 +72,11 @@ Building recipes: ${BUILDING_TYPES.map((b) => `${b.id}(${b.ingredients.map((i) =
   Edge buildings (wall, wall_window, wall_door, fence, fence_gate): {"action":"build_plan","buildingId":"<id>","x":<num>,"y":<num>,"orientation":"N|E|S|W"}
     orientation: which side of tile (x,y) to place the wall on. N/S = horizontal wall, E/W = vertical wall.
   To build a room: place floors on all tiles, then walls on all edges around them. "Indoor" = enclosed floor area fully surrounded by walls.
-  To construct: equip a HAMMER, have the required materials in your bag, then attack the hologram. Each hit delivers materials until complete.
+  {"action":"construct","x":<num>,"y":<num>} — Walk to a hologram and build it (auto-equips hammer, auto-attacks). Use this on holograms!
+  BUILDING WORKFLOW:
+    1. Place hologram ONCE with build_plan
+    2. Use construct with the hologram's coordinates — it auto-walks there, checks for hammer + materials, and builds it
+    If you see a hologram in VISIBLE, use construct on it — don't place another one!
 
 Inventory:
   {"action":"equip","bagIndex":<num>} — Equip item from bag
@@ -78,15 +84,15 @@ Inventory:
   {"action":"consume","bagIndex":<num>} — Eat/drink a consumable
   {"action":"drop_item","bagIndex":<num>} — Drop item on ground
 
-Interaction:
-  {"action":"open_door","direction":"<dir>"} / {"action":"close_door","direction":"<dir>"}
-  {"action":"claim_bed","direction":"<dir>"} — Claim an adjacent bed as yours (must claim before sleeping!)
-  {"action":"sleep","direction":"<dir>"} — Sleep in YOUR claimed bed (must be adjacent). Restores energy.
+Interaction (all auto-walk to target if x,y provided):
+  {"action":"open_door","x":<num>,"y":<num>} / {"action":"close_door","x":<num>,"y":<num>}
+  {"action":"claim_bed","x":<num>,"y":<num>} — Claim an UNCLAIMED bed (check visible list — beds marked [claimed] cannot be claimed! Build your own bedroll instead.)
+  {"action":"sleep","x":<num>,"y":<num>} — Walk to YOUR claimed bed and sleep. Restores energy.
   {"action":"wake_up"}
-  {"action":"store_item","direction":"<dir>","bagIndex":<num>} / {"action":"retrieve_item","direction":"<dir>","slotIndex":<num>}
+  {"action":"store_item","bagIndex":<num>,"x":<num>,"y":<num>} / {"action":"retrieve_item","slotIndex":<num>,"x":<num>,"y":<num>}
 
 Communication:
-  {"action":"chat","text":"<msg>","mode":"whisper|talk|yell"} — Speak (whisper=1tile, talk=5, yell=10)
+  {"action":"chat","text":"<msg>"} — Say something (volume auto-adjusts based on distance to nearest listener)
 
 Memory:
   {"action":"remember","note":"<text>"} — Save a note (max 20)
@@ -239,11 +245,78 @@ function buildSystemPrompt(npc: NPC, snapshot: WorldSnapshot): string {
   // Bed info
   const bedStr = npc.claimedBed
     ? `Claimed bed at (${npc.claimedBed.x},${npc.claimedBed.y})`
-    : "NO BED CLAIMED — you need a bed to restore energy! Build or find one, then use claim_bed.";
+    : "NO BED CLAIMED — Build a bedroll (1 cow_hide + 1 wool): kill a cow for hide, kill a sheep for wool, craft bedroll, place it with build_plan, then claim_bed. Do NOT try to claim someone else's bed!";
 
-  return `You are ${personality.name}, a villager in a 64x64 wilderness. ${personality.backstory}
+  // Emergency survival alerts
+  const emergencies: string[] = [];
+
+  // No bed is ALWAYS an emergency — it should be the #1 priority
+  if (!npc.claimedBed) {
+    emergencies.push(
+      `!!! #1 PRIORITY: YOU HAVE NO BED !!! Without a bed you WILL die — energy cannot recover. Steps: 1) Kill a cow → get cow_hide 2) Kill a sheep → get wool 3) Craft bedroll 4) Place bedroll with build_plan 5) Construct it 6) Claim it with claim_bed 7) Sleep. This is MORE IMPORTANT than any other task!`,
+    );
+  }
+
+  if (vitals.thirst <= 30) {
+    const waterLoc = Object.keys(npc.knownLocations).find((k) => k.startsWith("water:"));
+    const waterCoords = waterLoc ? waterLoc.split(":")[1] : null;
+    if (vitals.thirst <= 15) {
+      emergencies.push(
+        `!!! DYING OF THIRST (${Math.round(vitals.thirst)}/100) !!! Drink until above 90!${waterCoords ? ` Use: {"action":"drink_water","x":${waterCoords.split(",")[0]},"y":${waterCoords.split(",")[1]}}` : " Find water IMMEDIATELY!"}`,
+      );
+    } else {
+      emergencies.push(
+        `WARNING: Thirst is low (${Math.round(vitals.thirst)}/100). Drink until above 90.${waterCoords ? ` Known water at (${waterCoords}).` : ""}`,
+      );
+    }
+  }
+  if (vitals.hunger <= 30) {
+    const hasBerry = npc.inventory.bag.some((i) => i.consumable);
+    if (vitals.hunger <= 15) {
+      emergencies.push(
+        `!!! STARVING (${Math.round(vitals.hunger)}/100) !!! Eat until above 70!${hasBerry ? ` You have food — use {"action":"consume","bagIndex":${npc.inventory.bag.findIndex((i) => i.consumable)}}` : " Find berries or cook meat!"}`,
+      );
+    } else {
+      emergencies.push(
+        `WARNING: Hunger is low (${Math.round(vitals.hunger)}/100). Eat until above 70.${hasBerry ? " You have food in your bag!" : ""}`,
+      );
+    }
+  }
+  // Energy alerts
+  const energy = vitals.energy;
+  if (energy <= 50) {
+    emergencies.push(
+      `!!! ENERGY CRITICALLY LOW (${Math.round(energy)}/1000) !!! You will DIE very soon!${npc.claimedBed ? ` SLEEP NOW: {"action":"sleep","x":${npc.claimedBed.x},"y":${npc.claimedBed.y}}` : " You have NO BED — build a bedroll (1 cow_hide + 1 wool) IMMEDIATELY!"}`,
+    );
+  } else if (energy <= 200) {
+    if (npc.claimedBed) {
+      emergencies.push(
+        `!!! ENERGY EMERGENCY (${Math.round(energy)}/1000) !!! Go sleep in your bed at (${npc.claimedBed.x},${npc.claimedBed.y}) NOW!`,
+      );
+    } else {
+      emergencies.push(
+        `!!! ENERGY EMERGENCY (${Math.round(energy)}/1000) !!! You have NO BED! You MUST build a bedroll: kill a cow (cow_hide) + kill a sheep (wool) + craft bedroll + place it + claim it. Do NOT try to claim someone else's bed!`,
+      );
+    }
+  } else if (energy <= 500 && !npc.claimedBed) {
+    emergencies.push(
+      `WARNING: Energy at ${Math.round(energy)}/1000 and you have NO BED. Build your OWN bedroll (kill cow for hide + kill sheep for wool). Do NOT try to claim other people's beds!`,
+    );
+  }
+
+  // Track if any emergency is critical (should force replan)
+  const hasCriticalEmergency = vitals.thirst <= 15 || vitals.hunger <= 15 || energy <= 200;
+
+  const emergencyBlock =
+    emergencies.length > 0
+      ? `\n${"=".repeat(60)}\n${emergencies.join("\n")}\nDROP EVERYTHING AND ADDRESS THESE EMERGENCIES FIRST!${hasCriticalEmergency ? '\nYour current plan is INVALID — use {"action":"plan"} to make a survival plan!' : ""}\n${"=".repeat(60)}\n`
+      : "";
+
+  return `You are ${personality.name}, a villager in a 64x64 wilderness. You are a REAL CHARACTER with feelings, opinions, and a voice.
+${personality.backstory}
 Traits: ${personality.traits}
-
+ROLEPLAY: Stay in character! Use "chat" to comment on what you're doing, react to things you see, greet people nearby, or just think out loud. You are NOT a silent robot — you're a person living in this world.
+${emergencyBlock}
 SITUATION:
 Pos: (${tileX},${tileY}) facing ${facing} | HP:${Math.round(vitals.health)} Food:${Math.round(vitals.hunger)} Water:${Math.round(vitals.thirst)} Energy:${Math.round(vitals.energy)}/1000
 Equipped: ${ctx.equipStr}
@@ -269,17 +342,29 @@ ${ACTION_SCHEMA}
 RULES — READ CAREFULLY:
 1. Output ONLY one JSON object. No text, no markdown.
 2. Directions: "up"=north "down"=south "left"=west "right"=east.
-3. ADJACENCY: All interactions (pick_bush, chop_tree, mine_rock, drink_water, pick_up_item, attack, sleep, claim_bed, open_door, store_item, retrieve_item) target the tile 1 step in the given direction. You must stand NEXT TO the target, NOT on top of it. To interact with something at (30,25), move_to an adjacent tile like (29,25) then use direction "right", or (30,24) then use direction "down".
+3. AUTO-WALK: All interaction actions support x,y coordinates. Provide the target's coordinates and the NPC will automatically walk there and execute the action. No need to move_to first! Use coordinates from the VISIBLE list or KNOWN LOCATIONS.
 4. ALWAYS have a plan. No todo list? Your ONLY action must be "plan". You CANNOT skip this.
-5. SURVIVAL: Water<20 or Food<20? Find water/food IMMEDIATELY.
-6. ENERGY IS CRITICAL: Energy drains at 1/sec while awake. The ONLY way to recover energy is sleeping in a bed you own. If energy reaches 0, you die. You MUST build or find a bed, claim it with "claim_bed", and sleep periodically to restore energy.
-7. BED PRIORITY: If you have no claimed bed and energy < 500, your top priority should be building an indoor room with a bed, or finding an unclaimed bed.
+5. SURVIVAL PRIORITY ORDER: Thirst > Hunger > Energy. If any are low, address them. No bed? Build a bedroll (1 cow_hide + 1 wool).
+6. ENERGY: Drains at 1/sec while awake. ONLY recovers by sleeping in YOUR bed. 0 = death.
 8. EQUIP YOUR TOOLS: Before chopping trees, equip a hatchet. Before mining rocks, equip a pickaxe. Before fighting, equip your best weapon (spear > hammer > unarmed). Before building, equip a hammer. Use "equip" with the bag index. Tools make a HUGE difference in damage.
 9. BE ACTIVE: Move, gather, craft, explore, talk. The world is large (64x64) with resources spread everywhere.
 10. NEVER wait if there's something useful you could do instead. Only use "wait" if you truly have nothing to do.
 11. DON'T CAMP: If a resource is depleted, MOVE ON. Don't wait for respawns.
 12. EXPLORE: If you don't see what you need, use "move_to" to walk somewhere new.
-13. BE SOCIAL: If someone sent you an unread message, RESPOND with "chat". Don't repeat greetings.`;
+13. CHAT RULES:${(() => {
+    const secsSinceChat =
+      npc.lastChatTime > 0 ? Math.round((Date.now() - npc.lastChatTime) / 1000) : 999;
+    const hasUnread = snapshot.nearbyMessages.length > 0;
+    const onCooldown = secsSinceChat < 30 && !hasUnread;
+    if (onCooldown)
+      return `\n    *** CHAT COOLDOWN: ${30 - secsSinceChat}s remaining. Do NOT chat unless responding to an unread message. ***`;
+    return "";
+  })()}
+    - You may freely RESPOND to unread messages at any time — no cooldown.
+    - To initiate conversation (greetings, comments, reactions): only once every 30 seconds.
+    - NEVER repeat something you already said — check the conversation log.
+    - After chatting, wait for a reply before sending another message.
+    - Keep messages short (under 60 characters). Volume adjusts automatically.`;
 }
 
 // ── Response parser ──────────────────────────────────────────────────
@@ -298,6 +383,7 @@ const VALID_ACTIONS = new Set([
   "craft",
   "cook",
   "build_plan",
+  "construct",
   "equip",
   "unequip",
   "consume",
@@ -484,21 +570,24 @@ ${ctx.historyStr}
 
 ${ACTION_SCHEMA}
 
-PRIORITIES:
-1. Water < 20 or Food < 20 → fix this first
-2. No claimed bed and Energy < 500 → get a bed (bedroll = 1 cow_hide + 1 wool)
-3. No tools → craft a hammer (1 small_rock + 1 branch)
-4. Energy drains 1/sec, only recoverable by sleeping in YOUR bed
+SURVIVAL PRIORITIES (in this order):
+1. THIRST is #1 priority. If low, drink until above 90 (doneWhen: "Thirst is above 90")
+2. HUNGER is #2. If low, eat until above 70 (doneWhen: "Hunger is above 70")
+3. ENERGY is #3. If low and have a bed, sleep until above 800 (doneWhen: "Energy is above 800"). If no bed, build a bedroll (1 cow_hide + 1 wool) ASAP.
+4. No tools → craft a hammer (1 small_rock + 1 branch)
+Energy drains at 1/sec while awake. The ONLY way to recover is sleeping in YOUR claimed bed. If energy hits 0, you die.
 
 Create a 3-6 item todo list. Each item: {"task":"what to do","doneWhen":"how to verify it's done"}
 - Tasks must be SPECIFIC (name exact items/resources, not "gather resources")
 - Include equip steps before tool-dependent tasks
+- Include at least one social/roleplay task like "Chat with anyone nearby about what I'm doing" or "Greet the player if visible" (doneWhen: "Task is completed")
+- For BUILDING tasks, break into 3 steps: 1) gather materials 2) place ONE hologram with build_plan 3) equip hammer and attack the hologram to construct it. Do NOT place multiple holograms!
 - doneWhen must use one of these verifiable formats:
-  "Have X in bag" / "X is in bag or equipped" / "X is equipped" / "Thirst is above N" / "Hunger is above N" / "Have a claimed bed"
+  "Have X in bag" / "X is in bag or equipped" / "X is equipped" / "Thirst is above 90" / "Hunger is above 70" / "Energy is above 800" / "Have a claimed bed"
 - If a task drops items on the ground, include picking them up
 
 Output ONLY a JSON array, no other text:
-[{"task":"Go to water and drink","doneWhen":"Thirst is above 40"},{"task":"Pick berries from a bush","doneWhen":"Have berry in bag"},{"task":"Mine a rock and pick up the drops","doneWhen":"Have small_rock in bag"},{"task":"Chop a tree and pick up a branch","doneWhen":"Have branch in bag"},{"task":"Craft a hammer","doneWhen":"Hammer is in bag or equipped"}]`;
+[{"task":"Go to water and drink","doneWhen":"Thirst is above 90"},{"task":"Pick berries from a bush","doneWhen":"Have berry in bag"},{"task":"Mine a rock and pick up the drops","doneWhen":"Have small_rock in bag"},{"task":"Chop a tree and pick up a branch","doneWhen":"Have branch in bag"},{"task":"Craft a hammer","doneWhen":"Hammer is in bag or equipped"}]`;
 
   const messages: LLMMessage[] = [
     { role: "system", content: prompt },
@@ -516,7 +605,7 @@ Output ONLY a JSON array, no other text:
     console.warn(`Planning error (${elapsed}ms):`, response.error);
     console.groupEnd();
     return [
-      { task: "Find and drink from a water source", done: false, doneWhen: "Thirst is above 40" },
+      { task: "Find and drink from a water source", done: false, doneWhen: "Thirst is above 90" },
       {
         task: "Find a berry bush with berries and pick them",
         done: false,
@@ -631,7 +720,7 @@ function parseTodoList(text: string): NPCTodoItem[] {
   console.warn("[NPC Plan] Could not parse todo list from:", text.slice(0, 500));
 
   return [
-    { task: "Find and drink from a water source", done: false, doneWhen: "Thirst is above 40" },
+    { task: "Find and drink from a water source", done: false, doneWhen: "Thirst is above 90" },
     {
       task: "Find a berry bush with berries and pick them",
       done: false,

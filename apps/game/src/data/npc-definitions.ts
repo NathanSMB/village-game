@@ -5,9 +5,9 @@ export const NPC_DEFINITIONS: NPCDefinition[] = [
     npcId: "npc-maple",
     personality: {
       name: "Maple",
-      traits: "cautious, resourceful, loves herding and cooking",
+      traits: "cautious, resourceful, nurturing, loves gardening and cooking, worries about others",
       backstory:
-        "A careful planner who believes preparation is the key to survival. She prefers to stockpile food and build a safe home before venturing far.",
+        "A warm-hearted but cautious villager who treats everyone like family. She fusses over whether people have eaten, comments on the weather, and names the sheep. She speaks in a gentle, encouraging way and often shares little observations about nature. She believes a good meal and a safe home solve most problems.",
     },
     appearance: {
       sex: "female",
@@ -22,9 +22,9 @@ export const NPC_DEFINITIONS: NPCDefinition[] = [
     npcId: "npc-flint",
     personality: {
       name: "Flint",
-      traits: "bold, curious, enjoys building and exploring",
+      traits: "bold, curious, competitive, loves building and exploring, tells stories",
       backstory:
-        "An adventurous soul who would rather discover something new than play it safe. He loves crafting tools and building structures.",
+        "A boisterous adventurer who narrates his own exploits like they're legends. He brags about his crafting skills, challenges others to friendly competitions, and gets genuinely excited when he discovers something new. He speaks with confidence and humor, often exaggerating for dramatic effect. He's secretly protective of his friends.",
     },
     appearance: {
       sex: "male",

@@ -1,5 +1,5 @@
 import type { CharacterAppearance } from "./character.ts";
-import type { ChatMessage, ChatMode } from "./chat.ts";
+import type { ChatMessage } from "./chat.ts";
 import type { Equipment } from "./inventory.ts";
 import type { Item } from "./item.ts";
 import type { VitalsState } from "./vitals.ts";
@@ -106,14 +106,14 @@ export type NPCAction =
   | { action: "complete_todo"; todoIndex: number }
   | { action: "think" }
   | { action: "move_to"; x: number; y: number }
-  | { action: "pick_bush"; direction: Direction }
-  | { action: "chop_tree"; direction: Direction }
-  | { action: "mine_rock"; direction: Direction }
-  | { action: "drink_water"; direction: Direction }
-  | { action: "pick_up_item"; direction: Direction }
-  | { action: "attack"; direction: Direction }
+  | { action: "pick_bush"; x?: number; y?: number }
+  | { action: "chop_tree"; x?: number; y?: number }
+  | { action: "mine_rock"; x?: number; y?: number }
+  | { action: "drink_water"; x?: number; y?: number }
+  | { action: "pick_up_item"; itemId: string; x?: number; y?: number }
+  | { action: "attack"; direction?: Direction; targetType?: string; x?: number; y?: number }
   | { action: "craft"; recipeId: string }
-  | { action: "cook"; direction: Direction; inputItemId: string }
+  | { action: "cook"; inputItemId: string; x?: number; y?: number }
   | {
       action: "build_plan";
       buildingId: string;
@@ -122,18 +122,19 @@ export type NPCAction =
       rotation?: number;
       orientation?: string;
     }
+  | { action: "construct"; x: number; y: number }
   | { action: "equip"; bagIndex: number }
   | { action: "unequip"; slot: string }
   | { action: "consume"; bagIndex: number }
   | { action: "drop_item"; bagIndex: number }
-  | { action: "open_door"; direction: Direction }
-  | { action: "close_door"; direction: Direction }
-  | { action: "claim_bed"; direction: Direction }
-  | { action: "sleep"; direction: Direction }
+  | { action: "open_door"; x?: number; y?: number }
+  | { action: "close_door"; x?: number; y?: number }
+  | { action: "claim_bed"; x?: number; y?: number }
+  | { action: "sleep"; x?: number; y?: number }
   | { action: "wake_up" }
-  | { action: "store_item"; direction: Direction; bagIndex: number }
-  | { action: "retrieve_item"; direction: Direction; slotIndex: number }
-  | { action: "chat"; text: string; mode: ChatMode }
+  | { action: "store_item"; bagIndex: number; x?: number; y?: number }
+  | { action: "retrieve_item"; slotIndex: number; x?: number; y?: number }
+  | { action: "chat"; text: string }
   | { action: "remember"; note: string }
   | { action: "forget"; noteIndex: number }
   | { action: "wait"; durationMs: number };

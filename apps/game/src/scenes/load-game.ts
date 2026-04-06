@@ -1,5 +1,5 @@
 import * as ex from "excalibur";
-import { wasActionPressed } from "../systems/keybinds.ts";
+import { actionKeyLabel, wasActionPressed } from "../systems/keybinds.ts";
 import {
   type SaveData,
   deleteSave,
@@ -285,7 +285,7 @@ export class LoadGame extends ex.Scene<LoadGameData> {
       case 1:
         if (this.saves.length > 0) {
           this.mode = "confirm-delete";
-          this.confirmLabel.text = `Delete "${this.saves[this.selectedSave]?.name}"? Press Confirm.`;
+          this.confirmLabel.text = `Delete "${this.saves[this.selectedSave]?.name}"? Press [${actionKeyLabel("confirm")}].`;
           this.updateDisplay();
         }
         break;

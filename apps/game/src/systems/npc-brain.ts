@@ -6,7 +6,7 @@
 import type { NPC } from "../actors/npc.ts";
 import type { WorldSnapshot, NPCAction, EntityInfo, NPCTodoItem } from "../types/npc.ts";
 import type { ChatMessage } from "../types/chat.ts";
-import type { LLMProviderConfig, LLMMessage } from "./llm-provider.ts";
+import type { LLMProviderConfig, LLMMessage, LLMContentBlock } from "./llm-provider.ts";
 import { callLLM, callThinkingLLM } from "./llm-provider.ts";
 import { getItemQuantity } from "../types/item.ts";
 import { RECIPES } from "../data/recipes.ts";
@@ -101,6 +101,32 @@ Memory:
 Wait (LAST RESORT — prefer moving/exploring instead):
   {"action":"wait","durationMs":<2000-8000>} — Only if truly nothing to do
 `.trim();
+
+// ── Static rules (identical across all NPCs/calls — cached by LLM providers) ──
+
+const STATIC_RULES = `RULES — READ CAREFULLY:
+1. Output ONLY one JSON object. No text, no markdown.
+2. Directions: "up"=north "down"=south "left"=west "right"=east.
+3. AUTO-WALK: All interaction actions support x,y coordinates. Provide the target's coordinates and the NPC will automatically walk there and execute the action. No need to move_to first! Use coordinates from the VISIBLE list or KNOWN LOCATIONS.
+4. ALWAYS have a plan. No todo list? Your ONLY action must be "plan". You CANNOT skip this.
+5. SURVIVAL PRIORITY ORDER: Thirst > Hunger > Energy. If any are low, address them. No bed? Build a bedroll (1 cow_hide + 1 wool).
+6. ENERGY: Drains at 1/sec while awake. ONLY recovers by sleeping in YOUR bed. At 0 energy you are EXHAUSTED — you can only sleep, eat, and chat. You cannot gather, build, attack, or move normally. Half speed.
+8. EQUIP YOUR TOOLS: Before chopping trees, equip a hatchet. Before mining rocks, equip a pickaxe. Before fighting, equip your best weapon (spear > hammer > unarmed). Before building, equip a hammer. Use "equip" with the bag index. Tools make a HUGE difference in damage.
+9. BE ACTIVE: Move, gather, craft, explore, talk. The world is large (64x64) with resources spread everywhere.
+10. NEVER wait if there's something useful you could do instead. Only use "wait" if you truly have nothing to do.
+11. DON'T CAMP: If a resource is depleted, MOVE ON. Don't wait for respawns.
+12. EXPLORE: If you don't see what you need, use "move_to" to walk somewhere new.`;
+
+/** Static game context for the action model — identical across all NPCs and calls. */
+const STATIC_ACTION_CONTEXT = `${ACTION_SCHEMA}\n\n${STATIC_RULES}`;
+
+/** Helper to build system message content blocks with a cached static prefix. */
+function cachedSystemContent(staticPrefix: string, dynamicContent: string): LLMContentBlock[] {
+  return [
+    { type: "text", text: staticPrefix, cache_control: { type: "ephemeral" } },
+    { type: "text", text: dynamicContent },
+  ];
+}
 
 // ── Shared context builder ───────────────────────────────────────────
 
@@ -337,21 +363,7 @@ ${ctx.knownLocStr ? `\nKNOWN LOCATIONS (places you've discovered — use these t
 RECENT ACTIONS:
 ${ctx.historyStr}
 ${ctx.thinkingLines ? `\nTHINKING LOG (your reasoning model's advice):\n${ctx.thinkingLines}\n` : ""}
-${ACTION_SCHEMA}
-
-RULES — READ CAREFULLY:
-1. Output ONLY one JSON object. No text, no markdown.
-2. Directions: "up"=north "down"=south "left"=west "right"=east.
-3. AUTO-WALK: All interaction actions support x,y coordinates. Provide the target's coordinates and the NPC will automatically walk there and execute the action. No need to move_to first! Use coordinates from the VISIBLE list or KNOWN LOCATIONS.
-4. ALWAYS have a plan. No todo list? Your ONLY action must be "plan". You CANNOT skip this.
-5. SURVIVAL PRIORITY ORDER: Thirst > Hunger > Energy. If any are low, address them. No bed? Build a bedroll (1 cow_hide + 1 wool).
-6. ENERGY: Drains at 1/sec while awake. ONLY recovers by sleeping in YOUR bed. At 0 energy you are EXHAUSTED — you can only sleep, eat, and chat. You cannot gather, build, attack, or move normally. Half speed.
-8. EQUIP YOUR TOOLS: Before chopping trees, equip a hatchet. Before mining rocks, equip a pickaxe. Before fighting, equip your best weapon (spear > hammer > unarmed). Before building, equip a hammer. Use "equip" with the bag index. Tools make a HUGE difference in damage.
-9. BE ACTIVE: Move, gather, craft, explore, talk. The world is large (64x64) with resources spread everywhere.
-10. NEVER wait if there's something useful you could do instead. Only use "wait" if you truly have nothing to do.
-11. DON'T CAMP: If a resource is depleted, MOVE ON. Don't wait for respawns.
-12. EXPLORE: If you don't see what you need, use "move_to" to walk somewhere new.
-13. CHAT RULES:${(() => {
+CHAT RULES:${(() => {
     const secsSinceChat =
       npc.lastChatTime > 0 ? Math.round((Date.now() - npc.lastChatTime) / 1000) : 999;
     const hasUnread = snapshot.nearbyMessages.length > 0;
@@ -436,10 +448,10 @@ export async function decideNextAction(
   config: LLMProviderConfig,
   signal?: AbortSignal,
 ): Promise<NPCAction> {
-  const systemPrompt = buildSystemPrompt(npc, snapshot);
+  const dynamicPrompt = buildSystemPrompt(npc, snapshot);
 
   const messages: LLMMessage[] = [
-    { role: "system", content: systemPrompt },
+    { role: "system", content: cachedSystemContent(STATIC_ACTION_CONTEXT, dynamicPrompt) },
     { role: "user", content: "What is your next action? Respond with one JSON action." },
   ];
 
@@ -497,7 +509,7 @@ export async function decideNextAction(
     console.log("%cMemory:", "color:#888", npc.memory.notes.join(" | "));
   }
   console.groupCollapsed(`%cFull prompt`, "color:#555");
-  console.log(systemPrompt);
+  console.log(STATIC_ACTION_CONTEXT + "\n\n" + dynamicPrompt);
   console.groupEnd();
   if (action) {
     console.log(
@@ -547,7 +559,7 @@ export async function thinkAboutPlan(
     ? `Claimed bed at (${npc.claimedBed.x},${npc.claimedBed.y})`
     : "NO BED — need one to restore energy!";
 
-  const prompt = `You are the strategic mind of ${personality.name}, a villager in a 64x64 survival game.
+  const dynamicPrompt = `You are the strategic mind of ${personality.name}, a villager in a 64x64 survival game.
 Personality: ${personality.traits}. ${personality.backstory}
 
 SITUATION:
@@ -567,8 +579,6 @@ ${ctx.chatLines}
 
 RECENT ACTIONS:
 ${ctx.historyStr}
-
-${ACTION_SCHEMA}
 
 SURVIVAL PRIORITIES (in this order):
 1. THIRST is #1 priority. If low, drink until above 90 (doneWhen: "Thirst is above 90")
@@ -590,56 +600,75 @@ Output ONLY a JSON array, no other text:
 [{"task":"Go to water and drink","doneWhen":"Thirst is above 90"},{"task":"Pick berries from a bush","doneWhen":"Have berry in bag"},{"task":"Mine a rock and pick up the drops","doneWhen":"Have small_rock in bag"},{"task":"Chop a tree and pick up a branch","doneWhen":"Have branch in bag"},{"task":"Craft a hammer","doneWhen":"Hammer is in bag or equipped"}]`;
 
   const messages: LLMMessage[] = [
-    { role: "system", content: prompt },
+    { role: "system", content: cachedSystemContent(ACTION_SCHEMA, dynamicPrompt) },
     { role: "user", content: "Output your todo list as a JSON array. Start with [" },
     { role: "assistant", content: "[" },
   ];
 
+  const MAX_PLAN_ATTEMPTS = 3;
+
   console.group(`%c[THINK] ${npc.npcName} — Planning`, "color:#ff88ff;font-weight:bold");
 
-  const t0 = performance.now();
-  const response = await callThinkingLLM(config, messages, signal);
-  const elapsed = Math.round(performance.now() - t0);
+  for (let attempt = 1; attempt <= MAX_PLAN_ATTEMPTS; attempt++) {
+    const t0 = performance.now();
+    const response = await callThinkingLLM(config, messages, signal);
+    const elapsed = Math.round(performance.now() - t0);
 
-  if (response.error) {
-    console.warn(`Planning error (${elapsed}ms):`, response.error);
-    console.groupEnd();
-    return [
-      { task: "Find and drink from a water source", done: false, doneWhen: "Thirst is above 90" },
-      {
-        task: "Find a berry bush with berries and pick them",
-        done: false,
-        doneWhen: "Have berry in bag",
-      },
-      { task: "Chop a tree and pick up a branch", done: false, doneWhen: "Have branch in bag" },
-      {
-        task: "Mine a rock and pick up the small_rock",
-        done: false,
-        doneWhen: "Have small_rock in bag",
-      },
-      {
-        task: "Craft a hammer using 1 small_rock + 1 branch",
-        done: false,
-        doneWhen: "Hammer is in bag or equipped",
-      },
-    ];
+    if (response.error) {
+      console.warn(
+        `Planning error (attempt ${attempt}/${MAX_PLAN_ATTEMPTS}, ${elapsed}ms):`,
+        response.error,
+      );
+      break; // API errors won't be fixed by retrying
+    }
+
+    console.log(
+      `%c← Plan (attempt ${attempt}, ${elapsed}ms):%c ${response.text.slice(0, 400)}`,
+      "color:#888",
+      "color:inherit",
+    );
+
+    // Parse JSON array from response — prepend "[" since the assistant prefill starts with it
+    const fullResponse = response.text.startsWith("[") ? response.text : "[" + response.text;
+    const todos = parseTodoList(fullResponse);
+
+    if (todos) {
+      console.groupEnd();
+      npc.pushThinkingHistory("Create a plan", todos.map((t) => t.task).join(" → "));
+      return todos;
+    }
+
+    if (attempt < MAX_PLAN_ATTEMPTS) {
+      console.warn(
+        `[NPC Plan] Parse failed (attempt ${attempt}/${MAX_PLAN_ATTEMPTS}), retrying...`,
+      );
+    }
   }
 
-  console.log(
-    `%c← Plan (${elapsed}ms):%c ${response.text.slice(0, 400)}`,
-    "color:#888",
-    "color:inherit",
-  );
+  console.warn("[NPC Plan] All attempts failed, using fallback plan");
   console.groupEnd();
 
-  // Parse JSON array from response — prepend "[" since the assistant prefill starts with it
-  const fullResponse = response.text.startsWith("[") ? response.text : "[" + response.text;
-  const todos = parseTodoList(fullResponse);
-
-  // Store in thinking history
-  npc.pushThinkingHistory("Create a plan", todos.map((t) => t.task).join(" → "));
-
-  return todos;
+  const fallback: NPCTodoItem[] = [
+    { task: "Find and drink from a water source", done: false, doneWhen: "Thirst is above 90" },
+    {
+      task: "Find a berry bush with berries and pick them",
+      done: false,
+      doneWhen: "Have berry in bag",
+    },
+    { task: "Chop a tree and pick up a branch", done: false, doneWhen: "Have branch in bag" },
+    {
+      task: "Mine a rock and pick up the small_rock",
+      done: false,
+      doneWhen: "Have small_rock in bag",
+    },
+    {
+      task: "Craft a hammer using 1 small_rock + 1 branch",
+      done: false,
+      doneWhen: "Hammer is in bag or equipped",
+    },
+  ];
+  npc.pushThinkingHistory("Create a plan", "(fallback) " + fallback.map((t) => t.task).join(" → "));
+  return fallback;
 }
 
 /** Parse a JSON array of {task, doneWhen} from the thinking model's response. */
@@ -665,7 +694,7 @@ function tryParseArray(jsonStr: string): NPCTodoItem[] {
   }
 }
 
-function parseTodoList(text: string): NPCTodoItem[] {
+function parseTodoList(text: string): NPCTodoItem[] | null {
   let jsonStr = text.trim();
 
   // Strip markdown fences
@@ -719,29 +748,7 @@ function parseTodoList(text: string): NPCTodoItem[] {
 
   console.warn("[NPC Plan] Could not parse todo list from:", text.slice(0, 500));
 
-  return [
-    { task: "Find and drink from a water source", done: false, doneWhen: "Thirst is above 90" },
-    {
-      task: "Find a berry bush with berries and pick them",
-      done: false,
-      doneWhen: "Have berry in bag",
-    },
-    {
-      task: "Chop a tree and pick up a branch",
-      done: false,
-      doneWhen: "Have branch in bag",
-    },
-    {
-      task: "Mine a rock and pick up the small_rock",
-      done: false,
-      doneWhen: "Have small_rock in bag",
-    },
-    {
-      task: "Craft a hammer using 1 small_rock + 1 branch",
-      done: false,
-      doneWhen: "Hammer is in bag or equipped",
-    },
-  ];
+  return null;
 }
 
 /**
@@ -760,7 +767,7 @@ export async function thinkAboutQuestion(
     ? `Claimed bed at (${npc.claimedBed.x},${npc.claimedBed.y})`
     : "NO BED — need one to restore energy!";
 
-  const prompt = `You are the strategic mind of ${npc.personality.name}, a villager in a 64x64 survival game.
+  const dynamicPrompt = `You are the strategic mind of ${npc.personality.name}, a villager in a 64x64 survival game.
 ${npc.personality.backstory}. Traits: ${npc.personality.traits}
 
 SITUATION:
@@ -782,12 +789,10 @@ ${ctx.noteLines}
 RECENT ACTIONS:
 ${ctx.historyStr}
 
-${ACTION_SCHEMA}
-
 Analyze the current situation and give concise, actionable advice. What should this villager focus on right now? Consider survival priorities (water, food, energy/bed), available resources, and personality. Be specific with coordinates and item names.`;
 
   const messages: LLMMessage[] = [
-    { role: "system", content: prompt },
+    { role: "system", content: cachedSystemContent(ACTION_SCHEMA, dynamicPrompt) },
     { role: "user", content: "What should I do next? Analyze my situation and advise." },
   ];
 

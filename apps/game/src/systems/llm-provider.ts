@@ -18,15 +18,23 @@ export interface LLMProviderConfig {
   endpointUrl: string;
   reasoningEffort: ReasoningEffort;
   providerSort: ProviderSort;
+  /** Explicit provider ordering for OpenRouter (e.g. ["Groq"] for prompt caching). */
+  providerOrder?: string[];
   // Thinking (big) model — used for goal-setting and on-demand reasoning
   thinkingModel: string;
   thinkingReasoningEffort: ReasoningEffort;
   thinkingProviderSort: ProviderSort;
 }
 
+export interface LLMContentBlock {
+  type: "text";
+  text: string;
+  cache_control?: { type: "ephemeral" };
+}
+
 export interface LLMMessage {
   role: "system" | "user" | "assistant";
-  content: string;
+  content: string | LLMContentBlock[];
 }
 
 export interface LLMResponse {
@@ -65,10 +73,17 @@ export function defaultConfig(): LLMProviderConfig {
     endpointUrl: DEFAULT_ENDPOINTS.custom,
     reasoningEffort: "low",
     providerSort: "latency",
+    providerOrder: ["Groq"],
     thinkingModel: "google/gemini-2.5-flash",
     thinkingReasoningEffort: "high",
     thinkingProviderSort: "latency",
   };
+}
+
+/** Flatten content blocks to a plain string (for providers that don't support blocks). */
+function flattenContent(content: string | LLMContentBlock[]): string {
+  if (typeof content === "string") return content;
+  return content.map((b) => b.text).join("\n\n");
 }
 
 // ── Provider dispatch ────────────────────────────────────────────────
@@ -113,6 +128,8 @@ export async function callThinkingLLM(
     model: config.thinkingModel || config.model,
     reasoningEffort: config.thinkingReasoningEffort ?? "high",
     providerSort: config.thinkingProviderSort ?? "latency",
+    // providerOrder is inherited — if Groq has the model, it gets caching;
+    // if not (e.g. Gemini), OpenRouter falls back to the correct provider.
   };
   return callLLM(thinkingConfig, messages, signal, 16000);
 }
@@ -130,10 +147,10 @@ async function callClaude(
   const body: Record<string, unknown> = {
     model: config.model,
     max_tokens: 256,
-    messages: nonSystem.map((m) => ({ role: m.role, content: m.content })),
+    messages: nonSystem.map((m) => ({ role: m.role, content: flattenContent(m.content) })),
   };
   if (systemMsg) {
-    body.system = systemMsg.content;
+    body.system = flattenContent(systemMsg.content);
   }
 
   const resp = await fetch(`${config.endpointUrl}/v1/messages`, {
@@ -183,7 +200,7 @@ async function callOpenAI(
     body: JSON.stringify({
       model: config.model,
       max_tokens: 256,
-      messages: messages.map((m) => ({ role: m.role, content: m.content })),
+      messages: messages.map((m) => ({ role: m.role, content: flattenContent(m.content) })),
     }),
     signal,
   });
@@ -219,7 +236,7 @@ async function callOllama(
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({
       model: config.model,
-      messages: messages.map((m) => ({ role: m.role, content: m.content })),
+      messages: messages.map((m) => ({ role: m.role, content: flattenContent(m.content) })),
       stream: false,
     }),
     signal,
@@ -254,6 +271,7 @@ async function callOpenRouter(
       messages: messages.map((m) => ({ role: m.role, content: m.content })),
       reasoning: { effort: config.reasoningEffort || "low" },
       provider: {
+        ...(config.providerOrder?.length ? { order: config.providerOrder } : {}),
         sort: config.providerSort || "latency",
       },
     }),
@@ -274,9 +292,32 @@ async function callOpenRouter(
       finish_reason?: string;
     }[];
     error?: { message: string; type: string; code?: string };
+    usage?: {
+      prompt_tokens?: number;
+      completion_tokens?: number;
+      // OpenRouter/Groq format
+      prompt_tokens_details?: {
+        cached_tokens?: number;
+        cache_write_tokens?: number;
+      };
+      // Anthropic format (fallback)
+      cache_read_input_tokens?: number;
+      cache_creation_input_tokens?: number;
+    };
   };
   if (data.error) {
     return { text: "", error: `OpenRouter error: ${data.error.message}` };
+  }
+
+  // Log prompt caching stats when available (check both response formats)
+  if (data.usage) {
+    const details = data.usage.prompt_tokens_details;
+    const cached = details?.cached_tokens ?? data.usage.cache_read_input_tokens ?? 0;
+    const total = data.usage.prompt_tokens ?? 0;
+    if (cached > 0) {
+      const pct = total > 0 ? Math.round((cached / total) * 100) : 0;
+      console.log(`[LLM] Cache hit: ${cached}/${total} prompt tokens cached (${pct}%)`);
+    }
   }
 
   const choice = data.choices?.[0];

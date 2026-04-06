@@ -17,8 +17,8 @@ export const DEHYDRATION_DAMAGE_MS = 3 * 60 * 1000; // 3 minutes
 export const ENERGY_MAX = 1000;
 /** Energy decay: 1 per second. */
 const ENERGY_DECAY_PER_MS = 1 / 1000;
-/** Energy recovery while sleeping: 3 per second. */
-const ENERGY_RECOVERY_PER_MS = 3 / 1000;
+/** Default energy recovery while sleeping (bedroll): 3 per second. */
+const DEFAULT_ENERGY_RECOVERY_PER_MS = 3 / 1000;
 
 const HUNGER_DECAY_RATE = 100 / HUNGER_DEPLETION_MS;
 const THIRST_DECAY_RATE = 100 / THIRST_DEPLETION_MS;
@@ -45,8 +45,14 @@ export function defaultVitals(): VitalsState {
  * @param state  Current vitals
  * @param deltaMs  Elapsed milliseconds since last update
  * @param sleeping  Whether the player is currently sleeping in a bed
+ * @param energyRecoveryPerSec  Energy recovery rate while sleeping (bed=5, bedroll=3). Ignored when awake.
  */
-export function updateVitals(state: VitalsState, deltaMs: number, sleeping = false): VitalsState {
+export function updateVitals(
+  state: VitalsState,
+  deltaMs: number,
+  sleeping = false,
+  energyRecoveryPerSec = 3,
+): VitalsState {
   const decayMult = sleeping ? SLEEP_DECAY_FACTOR : 1;
   const hunger = clampVital(state.hunger - HUNGER_DECAY_RATE * decayMult * deltaMs);
   const thirst = clampVital(state.thirst - THIRST_DECAY_RATE * decayMult * deltaMs);
@@ -60,9 +66,8 @@ export function updateVitals(state: VitalsState, deltaMs: number, sleeping = fal
   // Energy: decays when awake, recovers when sleeping.
   // Handle old saves that lack energy by defaulting to ENERGY_MAX.
   const currentEnergy = state.energy ?? ENERGY_MAX;
-  const energyDelta = sleeping
-    ? ENERGY_RECOVERY_PER_MS * deltaMs
-    : -(ENERGY_DECAY_PER_MS * deltaMs);
+  const recoveryRate = sleeping ? energyRecoveryPerSec / 1000 : DEFAULT_ENERGY_RECOVERY_PER_MS;
+  const energyDelta = sleeping ? recoveryRate * deltaMs : -(ENERGY_DECAY_PER_MS * deltaMs);
   const energy = clampEnergy(currentEnergy + energyDelta);
 
   return { health, hunger, thirst, energy };

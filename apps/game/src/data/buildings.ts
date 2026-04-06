@@ -211,6 +211,21 @@ export const BUILDING_TYPES: BuildingType[] = [
     allowIndoor: true,
     storage: { slotCount: 16 },
   },
+  {
+    id: "bedroll",
+    name: "Bedroll",
+    ingredients: [
+      { itemId: "cow_hide", count: 1 },
+      { itemId: "wool", count: 1 },
+    ],
+    maxHp: 40,
+    solid: false,
+    interactable: false,
+    solidWhenClosed: false,
+    placement: "tile",
+    // No requiresIndoor — bedrolls can be placed anywhere outdoors or indoors
+    allowIndoor: true,
+  },
 ];
 
 export const BUILDING_TYPE_MAP: Record<string, BuildingType> = Object.fromEntries(

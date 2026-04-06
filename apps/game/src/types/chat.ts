@@ -11,8 +11,8 @@ export interface ChatMessage {
 
 export const CHAT_MODE_RADIUS: Record<ChatMode, number> = {
   whisper: 1,
-  talk: 3,
-  yell: 6,
+  talk: 5,
+  yell: 10,
 };
 
 export const CHAT_MODE_ORDER: ChatMode[] = ["whisper", "talk", "yell"];

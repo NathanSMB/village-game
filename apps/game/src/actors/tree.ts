@@ -4,8 +4,10 @@ import { ITEMS } from "../data/items.ts";
 import type { Item } from "../types/item.ts";
 import type { TreeSaveState } from "../systems/save-manager.ts";
 import { DamageFlash } from "./damage-flash.ts";
+import { HealthBar } from "./health-bar.ts";
 
 const TILE_SIZE = 32;
+const MAX_HP = 200;
 const DROP_INTERVAL_MS = 60_000; // 60 seconds between timed branch drops
 const BRANCH_DROP_EVERY = 50; // damage needed for each branch drop
 const REGROW_MS = 300_000; // 5 minutes to regrow from stump
@@ -26,7 +28,8 @@ export class Tree extends ex.Actor {
   branchCount = 0;
 
   // Chopping mechanics
-  private hp = 200;
+  hp = MAX_HP;
+  readonly maxHp = MAX_HP;
   private damageAccum = 0;
   private _isStump = false;
   private regrowTimer = 0;
@@ -53,6 +56,16 @@ export class Tree extends ex.Actor {
     this.stumpAnim = getTreeStumpAnimation();
     this.graphics.use(this.treeAnim);
     this.flash = new DamageFlash(this);
+
+    // Health bar — shows when damaged
+    const healthBar = new HealthBar({
+      barWidth: 20,
+      offsetY: -18,
+      getHealth: () => ({ current: this.hp, max: this.maxHp }),
+      shouldShow: () => !this._isStump && this.hp < this.maxHp,
+    });
+    this.addChild(healthBar);
+
     // Stagger initial drop timer so trees don't all drop at once
     this.dropTimer = Math.random() * DROP_INTERVAL_MS;
   }
@@ -130,7 +143,7 @@ export class Tree extends ex.Actor {
   restoreState(state: TreeSaveState): void {
     this.dropTimer = state.dropTimer;
     this.branchCount = state.branchCount;
-    this.hp = state.hp ?? 200;
+    this.hp = state.hp ?? MAX_HP;
     this._isStump = state.isStump ?? false;
     this.regrowTimer = state.regrowTimer ?? 0;
     this.damageAccum = state.damageAccum ?? 0;
@@ -147,7 +160,7 @@ export class Tree extends ex.Actor {
 
   private regrow(): void {
     this._isStump = false;
-    this.hp = 200;
+    this.hp = MAX_HP;
     this.damageAccum = 0;
     this.regrowTimer = 0;
     this.dropTimer = DROP_INTERVAL_MS;

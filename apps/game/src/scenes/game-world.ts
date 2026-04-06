@@ -86,10 +86,27 @@ import {
   type ChatMessage,
   type ChatMode,
   CHAT_MODE_ORDER,
+  CHAT_MODE_RADIUS,
   CHAT_EXPIRE_MS,
   CHAT_MODE_COLORS,
   CHAT_MODE_VERBS,
+  chebyshevDistance,
 } from "../types/chat.ts";
+import { NPC } from "../actors/npc.ts";
+import type { NPCSaveState, EntityInfo } from "../types/npc.ts";
+import { NPC_DEFINITIONS } from "../data/npc-definitions.ts";
+import { type LLMProviderConfig, defaultConfig } from "../systems/llm-provider.ts";
+import { loadLLMConfig } from "../systems/llm-settings.ts";
+import {
+  decideNextAction,
+  buildWorldSnapshot,
+  thinkAboutPlan,
+  thinkAboutQuestion,
+} from "../systems/npc-brain.ts";
+import { executeNPCAction, type GameWorldNPCInterface } from "../systems/npc-actions.ts";
+import { findPath } from "../systems/pathfinding.ts";
+import { NPCThoughtIndicator } from "../actors/npc-thought-indicator.ts";
+import { NPCDebugPanel } from "../actors/npc-debug-panel.ts";
 
 const MAP_COLS = 64;
 const MAP_ROWS = 64;
@@ -112,7 +129,7 @@ const WILD_SPAWN_MAX_COWS = 10; // Only wild spawn when ≤ 10 cows alive
 const GROUND_ITEM_DESPAWN_MS = 180_000; // 3 minutes until non-permanent ground items vanish
 
 export type GameWorldData =
-  | { type: "new"; appearance: CharacterAppearance }
+  | { type: "new"; appearance: CharacterAppearance; playerName: string }
   | { type: "load"; save: SaveData };
 
 /** Map an Excalibur key code + shift state to a printable character, or null. */
@@ -218,6 +235,17 @@ export class GameWorld extends ex.Scene<GameWorldData> {
   private cowByTile = new Map<number, Cow>();
   private cowRegisteredTile = new Map<Cow, number>();
   private cowWildSpawnTimer = WILD_SPAWN_INTERVAL_MS;
+
+  // NPC system
+  private npcList: NPC[] = [];
+  private npcByTile = new Map<number, NPC>();
+  private npcRegisteredTile = new Map<NPC, number>();
+  private npcInFlight = new Map<string, AbortController>(); // in-flight LLM calls
+  private llmConfig: LLMProviderConfig = defaultConfig();
+  private npcDebugPanel: NPCDebugPanel | null = null;
+  private npcDebugVisible = false;
+  // Bed ownership: tileKey → NPC id (prevents double-claiming)
+  private claimedBeds = new Map<number, string>();
 
   // Sleeping state
   private playerSleeping = false;
@@ -687,7 +715,10 @@ export class GameWorld extends ex.Scene<GameWorldData> {
       this.chatMessages = [];
       this.chatOpen = false;
       this.chatInputText = "";
-      this.playerName = context.data.type === "load" ? context.data.save.name : "Player";
+      this.playerName =
+        context.data.type === "load"
+          ? (context.data.save.playerName ?? context.data.save.name)
+          : context.data.playerName;
 
       // Chat input/hint panel sits at the very bottom-left.
       // UI_REF_HEIGHT (600) is the design-unit screen height; multiplying by
@@ -757,6 +788,25 @@ export class GameWorld extends ex.Scene<GameWorldData> {
         this.spawnInitialCows();
       }
 
+      // NPCs: always clear old ones first, then restore or spawn fresh
+      this.clearAllNPCs();
+      if (context.data.type === "load" && context.data.save.npcs) {
+        this.restoreNPCStates(context.data.save.npcs);
+      } else if (context.data.type === "new") {
+        this.spawnInitialNPCs();
+      }
+
+      // Restore player's claimed bed AFTER clearAllNPCs (which clears claimedBeds)
+      if (context.data.type === "load" && context.data.save.playerClaimedBed) {
+        const pb = context.data.save.playerClaimedBed;
+        this.claimedBeds.set(tileKey(pb.x, pb.y), "__player__");
+      }
+
+      // Load LLM config for NPC brains
+      void loadLLMConfig().then((config) => {
+        this.llmConfig = config;
+      });
+
       // Recalculate indoor lighting after restoring buildings
       this.recalculateIndoorLighting();
 
@@ -766,7 +816,11 @@ export class GameWorld extends ex.Scene<GameWorldData> {
         const ss = context.data.save.player.sleeping;
         const bedKey = tileKey(ss.bedTileX, ss.bedTileY);
         const bed = this.buildingByTile.get(bedKey);
-        if (bed && bed.type.id === "bed" && bed.state === "complete") {
+        if (
+          bed &&
+          (bed.type.id === "bed" || bed.type.id === "bedroll") &&
+          bed.state === "complete"
+        ) {
           this.enterSleep(bed);
         }
       }
@@ -783,6 +837,30 @@ export class GameWorld extends ex.Scene<GameWorldData> {
 
   override onPreUpdate(engine: ex.Engine, delta: number): void {
     const kb = engine.input.keyboard;
+
+    // Lazily create NPC debug panel on first update (engine dimensions are reliable here)
+    if (!this.npcDebugPanel) {
+      this.npcDebugPanel = new NPCDebugPanel(engine.drawWidth, engine.drawHeight);
+      this.npcDebugPanel.graphics.visible = false;
+      this.add(this.npcDebugPanel);
+      this.npcDebugPanel.setNPCs(this.npcList.filter((n) => !n.isDead));
+    }
+
+    // NPC debug panel toggle (backtick)
+    if (kb.wasPressed(ex.Keys.Backquote)) {
+      this.npcDebugVisible = !this.npcDebugVisible;
+      if (this.npcDebugPanel) {
+        this.npcDebugPanel.graphics.visible = this.npcDebugVisible;
+        this.npcDebugPanel.setNPCs(this.npcList.filter((n) => !n.isDead));
+      }
+    }
+    // Cycle NPC in debug panel with left/right when panel is open
+    if (this.npcDebugVisible && this.npcDebugPanel) {
+      if (kb.wasPressed(ex.Keys.ArrowLeft)) this.npcDebugPanel.cycleNPC(-1);
+      if (kb.wasPressed(ex.Keys.ArrowRight)) this.npcDebugPanel.cycleNPC(1);
+      if (kb.wasPressed(ex.Keys.ArrowUp)) this.npcDebugPanel.scrollUp();
+      if (kb.wasPressed(ex.Keys.ArrowDown)) this.npcDebugPanel.scrollDown();
+    }
 
     // Planning mode input handling
     if (this.planningMode) {
@@ -849,6 +927,7 @@ export class GameWorld extends ex.Scene<GameWorldData> {
     this.updateBreeding(delta);
     this.updateWildSpawn(delta);
     this.updateCowWildSpawn(delta);
+    this.updateNPCs(delta);
 
     // Death check while inventory is open (game keeps running)
     if (this.inventoryMenuOpen && this.player && !isAlive(this.player.vitals)) {
@@ -1201,23 +1280,41 @@ export class GameWorld extends ex.Scene<GameWorldData> {
       const facingBuilding = this.buildingByTile.get(facingKey);
       const exhausted = this.player.isExhausted();
 
-      // Bed interaction — always allowed, even when exhausted
+      // Bed/bedroll interaction — always allowed, even when exhausted
       if (
         facingBuilding &&
-        facingBuilding.type.id === "bed" &&
+        (facingBuilding.type.id === "bed" || facingBuilding.type.id === "bedroll") &&
         facingBuilding.state === "complete"
       ) {
         const worldX = facing.x * TILE_SIZE + TILE_SIZE / 2;
         const worldY = facing.y * TILE_SIZE + TILE_SIZE / 2;
+        const bedKey = tileKey(facing.x, facing.y);
+        const bedOwner = this.claimedBeds.get(bedKey);
+        const playerOwns = bedOwner === "__player__";
+        const unclaimed = !bedOwner;
 
         if (this.actionPrompt) {
-          this.actionPrompt.text = "[E] Sleep";
+          if (unclaimed) {
+            this.actionPrompt.text = "[E] Claim";
+          } else if (playerOwns) {
+            this.actionPrompt.text = "[E] Sleep";
+          } else {
+            this.actionPrompt.text = "Taken";
+          }
           this.actionPrompt.pos = ex.vec(worldX, worldY - TILE_SIZE / 2 - 4);
           this.actionPrompt.graphics.visible = true;
         }
 
         if (wasActionPressed(kb, "action")) {
-          this.enterSleep(facingBuilding);
+          if (unclaimed) {
+            // Claim the bed
+            this.claimedBeds.set(bedKey, "__player__");
+            this.spawnPickupText("Claimed!", worldX, worldY);
+          } else if (playerOwns) {
+            // Sleep in the bed
+            this.enterSleep(facingBuilding);
+          }
+          // If taken by NPC, do nothing
         }
       } else if (exhausted) {
         // Too tired to do anything — hide prompt
@@ -1478,6 +1575,7 @@ export class GameWorld extends ex.Scene<GameWorldData> {
     if (!this.player) return;
     this.playerSleeping = true;
     this.sleepingBed = bed;
+    this.player.sleepEnergyRate = bed.type.id === "bedroll" ? 3 : 5;
     this.player.lockInput();
 
     // Save original position so we can snap back on wake-up
@@ -3306,12 +3404,12 @@ export class GameWorld extends ex.Scene<GameWorldData> {
   }
 
   private handleChatInput(kb: ex.Keyboard): void {
-    // Arrow keys scroll the chat log
-    if (kb.wasPressed(ex.Keys.ArrowUp) || kb.wasPressed(ex.Keys.W)) {
+    // Arrow keys scroll the chat log (NOT WASD — those are for typing!)
+    if (kb.wasPressed(ex.Keys.ArrowUp)) {
       this.chatLog?.scrollUp();
       return;
     }
-    if (kb.wasPressed(ex.Keys.ArrowDown) || kb.wasPressed(ex.Keys.S)) {
+    if (kb.wasPressed(ex.Keys.ArrowDown)) {
       this.chatLog?.scrollDown();
       return;
     }
@@ -3380,9 +3478,8 @@ export class GameWorld extends ex.Scene<GameWorldData> {
     this.chatMessages.push(msg);
     this.chatLog?.scrollToBottom();
 
-    // In the future, distribute to nearby AI agents here:
-    // for each agent within CHAT_MODE_RADIUS[msg.mode] Chebyshev distance,
-    // push msg into that agent's personal chat log.
+    // Distribute to nearby NPC agents
+    this.distributeMessageToNPCs(msg, null);
 
     // Spawn speech bubble as a child of the player (auto-attaches via constructor)
     new SpeechBubble(msg.text, this.player, msg.mode);
@@ -5256,6 +5353,803 @@ export class GameWorld extends ex.Scene<GameWorldData> {
     for (const saved of states) {
       const cow = this.addCow(saved.tileX, saved.tileY);
       cow.restoreState(saved);
+    }
+  }
+
+  // ==================== NPC System ====================
+
+  private spawnInitialNPCs(): void {
+    const center = 32;
+    for (const def of NPC_DEFINITIONS) {
+      // Find a random walkable tile within 10 tiles of center
+      let tx = center;
+      let ty = center;
+      for (let attempts = 0; attempts < 50; attempts++) {
+        tx = center + Math.floor(Math.random() * 20) - 10;
+        ty = center + Math.floor(Math.random() * 20) - 10;
+        if (tx < 0 || tx >= MAP_COLS || ty < 0 || ty >= MAP_ROWS) continue;
+        const k = tileKey(tx, ty);
+        if (this.blockedTiles.has(k) || this.waterTiles.has(k)) continue;
+        break;
+      }
+      this.addNPC(tx, ty, def);
+    }
+  }
+
+  private addNPC(
+    tileX: number,
+    tileY: number,
+    def: (typeof NPC_DEFINITIONS)[0],
+    saved?: NPCSaveState,
+  ): NPC {
+    const npc = new NPC(tileX, tileY, def, saved ?? undefined);
+    npc.setBlockedCheck((fromX, fromY, toX, toY) => {
+      const toKey = tileKey(toX, toY);
+      if (this.blockedTiles.has(toKey)) return true;
+      const ek = edgeKeyBetween(fromX, fromY, toX, toY);
+      return ek !== null && this.blockedEdges.has(ek);
+    });
+    this.npcList.push(npc);
+    const key = tileKey(tileX, tileY);
+    this.npcByTile.set(key, npc);
+    this.npcRegisteredTile.set(npc, key);
+    this.blockedTiles.add(key);
+    this.add(npc);
+
+    // Attach thought indicator as child
+    const indicator = new NPCThoughtIndicator(npc);
+    npc.addChild(indicator);
+
+    // Restore bed claim if NPC has one saved
+    if (npc.claimedBed) {
+      this.claimedBeds.set(tileKey(npc.claimedBed.x, npc.claimedBed.y), npc.npcId);
+    }
+
+    // Update debug panel NPC list
+    this.npcDebugPanel?.setNPCs(this.npcList.filter((n) => !n.isDead));
+
+    return npc;
+  }
+
+  private removeNPC(npc: NPC): void {
+    const key = this.npcRegisteredTile.get(npc);
+    if (key !== undefined) {
+      if (this.npcByTile.get(key) === npc) {
+        this.npcByTile.delete(key);
+        this.blockedTiles.delete(key);
+      }
+      this.npcRegisteredTile.delete(npc);
+    }
+    this.npcList = this.npcList.filter((n) => n !== npc);
+    const controller = this.npcInFlight.get(npc.npcId);
+    if (controller) {
+      controller.abort();
+      this.npcInFlight.delete(npc.npcId);
+    }
+    this.remove(npc);
+  }
+
+  private updateNPCs(_delta: number): void {
+    for (const npc of this.npcList) {
+      if (npc.isDead) continue;
+
+      // Tile tracking reconciliation (same pattern as sheep)
+      const currentKey = tileKey(npc.tileX, npc.tileY);
+      const registeredKey = this.npcRegisteredTile.get(npc);
+      if (registeredKey !== currentKey) {
+        if (registeredKey !== undefined) {
+          if (this.npcByTile.get(registeredKey) === npc) {
+            this.npcByTile.delete(registeredKey);
+            this.blockedTiles.delete(registeredKey);
+          }
+        }
+        this.npcByTile.set(currentKey, npc);
+        this.blockedTiles.add(currentKey);
+        this.npcRegisteredTile.set(npc, currentKey);
+      }
+
+      // Death check
+      if (npc.vitals.health <= 0) {
+        npc.isDead = true;
+        // Drop inventory items on the ground
+        for (const item of npc.inventory.bag) {
+          this.dropResourceNear(npc.tileX, npc.tileY, item);
+        }
+        npc.inventory.bag = [];
+        this.removeNPC(npc);
+        continue;
+      }
+
+      // Decision trigger — only if NPC is idle and no in-flight LLM call
+      if (!npc.isBusy() && !this.npcInFlight.has(npc.npcId)) {
+        // Check for pending path from move_to or attack chase
+        if (npc.pendingPath.length > 0) {
+          const nextDir = npc.pendingPath.shift()!;
+          const moved = npc.moveToTile(nextDir);
+          if (!moved) {
+            npc.pendingPath = [];
+            npc.pendingAction = null;
+          }
+          continue;
+        }
+
+        // If we just finished an auto-walk path, execute the queued action
+        if (npc.pendingAction) {
+          const action = npc.pendingAction;
+          npc.pendingAction = null;
+          executeNPCAction(npc, action, this.getNPCInterface());
+          continue;
+        }
+
+        // No LLM config or no API key — random wander fallback
+        if (!this.llmConfig.apiKey && this.llmConfig.provider !== "ollama") {
+          this.npcFallbackWander(npc);
+          continue;
+        }
+
+        // Call the LLM brain
+        this.triggerNPCDecision(npc);
+      }
+    }
+  }
+
+  private npcFallbackWander(npc: NPC): void {
+    // Simple random wander (sheep-like) — used when no LLM config is set
+    npc.debugLastAction = "(no LLM — fallback wander)";
+    npc.debugLastResult = "✓ fallback";
+    if (Math.random() < 0.3) {
+      const dirs = ["up", "down", "left", "right"] as const;
+      const dir = dirs[Math.floor(Math.random() * 4)];
+      npc.moveToTile(dir);
+      npc.pushDebugHistory(`{"action":"move","direction":"${dir}"}`, "✓ fallback");
+    } else {
+      npc.startWaiting(2000 + Math.random() * 3000);
+      npc.pushDebugHistory('{"action":"wait"}', "✓ fallback");
+    }
+  }
+
+  private triggerNPCDecision(npc: NPC): void {
+    const abortController = new AbortController();
+    this.npcInFlight.set(npc.npcId, abortController);
+    npc.debugThinking = true;
+
+    const snapshot = this.getWorldSnapshotForNPC(npc);
+    // Auto-complete todos whose conditions are already met
+    npc.autoCheckTodos();
+
+    // Force replan when a NEW emergency threshold is crossed
+    const currentEmergencies = new Set<string>();
+    if (npc.vitals.thirst <= 15) currentEmergencies.add("thirst");
+    if (npc.vitals.hunger <= 15) currentEmergencies.add("hunger");
+    if (npc.vitals.energy <= 200) currentEmergencies.add("energy");
+
+    // Check for newly triggered emergencies
+    let newEmergency = false;
+    for (const e of currentEmergencies) {
+      if (!npc.emergencyReplanned.has(e)) {
+        newEmergency = true;
+        npc.emergencyReplanned.add(e);
+      }
+    }
+    // Clear resolved emergencies so they can trigger again if they recur
+    for (const e of npc.emergencyReplanned) {
+      if (!currentEmergencies.has(e)) {
+        npc.emergencyReplanned.delete(e);
+      }
+    }
+    if (newEmergency && npc.todoList.length > 0) {
+      console.warn(`[NPC ${npc.npcName}] New emergency — forcing replan`);
+      npc.todoList = [];
+      npc.todoGracePeriod = 0;
+      npc.pendingPath = [];
+      npc.pendingAction = null;
+    }
+
+    // Diff visible entity states (HP changes, bush picked, etc.)
+    const worldChanges = npc.diffVisibleEntities(snapshot.entities);
+    const config = this.llmConfig;
+
+    decideNextAction(npc, snapshot, config, abortController.signal)
+      .then(async (action) => {
+        if (npc.isDead) {
+          this.npcInFlight.delete(npc.npcId);
+          npc.debugThinking = false;
+          return;
+        }
+
+        // Clear chat inbox since the brain has consumed them
+        npc.chatInbox = [];
+
+        // Hard enforcement: if NPC has no plan, force plan action regardless of what the model chose
+        if (
+          npc.todoList.length === 0 &&
+          action.action !== "plan" &&
+          action.action !== "think" &&
+          action.action !== "consume" &&
+          action.action !== "drink_water"
+        ) {
+          console.warn(`[NPC ${npc.npcName}] No plan but chose ${action.action} — forcing plan`);
+          // Allow survival actions (consume/drink) even without a plan, but redirect everything else
+          const forcedAction = { action: "plan" as const };
+          npc.debugLastAction = JSON.stringify(action);
+          npc.debugLastResult = "→ Redirected to plan (no todo list)";
+          // Fall through to plan handler below
+          Object.assign(action, forcedAction);
+        }
+
+        // Intercept plan → route through thinking model to create todo list
+        if (action.action === "plan") {
+          npc.debugLastAction = '{"action":"plan"}';
+          npc.debugLastResult = "⏳ Planning...";
+          const todos = await thinkAboutPlan(npc, snapshot, config, abortController.signal);
+          npc.todoList = todos;
+          npc.todoGracePeriod = 3; // skip auto-check for 3 cycles so new plan isn't instantly cleared
+          const summary = todos.map((t) => t.task).join(" → ");
+          npc.debugLastResult = `✓ Plan: ${summary.slice(0, 80)}`;
+          npc.pushDebugHistory('{"action":"plan"}', `✓ ${todos.length} todos`, worldChanges);
+          this.npcInFlight.delete(npc.npcId);
+          npc.debugThinking = false;
+          return;
+        }
+
+        // Intercept think → route through thinking model
+        if (action.action === "think") {
+          npc.debugLastAction = '{"action":"think"}';
+          npc.debugLastResult = "⏳ Thinking...";
+          const answer = await thinkAboutQuestion(npc, snapshot, config, abortController.signal);
+          npc.debugLastResult = `✓ Thought: ${answer.slice(0, 80)}`;
+          npc.pushDebugHistory('{"action":"think"}', `✓ ${answer.slice(0, 60)}`, worldChanges);
+          this.npcInFlight.delete(npc.npcId);
+          npc.debugThinking = false;
+          return;
+        }
+
+        // All other actions — execute normally
+        const result = executeNPCAction(npc, action, this.getNPCInterface());
+        const actionJson = JSON.stringify(action);
+        const resultStr = result.success
+          ? `✓ ${result.reason ?? "ok"}`
+          : `✗ ${result.reason ?? "failed"}`;
+        npc.debugLastResult = resultStr;
+        npc.pushDebugHistory(actionJson, resultStr, worldChanges);
+
+        // Stuck detection: if same action fails 3+ times, force replan
+        if (result.success) {
+          npc.trackSuccess();
+        } else {
+          const stuck = npc.trackFailure(actionJson);
+          if (stuck) {
+            console.warn(`[NPC ${npc.npcName}] Stuck on: ${actionJson} — forcing replan`);
+            npc.todoList = [];
+            npc.trackSuccess(); // reset counter
+          }
+        }
+        this.npcInFlight.delete(npc.npcId);
+        npc.debugThinking = false;
+      })
+      .catch((err: unknown) => {
+        this.npcInFlight.delete(npc.npcId);
+        npc.debugThinking = false;
+        if (!String(err).includes("aborted")) {
+          npc.debugLastResult = `✗ ${String(err)}`;
+        }
+      });
+  }
+
+  private getWorldSnapshotForNPC(npc: NPC): ReturnType<typeof buildWorldSnapshot> {
+    const entities: EntityInfo[] = [];
+    const cx = npc.tileX;
+    const cy = npc.tileY;
+
+    for (let dy = -10; dy <= 10; dy++) {
+      for (let dx = -10; dx <= 10; dx++) {
+        const tx = cx + dx;
+        const ty = cy + dy;
+        if (tx < 0 || tx >= MAP_COLS || ty < 0 || ty >= MAP_ROWS) continue;
+        const key = tileKey(tx, ty);
+
+        // Water
+        if (this.waterTiles.has(key)) {
+          entities.push({ type: "building", x: tx, y: ty, details: "water (drinkable)" });
+        }
+
+        // Berry bush
+        const bush = this.bushByTile.get(key);
+        if (bush) {
+          entities.push({
+            type: "bush",
+            x: tx,
+            y: ty,
+            details: bush.canPick() ? "berry bush (has berries)" : "berry bush (no berries)",
+          });
+        }
+
+        // Tree
+        const tree = this.treeByTile.get(key);
+        if (tree) {
+          entities.push({
+            type: "tree",
+            x: tx,
+            y: ty,
+            details: tree.isChoppedDown()
+              ? "stump (regrowing)"
+              : `tree (HP:${tree.hp}/${tree.maxHp})`,
+          });
+        }
+
+        // Rock
+        const rock = this.rockByTile.get(key);
+        if (rock) {
+          entities.push({ type: "rock", x: tx, y: ty, details: "big rock" });
+        }
+
+        // Ground items
+        const stack = this.groundItems.get(key);
+        if (stack && !stack.isEmpty()) {
+          const items = stack.getItems();
+          const names = items.map((i) => i.name).join(", ");
+          entities.push({ type: "ground_items", x: tx, y: ty, details: names });
+        }
+
+        // Building
+        const building = this.buildingByTile.get(key);
+        if (building) {
+          let detail = `${building.type.name} (${building.state}, HP:${building.hp}/${building.type.maxHp})`;
+          if (building.state === "hologram") {
+            const delivered = building.materialsDelivered;
+            const total = building.type.ingredients.reduce((s, i) => s + i.count, 0);
+            detail += ` [${delivered}/${total} materials delivered]`;
+          }
+          if (building.type.storage && building.storageSlots) {
+            const used = building.storageSlots.filter((s) => s !== null).length;
+            const slots = building.storageSlots.length;
+            detail += ` [${used}/${slots} items]`;
+          }
+          if (building.isBurning) detail += " [burning]";
+          // Show bed/bedroll claim status
+          if (building.type.id === "bed" || building.type.id === "bedroll") {
+            const bedOwner = this.claimedBeds.get(key);
+            if (bedOwner === npc.npcId) {
+              detail += " [YOUR bed]";
+            } else if (bedOwner === "__player__") {
+              detail += " [claimed by player]";
+            } else if (bedOwner) {
+              const ownerNpc = this.npcList.find((n) => n.npcId === bedOwner);
+              detail += ` [claimed by ${ownerNpc?.npcName ?? "someone"}]`;
+            } else {
+              detail += " [unclaimed]";
+            }
+          }
+          entities.push({ type: "building", x: tx, y: ty, details: detail });
+        }
+
+        // Sheep
+        const sheep = this.sheepByTile.get(key);
+        if (sheep && !sheep.isDead) {
+          entities.push({
+            type: "sheep",
+            x: tx,
+            y: ty,
+            details: `sheep (HP: ${sheep.hp}/${sheep.maxHp}) — attack with {"action":"attack","targetType":"sheep","x":${tx},"y":${ty}}`,
+          });
+        }
+
+        // Cow
+        const cow = this.cowByTile.get(key);
+        if (cow && !cow.isDead) {
+          entities.push({
+            type: "cow",
+            x: tx,
+            y: ty,
+            details: `cow (HP: ${cow.hp}/${cow.maxHp}) — attack with {"action":"attack","targetType":"cow","x":${tx},"y":${ty}}`,
+          });
+        }
+
+        // Other NPCs
+        const otherNpc = this.npcByTile.get(key);
+        if (otherNpc && otherNpc !== npc && !otherNpc.isDead) {
+          entities.push({
+            type: "npc",
+            x: tx,
+            y: ty,
+            details: `${otherNpc.npcName} facing ${otherNpc.facing}`,
+          });
+        }
+      }
+    }
+
+    // Player
+    if (this.player) {
+      const px = this.player.getTileX();
+      const py = this.player.getTileY();
+      if (chebyshevDistance(cx, cy, px, py) <= 10) {
+        entities.push({
+          type: "player",
+          x: px,
+          y: py,
+          details: `player "${this.playerName}" facing ${this.player.getFacing()}`,
+        });
+      }
+    }
+
+    // Edge buildings in vision (check all edges in the range)
+    for (const [edgeKey, edge] of this.edgeBuildings) {
+      const decoded = decodeEdgeKey(edgeKey);
+      if (!decoded) continue;
+      const { x: ex2, y: ey } = decoded;
+      if (chebyshevDistance(cx, cy, ex2, ey) <= 10) {
+        let detail = `${edge.type.name} (${edge.state})`;
+        if (edge.type.interactable) detail += edge.isOpen ? " [open]" : " [closed]";
+        entities.push({ type: "edge_building", x: ex2, y: ey, details: detail });
+      }
+    }
+
+    // Update NPC's object permanence with everything visible
+    npc.updateKnownLocations(entities);
+
+    return buildWorldSnapshot(entities, [...npc.chatInbox]);
+  }
+
+  private getNPCInterface(): GameWorldNPCInterface {
+    return {
+      getBushAt: (x, y) => this.bushByTile.get(tileKey(x, y)),
+      getTreeAt: (x, y) => this.treeByTile.get(tileKey(x, y)),
+      getRockAt: (x, y) => this.rockByTile.get(tileKey(x, y)),
+      getGroundItemsAt: (x, y) => this.groundItems.get(tileKey(x, y)),
+      getBuildingAt: (x, y) => this.buildingByTile.get(tileKey(x, y)),
+      getEdgeBetween: (fromX, fromY, toX, toY) => {
+        const ek = edgeKeyBetween(fromX, fromY, toX, toY);
+        return ek != null ? this.edgeBuildings.get(ek) : undefined;
+      },
+      isWaterTile: (x, y) => this.waterTiles.has(tileKey(x, y)),
+      isBlockedTile: (x, y) => this.blockedTiles.has(tileKey(x, y)),
+      getPlayerInfo: () => {
+        if (!this.player) return null;
+        return {
+          tileX: this.player.getTileX(),
+          tileY: this.player.getTileY(),
+          name: this.playerName,
+        };
+      },
+      getCreaturePosition: (targetType, x, y) => {
+        const key = tileKey(x, y);
+        // Check last-known position first
+        if (targetType === "sheep") {
+          const sheep = this.sheepByTile.get(key);
+          if (sheep && !sheep.isDead) return { x: sheep.tileX, y: sheep.tileY };
+        } else if (targetType === "cow") {
+          const cow = this.cowByTile.get(key);
+          if (cow && !cow.isDead) return { x: cow.tileX, y: cow.tileY };
+        }
+        // Creature may have moved — find nearest of that type
+        if (targetType === "sheep") {
+          for (const s of this.sheepList) {
+            if (!s.isDead) return { x: s.tileX, y: s.tileY };
+          }
+        } else if (targetType === "cow") {
+          for (const c of this.cowList) {
+            if (!c.isDead) return { x: c.tileX, y: c.tileY };
+          }
+        }
+        return null;
+      },
+      npcDropItem: (_npc, item, tx, ty) => {
+        this.dropItemAt(tx, ty, item, false);
+      },
+      npcToggleDoor: (edge) => {
+        edge.toggle();
+        const ek = this.findEdgeKey(edge);
+        if (ek !== null) {
+          if (edge.isSolid()) {
+            this.blockedEdges.add(ek);
+          } else {
+            this.blockedEdges.delete(ek);
+          }
+        }
+        this.recalculateIndoorLighting();
+      },
+      npcToggleTileDoor: (building) => {
+        building.toggle();
+        const k = tileKey(building.tileX, building.tileY);
+        if (building.isSolid()) {
+          this.blockedTiles.add(k);
+        } else {
+          this.blockedTiles.delete(k);
+        }
+      },
+      npcChat: (npc2, text, mode) => {
+        const msg: ChatMessage = {
+          sender: npc2.npcName,
+          text,
+          tileX: npc2.tileX,
+          tileY: npc2.tileY,
+          mode,
+          timestamp: Date.now(),
+        };
+        npc2.lastChatTime = Date.now();
+        this.chatMessages.push(msg);
+        this.chatLog?.scrollToBottom();
+        new SpeechBubble(msg.text, npc2, msg.mode);
+        // Add to sender's own chat history so they remember what they said
+        npc2.pushChatHistory(msg);
+        this.distributeMessageToNPCs(msg, npc2);
+      },
+      npcPlaceBuilding: (buildingId, x, y, rotation, orientation) => {
+        const buildType = BUILDING_TYPE_MAP[buildingId];
+        if (!buildType) return false;
+
+        // Edge buildings (walls, fences, doors) use orientation (N/E/S/W)
+        if (buildType.placement === "edge") {
+          const dir = (orientation ?? "N") as import("../systems/edge-key.ts").EdgeOrientation;
+          const ek = edgeKeyFromTileAndDir(x, y, dir);
+          if (ek == null) return false;
+          if (this.edgeBuildings.has(ek)) return false;
+          const edge = new EdgeBuilding(buildType, ek, "hologram");
+          edge.onDestroy = () => {
+            this.edgeBuildings.delete(ek);
+            this.blockedEdges.delete(ek);
+            this.edgeBuildingsList = this.edgeBuildingsList.filter((e) => e !== edge);
+            this.recalculateIndoorLighting();
+          };
+          this.edgeBuildingsList.push(edge);
+          this.edgeBuildings.set(ek, edge);
+          if (edge.isSolid()) this.blockedEdges.add(ek);
+          this.add(edge);
+          return true;
+        }
+
+        // Tile buildings (beds, fires, boxes, floors)
+        const k = tileKey(x, y);
+        if (this.blockedTiles.has(k) || this.waterTiles.has(k)) return false;
+        if (this.buildingByTile.has(k)) return false;
+        const building = new Building(buildType, x, y, "hologram", rotation);
+        building.onDestroy = () => this.removeBuilding(building, k);
+        building.onFireStateChange = () => this.recalculateIndoorLighting();
+        this.buildings.push(building);
+        this.buildingByTile.set(k, building);
+        this.add(building);
+        return true;
+      },
+      dropResourceNear: (cx2, cy2, item) => {
+        this.dropResourceNear(cx2, cy2, item);
+      },
+      findPathDirections: (fromX, fromY, toX, toY) => {
+        const path = findPath(fromX, fromY, toX, toY, (fx, fy, tx, ty) => {
+          const k = tileKey(tx, ty);
+          if (this.blockedTiles.has(k)) return true;
+          const ek = edgeKeyBetween(fx, fy, tx, ty);
+          return ek !== null && this.blockedEdges.has(ek);
+        });
+        if (!path || path.length === 0) return null;
+        // Convert tile positions to directions
+        const dirs: import("../actors/player.ts").Direction[] = [];
+        let px = fromX;
+        let py = fromY;
+        for (const step of path) {
+          if (step.x < px) dirs.push("left");
+          else if (step.x > px) dirs.push("right");
+          else if (step.y < py) dirs.push("up");
+          else dirs.push("down");
+          px = step.x;
+          py = step.y;
+        }
+        return dirs;
+      },
+      isBedClaimed: (x, y) => {
+        return this.claimedBeds.has(tileKey(x, y));
+      },
+      claimBed: (npc2, x, y) => {
+        const k = tileKey(x, y);
+        if (this.claimedBeds.has(k)) return false;
+        this.claimedBeds.set(k, npc2.npcId);
+        return true;
+      },
+      npcAttackAt: (npc2, x, y) => {
+        const key = tileKey(x, y);
+        const mainHand = npc2.inventory.equipment[EquipmentSlot.MainHand];
+        const canonical = mainHand ? ITEMS[mainHand.id] : null;
+        const baseDamage = canonical ? (canonical.stats.attack ?? 0) : 1; // UNARMED_DAMAGE = 1
+
+        // Attack sheep
+        const sheep = this.sheepByTile.get(key);
+        if (sheep && !sheep.isDead) {
+          const mult = canonical?.toolMultipliers?.creature ?? 1;
+          const damage = baseDamage * mult;
+          const drops = sheep.takeDamage(damage);
+          for (const drop of drops) {
+            this.dropResourceNear(sheep.tileX, sheep.tileY, drop);
+          }
+          if (sheep.isDead) this.removeSheep(sheep);
+          return;
+        }
+
+        // Attack cow
+        const cow = this.cowByTile.get(key);
+        if (cow && !cow.isDead) {
+          const mult = canonical?.toolMultipliers?.creature ?? 1;
+          const damage = baseDamage * mult;
+          const drops = cow.takeDamage(damage);
+          for (const drop of drops) {
+            this.dropResourceNear(cow.tileX, cow.tileY, drop);
+          }
+          if (cow.isDead) this.removeCow(cow);
+          return;
+        }
+
+        // Building construction / repair
+        const building = this.buildingByTile.get(key);
+        if (building) {
+          if (building.state === "hologram" && mainHand?.id === "hammer") {
+            const delivered = building.deliverMaterial(npc2.inventory);
+            if (delivered) {
+              if ((building.state as string) === "complete") {
+                if (building.isSolid()) {
+                  this.blockedTiles.add(key);
+                }
+                this.recalculateIndoorLighting();
+              }
+            }
+            return;
+          } else if (building.state === "complete" && mainHand?.id === "hammer") {
+            // Repair
+            if (building.hp < building.type.maxHp) {
+              building.hp = Math.min(building.type.maxHp, building.hp + 10);
+              building.updateGraphic();
+            }
+            return;
+          }
+        }
+
+        // Degrade weapon durability
+        if (mainHand && mainHand.durability != null) {
+          mainHand.durability -= 1;
+          if (mainHand.durability <= 0) {
+            npc2.inventory.equipment[EquipmentSlot.MainHand] = null;
+            npc2.refreshSprite();
+          }
+        }
+      },
+      npcShootArrow: (npc2, direction) => {
+        const facingTile = npc2.getFacingTile();
+        const bow = npc2.inventory.equipment[EquipmentSlot.MainHand];
+        if (!bow) return;
+        const canonical = ITEMS[bow.id] ?? bow;
+        const baseDamage = canonical.stats.attack ?? 0;
+
+        // Check if edge to facing tile is blocked
+        const ek = edgeKeyBetween(npc2.tileX, npc2.tileY, facingTile.x, facingTile.y);
+        if (ek !== null && this.blockedEdges.has(ek)) return; // blocked by wall
+
+        const arrow = new ArrowProjectile({
+          startTileX: facingTile.x,
+          startTileY: facingTile.y,
+          direction,
+          maxRange: 5,
+          onTileReached: (tx: number, ty: number) => {
+            return this.applyArrowDamageAt(tx, ty, baseDamage, canonical);
+          },
+          isEdgeBlocked: (fromTX: number, fromTY: number, toTX: number, toTY: number) => {
+            const edgeK = edgeKeyBetween(fromTX, fromTY, toTX, toTY);
+            return edgeK !== null && this.blockedEdges.has(edgeK);
+          },
+        });
+        this.add(arrow);
+
+        // Bow durability loss
+        if (bow.durability != null) {
+          bow.durability -= 1;
+          if (bow.durability <= 0) {
+            npc2.inventory.equipment[EquipmentSlot.MainHand] = null;
+            npc2.refreshSprite();
+          }
+        }
+      },
+      getNearestListenerDistance: (npc2) => {
+        let minDist = Infinity;
+        // Check player
+        if (this.player) {
+          const d = chebyshevDistance(
+            npc2.tileX,
+            npc2.tileY,
+            this.player.getTileX(),
+            this.player.getTileY(),
+          );
+          if (d < minDist) minDist = d;
+        }
+        // Check other NPCs
+        for (const other of this.npcList) {
+          if (other === npc2 || other.isDead) continue;
+          const d = chebyshevDistance(npc2.tileX, npc2.tileY, other.tileX, other.tileY);
+          if (d < minDist) minDist = d;
+        }
+        return minDist;
+      },
+      hasUncompletedHolograms: () => {
+        for (const b of this.buildings) {
+          if (b.state === "hologram") return true;
+        }
+        for (const e of this.edgeBuildingsList) {
+          if (e.state === "hologram") return true;
+        }
+        return false;
+      },
+      getHologramLocation: () => {
+        for (const b of this.buildings) {
+          if (b.state === "hologram") return { x: b.tileX, y: b.tileY };
+        }
+        return null;
+      },
+    };
+  }
+
+  private findEdgeKey(edge: EdgeBuilding): number | null {
+    for (const [key, e] of this.edgeBuildings) {
+      if (e === edge) return key;
+    }
+    return null;
+  }
+
+  private distributeMessageToNPCs(msg: ChatMessage, sender: NPC | null): void {
+    for (const npc of this.npcList) {
+      if (npc === sender) continue;
+      if (npc.isDead) continue;
+      const dist = chebyshevDistance(msg.tileX, msg.tileY, npc.tileX, npc.tileY);
+      if (dist <= CHAT_MODE_RADIUS[msg.mode]) {
+        npc.chatInbox.push(msg);
+        npc.pushChatHistory(msg);
+      }
+    }
+  }
+
+  // ==================== NPC Save/Load ====================
+
+  getPlayerName(): string {
+    return this.playerName;
+  }
+
+  getPlayerClaimedBed(): { x: number; y: number } | undefined {
+    for (const [key, owner] of this.claimedBeds) {
+      if (owner === "__player__") {
+        const x = key % 64;
+        const y = Math.floor(key / 64);
+        return { x, y };
+      }
+    }
+    return undefined;
+  }
+
+  getNPCStates(): NPCSaveState[] {
+    return this.npcList.filter((n) => !n.isDead).map((n) => n.getState());
+  }
+
+  private clearAllNPCs(): void {
+    // Abort all in-flight LLM calls
+    for (const controller of this.npcInFlight.values()) {
+      controller.abort();
+    }
+    this.npcInFlight.clear();
+
+    // Remove all NPC actors from the scene
+    for (const npc of this.npcList) {
+      const key = tileKey(npc.tileX, npc.tileY);
+      if (this.npcByTile.get(key) === npc) {
+        this.npcByTile.delete(key);
+        this.blockedTiles.delete(key);
+      }
+      this.remove(npc);
+    }
+    this.npcList = [];
+    this.npcByTile.clear();
+    this.npcRegisteredTile.clear();
+    this.claimedBeds.clear();
+  }
+
+  private restoreNPCStates(states: NPCSaveState[]): void {
+    for (const saved of states) {
+      // Find matching definition for the NPC ID
+      const def = NPC_DEFINITIONS.find((d) => d.npcId === saved.npcId);
+      if (!def) continue;
+      this.addNPC(saved.tileX, saved.tileY, def, saved);
     }
   }
 }

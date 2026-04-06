@@ -151,6 +151,8 @@ export class Player extends ex.Actor {
 
   // Sleeping state (in bed)
   sleeping = false;
+  /** Energy recovery rate while sleeping (bed=5, bedroll=3). */
+  sleepEnergyRate = 5;
 
   // Combat tracking for passive health regen
   private combatTimer = 10000; // ms since last combat damage (starts high = out of combat)
@@ -410,7 +412,7 @@ export class Player extends ex.Actor {
   }
 
   override onPreUpdate(engine: ex.Engine, delta: number): void {
-    this.vitals = updateVitals(this.vitals, delta, this.sleeping);
+    this.vitals = updateVitals(this.vitals, delta, this.sleeping, this.sleepEnergyRate);
 
     // Tick down encumbered-text cooldown
     if (this.encumberedTextCooldown > 0) {

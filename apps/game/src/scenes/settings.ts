@@ -10,6 +10,15 @@ import {
   type ActionName,
 } from "../systems/keybinds.ts";
 import { UI_REF_HEIGHT } from "../systems/ui-scale.ts";
+import {
+  type LLMProviderConfig,
+  PROVIDER_ORDER,
+  PROVIDER_LABELS,
+  REASONING_EFFORT_ORDER,
+  PROVIDER_SORT_ORDER,
+  callLLM,
+} from "../systems/llm-provider.ts";
+import { loadLLMConfig, saveLLMConfig, getProviderDefaults } from "../systems/llm-settings.ts";
 
 interface SettingsData {
   returnTo: string;
@@ -106,11 +115,50 @@ const FONT_BUTTON_SELECTED = new ex.Font({
 
 // ── Tab / button definitions ─────────────────────────────────────────
 
-const TAB_NAMES = ["Display", "Keybinds"] as const;
+const TAB_NAMES = ["Display", "Keybinds", "AI"] as const;
 type TabName = (typeof TAB_NAMES)[number];
 
 const DISPLAY_BUTTONS = ["Back"];
 const KEYBIND_BUTTONS = ["Reset to Defaults", "Back"];
+const AI_BUTTONS = ["Test Connection", "Clear", "Back"];
+
+const AI_FIELD_LABELS = [
+  "Provider:", // 0 — cycle
+  "API Key:", // 1 — text
+  "Model:", // 2 — text
+  "Endpoint:", // 3 — text
+  "Reasoning:", // 4 — cycle (OpenRouter only)
+  "Sort:", // 5 — cycle (OpenRouter only)
+  "Think Model:", // 6 — text  (OpenRouter only)
+  "Think Reason:", // 7 — cycle (OpenRouter only)
+  "Think Sort:", // 8 — cycle (OpenRouter only)
+] as const;
+
+const FONT_VALUE = new ex.Font({
+  family: "monospace",
+  size: 16,
+  bold: true,
+  color: ex.Color.White,
+  textAlign: ex.TextAlign.Left,
+  baseAlign: ex.BaseAlign.Middle,
+});
+
+const FONT_VALUE_SELECTED = new ex.Font({
+  family: "monospace",
+  size: 16,
+  bold: true,
+  color: ex.Color.fromHex("#f0c040"),
+  textAlign: ex.TextAlign.Left,
+  baseAlign: ex.BaseAlign.Middle,
+});
+
+const FONT_STATUS = new ex.Font({
+  family: "monospace",
+  size: 14,
+  color: ex.Color.fromHex("#88ff88"),
+  textAlign: ex.TextAlign.Center,
+  baseAlign: ex.BaseAlign.Middle,
+});
 
 type Section = "tabs" | "content" | "buttons";
 
@@ -150,6 +198,30 @@ export class Settings extends ex.Scene<SettingsData> {
   private listenReady = false;
   private listenKey: ex.Keys | null = null;
 
+  // AI tab
+  private aiElements: ex.Label[] = [];
+  private aiButtonLabels: ex.Label[] = [];
+  private aiValueLabels: ex.Label[] = [];
+  private aiContentRow = 0;
+  private aiButtonIndex = 0;
+  private aiConfig: LLMProviderConfig = {
+    provider: "custom",
+    apiKey: "",
+    model: "",
+    endpointUrl: "",
+    reasoningEffort: "low",
+    providerSort: "latency",
+    thinkingModel: "",
+    thinkingReasoningEffort: "high",
+    thinkingProviderSort: "latency",
+  };
+  private aiTyping = false;
+  private aiTypingField: number = -1; // 1=apiKey, 2=model, 3=endpoint
+  private aiTypingBuffer = "";
+  private aiStatusLabel!: ex.Label;
+  private aiRowLabels: ex.Label[] = []; // the left-side "Provider:", "API Key:", etc. labels
+  private pasteHandler: ((e: ClipboardEvent) => void) | null = null;
+
   private get activeTab(): TabName {
     return TAB_NAMES[this.activeTabIndex];
   }
@@ -170,6 +242,8 @@ export class Settings extends ex.Scene<SettingsData> {
     this.buildDisplayContent();
     this.buildKeybindContent();
     this.buildKeybindButtons();
+    this.buildAIContent();
+    this.buildAIButtons();
     this.switchTab(0);
   }
 
@@ -188,14 +262,26 @@ export class Settings extends ex.Scene<SettingsData> {
     this.listening = false;
     this.listenReady = false;
     this.listenKey = null;
+    this.aiContentRow = 0;
+    this.aiButtonIndex = 0;
+    this.aiTyping = false;
+    this.aiTypingField = -1;
+
+    // Ensure AI tab exists (handles HMR where onInitialize already ran with old code)
+    this.ensureAITab();
+
     this.refreshAllSlots();
     this.updateFullscreenLabel();
+    void this.loadAIConfig();
     this.switchTab(0);
     this.updateSelection();
   }
 
   override onPreUpdate(engine: ex.Engine): void {
     const kb = engine.input.keyboard;
+
+    // AI typing mode — input handled by native keydown/paste listeners
+    if (this.aiTyping) return;
 
     // Keybind listening mode captures all input
     if (this.listening) {
@@ -214,14 +300,18 @@ export class Settings extends ex.Scene<SettingsData> {
     } else if (this.section === "content") {
       if (this.activeTab === "Display") {
         this.handleDisplayContentInput(kb);
-      } else {
+      } else if (this.activeTab === "Keybinds") {
         this.handleKeybindContentInput(kb);
+      } else {
+        this.handleAIContentInput(kb);
       }
     } else {
       if (this.activeTab === "Display") {
         this.handleDisplayButtonInput(kb);
-      } else {
+      } else if (this.activeTab === "Keybinds") {
         this.handleKeybindButtonInput(kb);
+      } else {
+        this.handleAIButtonInput(kb);
       }
     }
   }
@@ -257,6 +347,9 @@ export class Settings extends ex.Scene<SettingsData> {
     const showKeybinds = this.activeTab === "Keybinds";
     for (const el of this.keybindElements) el.graphics.visible = showKeybinds;
 
+    const showAI = this.activeTab === "AI";
+    for (const el of this.aiElements) el.graphics.visible = showAI;
+
     if (showDisplay) this.updateFullscreenLabel();
 
     // Reset content selection when switching
@@ -265,6 +358,8 @@ export class Settings extends ex.Scene<SettingsData> {
     this.keybindContentRow = 0;
     this.keybindButtonIndex = 0;
     this.selectedSlot = 0;
+    this.aiContentRow = 0;
+    this.aiButtonIndex = 0;
 
     this.updateSelection();
   }
@@ -611,8 +706,10 @@ export class Settings extends ex.Scene<SettingsData> {
 
     if (this.activeTab === "Display") {
       this.updateDisplaySelection();
-    } else {
+    } else if (this.activeTab === "Keybinds") {
       this.updateKeybindSelection();
+    } else {
+      this.updateAISelection();
     }
   }
 
@@ -689,6 +786,449 @@ export class Settings extends ex.Scene<SettingsData> {
       label.font = selected ? FONT_BUTTON_SELECTED.clone() : FONT_BUTTON.clone();
       label.color = selected ? ex.Color.fromHex("#f0c040") : ex.Color.White;
       label.text = selected ? `> ${KEYBIND_BUTTONS[i]} <` : KEYBIND_BUTTONS[i];
+    }
+  }
+
+  // ── AI tab ────────────────────────────────────────────────────────
+
+  /**
+   * Ensure the AI tab and its 3rd tab label exist.
+   * Handles HMR where onInitialize already ran with old 2-tab code.
+   */
+  private ensureAITab(): void {
+    // Add the 3rd tab label if the tab bar only has 2 entries
+    if (this.tabLabels.length < TAB_NAMES.length) {
+      const spacing = 100;
+      const startX = this.centerX - ((TAB_NAMES.length - 1) * spacing) / 2;
+
+      // Reposition existing tabs for new spacing
+      for (let i = 0; i < this.tabLabels.length; i++) {
+        this.tabLabels[i].pos = ex.vec(startX + i * spacing, 65);
+      }
+
+      // Add missing tabs
+      for (let i = this.tabLabels.length; i < TAB_NAMES.length; i++) {
+        const label = new ex.Label({
+          text: TAB_NAMES[i],
+          pos: ex.vec(startX + i * spacing, 65),
+          font: FONT_TAB.clone(),
+        });
+        label.on("pointerdown", () => {
+          this.section = "tabs";
+          this.switchTab(i);
+          this.updateSelection();
+        });
+        this.tabLabels.push(label);
+        this.add(label);
+      }
+    }
+
+    // Build AI content if not already built
+    if (this.aiElements.length === 0) {
+      this.buildAIContent();
+      this.buildAIButtons();
+    }
+  }
+
+  private async loadAIConfig(): Promise<void> {
+    this.aiConfig = await loadLLMConfig();
+    this.refreshAIValues();
+  }
+
+  private buildAIContent(): void {
+    const labelX = this.centerX - 40;
+    const valueX = this.centerX + 10;
+    const startY = 120;
+    const rowSpacing = 36;
+
+    for (let i = 0; i < AI_FIELD_LABELS.length; i++) {
+      const y = startY + i * rowSpacing;
+
+      const label = new ex.Label({
+        text: AI_FIELD_LABELS[i],
+        pos: ex.vec(labelX, y),
+        font: FONT_LABEL,
+      });
+      this.add(label);
+      this.aiElements.push(label);
+      this.aiRowLabels.push(label);
+
+      const valueLabel = new ex.Label({
+        text: "",
+        pos: ex.vec(valueX, y),
+        font: FONT_VALUE.clone(),
+      });
+      valueLabel.on("pointerdown", () => {
+        this.section = "content";
+        this.aiContentRow = i;
+        if (this.isAICycleRow(i)) {
+          if (i === 0) this.cycleProvider(1);
+          else if (i === 4) this.cycleReasoning(1);
+          else if (i === 5) this.cycleSort(1);
+          else if (i === 7) this.cycleThinkingReasoning(1);
+          else if (i === 8) this.cycleThinkingSort(1);
+        } else {
+          this.startAITyping(i);
+        }
+        this.updateSelection();
+      });
+      this.add(valueLabel);
+      this.aiElements.push(valueLabel);
+      this.aiValueLabels.push(valueLabel);
+    }
+
+    // Status label for test results
+    this.aiStatusLabel = new ex.Label({
+      text: "",
+      pos: ex.vec(this.centerX, startY + AI_FIELD_LABELS.length * rowSpacing + 10),
+      font: FONT_STATUS.clone(),
+    });
+    this.add(this.aiStatusLabel);
+    this.aiElements.push(this.aiStatusLabel);
+  }
+
+  private buildAIButtons(): void {
+    const startY = 120 + AI_FIELD_LABELS.length * 36 + 40;
+    const buttonSpacing = 36;
+
+    for (let i = 0; i < AI_BUTTONS.length; i++) {
+      const label = new ex.Label({
+        text: AI_BUTTONS[i],
+        pos: ex.vec(this.centerX, startY + i * buttonSpacing),
+        font: FONT_BUTTON.clone(),
+      });
+      label.on("pointerdown", () => {
+        this.section = "buttons";
+        this.aiButtonIndex = i;
+        this.activateAIButton();
+      });
+      label.on("pointerenter", () => {
+        this.section = "buttons";
+        this.aiButtonIndex = i;
+        this.updateSelection();
+      });
+      this.add(label);
+      this.aiElements.push(label);
+      this.aiButtonLabels.push(label);
+    }
+  }
+
+  private refreshAIValues(): void {
+    if (this.aiValueLabels.length < AI_FIELD_LABELS.length) return;
+    this.aiValueLabels[0].text = `< ${PROVIDER_LABELS[this.aiConfig.provider]} >`;
+    this.aiValueLabels[1].text = this.aiConfig.apiKey
+      ? `${"*".repeat(Math.min(this.aiConfig.apiKey.length, 20))}`
+      : "(not set)";
+    this.aiValueLabels[2].text = this.aiConfig.model || "(not set)";
+    this.aiValueLabels[3].text = this.aiConfig.endpointUrl || "(not set)";
+    this.aiValueLabels[4].text = `< ${this.aiConfig.reasoningEffort ?? "low"} >`;
+    this.aiValueLabels[5].text = `< ${this.aiConfig.providerSort ?? "latency"} >`;
+    this.aiValueLabels[6].text = this.aiConfig.thinkingModel || "(not set)";
+    this.aiValueLabels[7].text = `< ${this.aiConfig.thinkingReasoningEffort ?? "high"} >`;
+    this.aiValueLabels[8].text = `< ${this.aiConfig.thinkingProviderSort ?? "latency"} >`;
+
+    // Rows 4-8 are OpenRouter-only, and only when AI tab is active
+    const showExtra = this.aiConfig.provider === "custom" && this.activeTab === "AI";
+    for (const idx of [4, 5, 6, 7, 8]) {
+      if (this.aiValueLabels[idx]) this.aiValueLabels[idx].graphics.visible = showExtra;
+      if (this.aiRowLabels[idx]) this.aiRowLabels[idx].graphics.visible = showExtra;
+    }
+  }
+
+  /** The last navigable content row (3 for non-OpenRouter, 8 for OpenRouter). */
+  private get aiMaxContentRow(): number {
+    return this.aiConfig.provider === "custom" ? AI_FIELD_LABELS.length - 1 : 3;
+  }
+
+  /** Whether a row is a cycle selector (vs text input). */
+  private isAICycleRow(row: number): boolean {
+    return row === 0 || row === 4 || row === 5 || row === 7 || row === 8;
+  }
+
+  private handleAIContentInput(kb: ex.Keyboard): void {
+    if (kb.wasPressed(ex.Keys.ArrowUp) || kb.wasPressed(ex.Keys.W)) {
+      if (this.aiContentRow > 0) {
+        this.aiContentRow--;
+      } else {
+        this.section = "tabs";
+      }
+      this.updateSelection();
+      return;
+    }
+    if (kb.wasPressed(ex.Keys.ArrowDown) || kb.wasPressed(ex.Keys.S)) {
+      if (this.aiContentRow < this.aiMaxContentRow) {
+        this.aiContentRow++;
+      } else {
+        this.section = "buttons";
+        this.aiButtonIndex = 0;
+      }
+      this.updateSelection();
+      return;
+    }
+
+    if (this.isAICycleRow(this.aiContentRow)) {
+      // Cycle selector rows
+      const left = kb.wasPressed(ex.Keys.ArrowLeft) || kb.wasPressed(ex.Keys.A);
+      const right =
+        kb.wasPressed(ex.Keys.ArrowRight) ||
+        kb.wasPressed(ex.Keys.D) ||
+        kb.wasPressed(ex.Keys.Enter) ||
+        kb.wasPressed(ex.Keys.Space);
+      const dir = left ? -1 : right ? 1 : 0;
+      if (dir !== 0) {
+        if (this.aiContentRow === 0) this.cycleProvider(dir);
+        else if (this.aiContentRow === 4) this.cycleReasoning(dir);
+        else if (this.aiContentRow === 5) this.cycleSort(dir);
+        else if (this.aiContentRow === 7) this.cycleThinkingReasoning(dir);
+        else if (this.aiContentRow === 8) this.cycleThinkingSort(dir);
+      }
+    } else {
+      // Text input fields — enter to type
+      if (kb.wasPressed(ex.Keys.Enter) || kb.wasPressed(ex.Keys.Space)) {
+        this.startAITyping(this.aiContentRow);
+      }
+    }
+  }
+
+  private handleAIButtonInput(kb: ex.Keyboard): void {
+    if (kb.wasPressed(ex.Keys.ArrowUp) || kb.wasPressed(ex.Keys.W)) {
+      if (this.aiButtonIndex > 0) {
+        this.aiButtonIndex--;
+      } else {
+        this.section = "content";
+        this.aiContentRow = this.aiMaxContentRow;
+      }
+      this.updateSelection();
+      return;
+    }
+    if (kb.wasPressed(ex.Keys.ArrowDown) || kb.wasPressed(ex.Keys.S)) {
+      if (this.aiButtonIndex < AI_BUTTONS.length - 1) {
+        this.aiButtonIndex++;
+        this.updateSelection();
+      }
+      return;
+    }
+    if (kb.wasPressed(ex.Keys.Enter) || kb.wasPressed(ex.Keys.Space)) {
+      this.activateAIButton();
+    }
+  }
+
+  private cycleProvider(dir: number): void {
+    const idx = PROVIDER_ORDER.indexOf(this.aiConfig.provider);
+    const next = PROVIDER_ORDER[(idx + dir + PROVIDER_ORDER.length) % PROVIDER_ORDER.length];
+    this.aiConfig.provider = next;
+    const defaults = getProviderDefaults(next);
+    this.aiConfig.endpointUrl = defaults.endpointUrl;
+    this.aiConfig.model = defaults.model;
+    this.refreshAIValues();
+    this.updateSelection();
+    void saveLLMConfig(this.aiConfig);
+  }
+
+  private cycleReasoning(dir: number): void {
+    const idx = REASONING_EFFORT_ORDER.indexOf(this.aiConfig.reasoningEffort ?? "low");
+    const next =
+      REASONING_EFFORT_ORDER[
+        (idx + dir + REASONING_EFFORT_ORDER.length) % REASONING_EFFORT_ORDER.length
+      ];
+    this.aiConfig.reasoningEffort = next;
+    this.refreshAIValues();
+    this.updateSelection();
+    void saveLLMConfig(this.aiConfig);
+  }
+
+  private cycleSort(dir: number): void {
+    const idx = PROVIDER_SORT_ORDER.indexOf(this.aiConfig.providerSort ?? "latency");
+    const next =
+      PROVIDER_SORT_ORDER[(idx + dir + PROVIDER_SORT_ORDER.length) % PROVIDER_SORT_ORDER.length];
+    this.aiConfig.providerSort = next;
+    this.refreshAIValues();
+    this.updateSelection();
+    void saveLLMConfig(this.aiConfig);
+  }
+
+  private cycleThinkingReasoning(dir: number): void {
+    const idx = REASONING_EFFORT_ORDER.indexOf(this.aiConfig.thinkingReasoningEffort ?? "high");
+    const next =
+      REASONING_EFFORT_ORDER[
+        (idx + dir + REASONING_EFFORT_ORDER.length) % REASONING_EFFORT_ORDER.length
+      ];
+    this.aiConfig.thinkingReasoningEffort = next;
+    this.refreshAIValues();
+    this.updateSelection();
+    void saveLLMConfig(this.aiConfig);
+  }
+
+  private cycleThinkingSort(dir: number): void {
+    const idx = PROVIDER_SORT_ORDER.indexOf(this.aiConfig.thinkingProviderSort ?? "latency");
+    const next =
+      PROVIDER_SORT_ORDER[(idx + dir + PROVIDER_SORT_ORDER.length) % PROVIDER_SORT_ORDER.length];
+    this.aiConfig.thinkingProviderSort = next;
+    this.refreshAIValues();
+    this.updateSelection();
+    void saveLLMConfig(this.aiConfig);
+  }
+
+  private startAITyping(row: number): void {
+    this.aiTyping = true;
+    this.aiTypingField = row;
+    // Pre-fill buffer with current value
+    if (row === 1) this.aiTypingBuffer = this.aiConfig.apiKey;
+    else if (row === 2) this.aiTypingBuffer = this.aiConfig.model;
+    else if (row === 3) this.aiTypingBuffer = this.aiConfig.endpointUrl;
+    else if (row === 6) this.aiTypingBuffer = this.aiConfig.thinkingModel;
+    this.updateAITypingDisplay();
+
+    // Use native keydown + paste for all text input (Excalibur keys are enums, not chars)
+    this.removeNativeListeners();
+    this.keydownHandler = (e: KeyboardEvent) => {
+      // Let Ctrl/Cmd combos through so paste events fire naturally
+      if (e.ctrlKey || e.metaKey) return;
+
+      e.preventDefault();
+      e.stopPropagation();
+
+      if (e.key === "Escape") {
+        this.stopAITyping();
+        this.refreshAIValues();
+        this.updateSelection();
+        return;
+      }
+
+      if (e.key === "Enter") {
+        if (this.aiTypingField === 1) this.aiConfig.apiKey = this.aiTypingBuffer;
+        else if (this.aiTypingField === 2) this.aiConfig.model = this.aiTypingBuffer;
+        else if (this.aiTypingField === 3) this.aiConfig.endpointUrl = this.aiTypingBuffer;
+        else if (this.aiTypingField === 6) this.aiConfig.thinkingModel = this.aiTypingBuffer;
+        this.stopAITyping();
+        this.refreshAIValues();
+        this.updateSelection();
+        void saveLLMConfig(this.aiConfig);
+        return;
+      }
+
+      if (e.key === "Backspace") {
+        this.aiTypingBuffer = this.aiTypingBuffer.slice(0, -1);
+        this.updateAITypingDisplay();
+        return;
+      }
+
+      // Ignore modifier-only keys and control combos (paste handled by paste listener)
+      if (e.ctrlKey || e.metaKey || e.altKey) return;
+      if (e.key.length !== 1) return; // Skip non-printable keys (Shift, Tab, etc.)
+
+      this.aiTypingBuffer += e.key;
+      this.updateAITypingDisplay();
+    };
+
+    this.pasteHandler = (e: ClipboardEvent) => {
+      e.preventDefault();
+      const text = e.clipboardData?.getData("text");
+      if (text) {
+        this.aiTypingBuffer += text.trim();
+        this.updateAITypingDisplay();
+      }
+    };
+
+    document.addEventListener("keydown", this.keydownHandler, true);
+    document.addEventListener("paste", this.pasteHandler);
+  }
+
+  private stopAITyping(): void {
+    this.aiTyping = false;
+    this.aiTypingField = -1;
+    this.removeNativeListeners();
+  }
+
+  private keydownHandler: ((e: KeyboardEvent) => void) | null = null;
+
+  private removeNativeListeners(): void {
+    if (this.keydownHandler) {
+      document.removeEventListener("keydown", this.keydownHandler, true);
+      this.keydownHandler = null;
+    }
+    if (this.pasteHandler) {
+      document.removeEventListener("paste", this.pasteHandler);
+      this.pasteHandler = null;
+    }
+  }
+
+  private updateAITypingDisplay(): void {
+    const validTextRows = [1, 2, 3, 6];
+    if (!validTextRows.includes(this.aiTypingField)) return;
+    const label = this.aiValueLabels[this.aiTypingField];
+    if (this.aiTypingField === 1) {
+      // API key — show masked
+      label.text =
+        this.aiTypingBuffer.length > 0 ? "*".repeat(this.aiTypingBuffer.length) + "_" : "_";
+    } else {
+      label.text = this.aiTypingBuffer + "_";
+    }
+    label.font = FONT_KEY_LISTENING.clone();
+    label.font.textAlign = ex.TextAlign.Left;
+    label.color = ex.Color.fromHex("#ff6060");
+  }
+
+  private activateAIButton(): void {
+    if (this.aiButtonIndex === 0) {
+      // Test Connection
+      this.testAIConnection();
+    } else if (this.aiButtonIndex === 1) {
+      // Clear
+      this.aiConfig.apiKey = "";
+      this.aiConfig.model = "";
+      this.aiConfig.endpointUrl = "";
+      this.refreshAIValues();
+      this.updateSelection();
+      void saveLLMConfig(this.aiConfig);
+      this.aiStatusLabel.text = "Cleared";
+      this.aiStatusLabel.color = ex.Color.fromHex("#cccccc");
+    } else if (this.aiButtonIndex === 2) {
+      // Back
+      void this.engine.goToScene(this.returnTo);
+    }
+  }
+
+  private testAIConnection(): void {
+    this.aiStatusLabel.text = "Testing...";
+    this.aiStatusLabel.color = ex.Color.fromHex("#cccccc");
+
+    callLLM(this.aiConfig, [
+      { role: "system", content: "Respond with exactly: OK" },
+      { role: "user", content: "Test" },
+    ])
+      .then((resp) => {
+        if (resp.error) {
+          this.aiStatusLabel.text = `Error: ${resp.error.slice(0, 50)}`;
+          this.aiStatusLabel.color = ex.Color.fromHex("#ff6060");
+        } else {
+          this.aiStatusLabel.text = `Connected! Response: "${resp.text.slice(0, 30)}"`;
+          this.aiStatusLabel.color = ex.Color.fromHex("#88ff88");
+        }
+      })
+      .catch(() => {
+        this.aiStatusLabel.text = "Connection failed";
+        this.aiStatusLabel.color = ex.Color.fromHex("#ff6060");
+      });
+  }
+
+  private updateAISelection(): void {
+    // Value highlights
+    for (let i = 0; i < this.aiValueLabels.length; i++) {
+      const selected = this.section === "content" && this.aiContentRow === i;
+      const label = this.aiValueLabels[i];
+      if (this.aiTyping && this.aiTypingField === i) continue; // don't override typing style
+      label.font = selected ? FONT_VALUE_SELECTED.clone() : FONT_VALUE.clone();
+      label.color = selected ? ex.Color.fromHex("#f0c040") : ex.Color.White;
+    }
+
+    // Buttons
+    for (let i = 0; i < this.aiButtonLabels.length; i++) {
+      const selected = this.section === "buttons" && this.aiButtonIndex === i;
+      const label = this.aiButtonLabels[i];
+      label.font = selected ? FONT_BUTTON_SELECTED.clone() : FONT_BUTTON.clone();
+      label.color = selected ? ex.Color.fromHex("#f0c040") : ex.Color.White;
+      label.text = selected ? `> ${AI_BUTTONS[i]} <` : AI_BUTTONS[i];
     }
   }
 }

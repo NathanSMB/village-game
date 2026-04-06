@@ -4,6 +4,7 @@ import { ITEMS } from "../data/items.ts";
 import type { Item } from "../types/item.ts";
 import type { BigRockSaveState } from "../systems/save-manager.ts";
 import { DamageFlash } from "./damage-flash.ts";
+import { HealthBar } from "./health-bar.ts";
 
 const TILE_SIZE = 32;
 const DROP_EVERY = 20; // damage needed for each drop
@@ -34,6 +35,18 @@ export class BigRock extends ex.Actor {
     this.shakeOriginX = px;
     this.graphics.use(getRockBigAnimation());
     this.flash = new DamageFlash(this);
+
+    // Health bar — shows damage progress toward next drop, resets on drop
+    const healthBar = new HealthBar({
+      barWidth: 20,
+      offsetY: -18,
+      getHealth: () => ({
+        current: DROP_EVERY - this.damageAccum,
+        max: DROP_EVERY,
+      }),
+      shouldShow: () => this.damageAccum > 0,
+    });
+    this.addChild(healthBar);
   }
 
   /**

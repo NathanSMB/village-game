@@ -179,7 +179,8 @@ const BUTTON_LABELS = ["Randomize", "Confirm", "Back"];
 
 export class CharacterCreator extends ex.Scene {
   private appearance: CharacterAppearance = defaultAppearance();
-  private selectedRow = 0;
+  private playerName = "";
+  private selectedRow = 0; // row 0 = name, rows 1..N = options, rest = buttons
   private previewActor!: ex.Actor;
   private optionRows: OptionRowConfig[] = [];
   private optionRowUIs: OptionRowUI[] = [];
@@ -187,8 +188,14 @@ export class CharacterCreator extends ex.Scene {
   private optionsX = 0;
   private centerX = 0;
 
+  // Name input
+  private nameLabel!: ex.Label;
+  private nameValueLabel!: ex.Label;
+  private nameFocused = false;
+  private nameKeydownHandler: ((e: KeyboardEvent) => void) | null = null;
+
   private get totalRows(): number {
-    return this.optionRows.length + BUTTON_LABELS.length;
+    return 1 + this.optionRows.length + BUTTON_LABELS.length; // +1 for name row
   }
 
   override onInitialize(engine: ex.Engine): void {
@@ -212,9 +219,105 @@ export class CharacterCreator extends ex.Scene {
     this.previewActor.graphics.use(getCharacterPreviewSprite(this.appearance, PREVIEW_SCALE));
     this.add(this.previewActor);
 
+    this.buildNameRow();
     this.buildOptionRows();
     this.buildButtons();
     this.updateSelection();
+  }
+
+  private buildNameRow(): void {
+    const y = 80;
+
+    this.nameLabel = new ex.Label({
+      text: "Name:",
+      pos: ex.vec(this.optionsX - 10, y),
+      font: FONT_LABEL,
+    });
+    this.add(this.nameLabel);
+
+    this.nameValueLabel = new ex.Label({
+      text: "(click to type)",
+      pos: ex.vec(this.optionsX + 75, y),
+      font: FONT_VALUE.clone(),
+    });
+    this.nameValueLabel.on("pointerdown", () => {
+      this.selectedRow = 0;
+      this.startNameInput();
+    });
+    this.add(this.nameValueLabel);
+  }
+
+  private refreshNameDisplay(): void {
+    if (this.nameFocused) {
+      this.nameValueLabel.text = (this.playerName || "") + "_";
+      this.nameValueLabel.font = FONT_VALUE_SELECTED.clone();
+      this.nameValueLabel.color = ex.Color.fromHex("#ff8844");
+    } else if (this.playerName) {
+      this.nameValueLabel.text = this.playerName;
+    } else {
+      this.nameValueLabel.text = "(press Enter to type)";
+    }
+  }
+
+  private startNameInput(): void {
+    this.nameFocused = true;
+    this.refreshNameDisplay();
+    this.removeNameListener();
+    this.nameKeydownHandler = (e: KeyboardEvent) => {
+      if (e.ctrlKey || e.metaKey) return; // allow paste
+      e.preventDefault();
+      e.stopPropagation();
+
+      if (e.key === "Escape") {
+        this.stopNameInput();
+        return;
+      }
+      if (e.key === "Enter") {
+        this.stopNameInput();
+        return;
+      }
+      if (e.key === "Backspace") {
+        this.playerName = this.playerName.slice(0, -1);
+        this.refreshNameDisplay();
+        return;
+      }
+      if (e.key.length === 1 && this.playerName.length < 16) {
+        this.playerName += e.key;
+        this.refreshNameDisplay();
+      }
+    };
+    document.addEventListener("keydown", this.nameKeydownHandler, true);
+
+    // Also handle paste
+    this.namePasteHandler = (e: ClipboardEvent) => {
+      e.preventDefault();
+      const text = e.clipboardData?.getData("text")?.trim();
+      if (text) {
+        this.playerName = (this.playerName + text).slice(0, 16);
+        this.refreshNameDisplay();
+      }
+    };
+    document.addEventListener("paste", this.namePasteHandler);
+  }
+
+  private namePasteHandler: ((e: ClipboardEvent) => void) | null = null;
+
+  private stopNameInput(): void {
+    this.nameFocused = false;
+    this.removeNameListener();
+    this.refreshNameDisplay();
+    this.updateSelection();
+  }
+
+  private removeNameListener(): void {
+    if (this.nameKeydownHandler) {
+      document.removeEventListener("keydown", this.nameKeydownHandler, true);
+      this.nameKeydownHandler = null;
+    }
+    if (this.namePasteHandler) {
+      document.removeEventListener("paste", this.namePasteHandler);
+      this.namePasteHandler = null;
+    }
   }
 
   override onActivate(): void {
@@ -222,13 +325,20 @@ export class CharacterCreator extends ex.Scene {
     this.camera.zoom = vh / UI_REF_HEIGHT;
     this.camera.pos = ex.vec(this.centerX, UI_REF_HEIGHT / 2);
     this.appearance = defaultAppearance();
+    this.playerName = "";
     this.selectedRow = 0;
+    this.nameFocused = false;
+    this.removeNameListener();
+    this.refreshNameDisplay();
     this.rebuildOptionRows();
     this.updatePreview();
     this.updateSelection();
   }
 
   override onPreUpdate(engine: ex.Engine): void {
+    // Name typing captures all input via native keydown listener
+    if (this.nameFocused) return;
+
     const kb = engine.input.keyboard;
 
     if (wasActionPressed(kb, "moveUp")) {
@@ -241,20 +351,24 @@ export class CharacterCreator extends ex.Scene {
       this.updateSelection();
     }
 
+    const isOptionRow = this.selectedRow >= 1 && this.selectedRow <= this.optionRows.length;
+
     if (wasActionPressed(kb, "moveLeft")) {
-      if (this.selectedRow < this.optionRows.length) {
+      if (isOptionRow) {
         this.cycleOption(-1);
       }
     }
 
     if (wasActionPressed(kb, "moveRight")) {
-      if (this.selectedRow < this.optionRows.length) {
+      if (isOptionRow) {
         this.cycleOption(1);
       }
     }
 
     if (wasActionPressed(kb, "confirm")) {
-      if (this.selectedRow >= this.optionRows.length) {
+      if (this.selectedRow === 0) {
+        this.startNameInput();
+      } else if (this.selectedRow > this.optionRows.length) {
         this.activateButton(engine);
       }
     }
@@ -266,7 +380,7 @@ export class CharacterCreator extends ex.Scene {
 
   private buildOptionRows(): void {
     this.optionRows = getOptionRows(this.appearance);
-    const rowStartY = 100;
+    const rowStartY = 115; // offset for name row above
     const rowSpacing = 34;
 
     for (let i = 0; i < this.optionRows.length; i++) {
@@ -286,7 +400,7 @@ export class CharacterCreator extends ex.Scene {
         font: FONT_ARROW.clone(),
       });
       leftArrow.on("pointerdown", () => {
-        this.selectedRow = i;
+        this.selectedRow = i + 1; // +1 for name row
         this.cycleOption(-1);
       });
       this.add(leftArrow);
@@ -304,7 +418,7 @@ export class CharacterCreator extends ex.Scene {
         font: FONT_ARROW.clone(),
       });
       rightArrow.on("pointerdown", () => {
-        this.selectedRow = i;
+        this.selectedRow = i + 1; // +1 for name row
         this.cycleOption(1);
       });
       this.add(rightArrow);
@@ -344,12 +458,12 @@ export class CharacterCreator extends ex.Scene {
       });
 
       label.on("pointerdown", () => {
-        this.selectedRow = this.optionRows.length + i;
+        this.selectedRow = 1 + this.optionRows.length + i;
         this.activateButton(this.engine);
       });
 
       label.on("pointerenter", () => {
-        this.selectedRow = this.optionRows.length + i;
+        this.selectedRow = 1 + this.optionRows.length + i;
         this.updateSelection();
       });
 
@@ -359,7 +473,7 @@ export class CharacterCreator extends ex.Scene {
   }
 
   private getButtonStartY(): number {
-    return 100 + this.optionRows.length * 34 + 40;
+    return 115 + this.optionRows.length * 34 + 40;
   }
 
   private repositionButtons(): void {
@@ -371,13 +485,15 @@ export class CharacterCreator extends ex.Scene {
   }
 
   private cycleOption(direction: number): void {
-    const config = this.optionRows[this.selectedRow];
+    const optIdx = this.selectedRow - 1; // offset for name row
+    if (optIdx < 0 || optIdx >= this.optionRows.length) return;
+    const config = this.optionRows[optIdx];
     const names = config.getNames();
     const current = config.getValue(this.appearance);
     const next = (current + direction + names.length) % names.length;
 
     config.setValue(this.appearance, next);
-    this.optionRowUIs[this.selectedRow].valueLabel.text = this.getOptionName(this.selectedRow);
+    this.optionRowUIs[optIdx].valueLabel.text = this.getOptionName(optIdx);
     this.updatePreview();
 
     // If sex changed, rebuild the rows (facial hair appears/disappears)
@@ -407,9 +523,18 @@ export class CharacterCreator extends ex.Scene {
   }
 
   private updateSelection(): void {
+    // Name row (index 0)
+    const nameSelected = this.selectedRow === 0;
+    if (!this.nameFocused) {
+      this.nameValueLabel.font = nameSelected ? FONT_VALUE_SELECTED.clone() : FONT_VALUE.clone();
+      this.nameValueLabel.color = nameSelected ? ex.Color.fromHex("#f0c040") : ex.Color.White;
+      this.refreshNameDisplay();
+    }
+
+    // Option rows (index 1..optionRows.length)
     for (let i = 0; i < this.optionRowUIs.length; i++) {
       const row = this.optionRowUIs[i];
-      const selected = i === this.selectedRow;
+      const selected = i + 1 === this.selectedRow;
       row.leftArrow.font = selected ? FONT_ARROW_SELECTED.clone() : FONT_ARROW.clone();
       row.leftArrow.color = selected ? ex.Color.fromHex("#f0c040") : ex.Color.fromHex("#666666");
       row.valueLabel.font = selected ? FONT_VALUE_SELECTED.clone() : FONT_VALUE.clone();
@@ -418,8 +543,9 @@ export class CharacterCreator extends ex.Scene {
       row.rightArrow.color = selected ? ex.Color.fromHex("#f0c040") : ex.Color.fromHex("#666666");
     }
 
+    // Button rows (index optionRows.length+1..)
     for (let i = 0; i < this.buttonLabels.length; i++) {
-      const selected = this.selectedRow === this.optionRows.length + i;
+      const selected = this.selectedRow === 1 + this.optionRows.length + i;
       const label = this.buttonLabels[i];
       label.font = selected ? FONT_BUTTON_SELECTED.clone() : FONT_BUTTON.clone();
       label.color = selected ? ex.Color.fromHex("#f0c040") : ex.Color.White;
@@ -428,12 +554,17 @@ export class CharacterCreator extends ex.Scene {
   }
 
   private activateButton(engine: ex.Engine): void {
-    const buttonIndex = this.selectedRow - this.optionRows.length;
+    const buttonIndex = this.selectedRow - 1 - this.optionRows.length; // -1 for name row
     if (buttonIndex === 0) {
       this.randomize();
     } else if (buttonIndex === 1) {
+      const name = this.playerName.trim() || "Villager";
       void engine.goToScene("game-world", {
-        sceneActivationData: { type: "new" as const, appearance: this.appearance },
+        sceneActivationData: {
+          type: "new" as const,
+          appearance: this.appearance,
+          playerName: name,
+        },
       });
     } else if (buttonIndex === 2) {
       void engine.goToScene("start");

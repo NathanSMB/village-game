@@ -277,6 +277,13 @@ export class Settings extends ex.Scene<SettingsData> {
     this.updateSelection();
   }
 
+  override onDeactivate(): void {
+    // Clean up capture-phase DOM listeners so they don't steal keyboard
+    // events from Excalibur when another scene is active.
+    this.stopAITyping();
+    this.removeNativeListeners();
+  }
+
   override onPreUpdate(engine: ex.Engine): void {
     const kb = engine.input.keyboard;
 

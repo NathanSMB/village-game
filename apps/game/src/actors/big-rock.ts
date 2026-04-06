@@ -15,7 +15,8 @@ export class BigRock extends ex.Actor {
   readonly tileY: number;
   readonly entityCategory = "mineable";
 
-  private damageAccum = 0;
+  damageAccum = 0;
+  readonly dropThreshold = DROP_EVERY;
   private shakeTimer = 0;
   private shakeOriginX: number;
   private flash: DamageFlash;

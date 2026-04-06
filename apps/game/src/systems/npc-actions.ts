@@ -121,6 +121,22 @@ function walkToTargetOrAct(
   const adj = directionTo(npc.tileX, npc.tileY, tx, ty);
   if (adj) return adj;
 
+  // If target is too far, walk toward it in a shorter hop first
+  const dist = Math.abs(tx - npc.tileX) + Math.abs(ty - npc.tileY);
+  if (dist > MAX_MOVE_DISTANCE) {
+    const ratio = MAX_MOVE_DISTANCE / dist;
+    const midX = Math.round(npc.tileX + (tx - npc.tileX) * ratio);
+    const midY = Math.round(npc.tileY + (ty - npc.tileY) * ratio);
+    const dirs = world.findPathDirections(npc.tileX, npc.tileY, midX, midY);
+    if (dirs && dirs.length > 0) {
+      npc.pendingPath = dirs;
+      npc.pendingAction = queuedAction; // re-attempt original action after arriving
+      npc.moveToTile(npc.pendingPath.shift()!);
+      return "queued";
+    }
+    return null;
+  }
+
   // Pathfind to a tile adjacent to the target
   for (const dir of CARDINAL_DIRS) {
     const ax = tx + DIR_DX[dir];
@@ -216,6 +232,7 @@ export function executeNPCAction(
       "wake_up",
       "plan",
       "think",
+      "complete_step",
       "complete_todo",
       "consume",
       "chat",
@@ -234,8 +251,16 @@ export function executeNPCAction(
       // Handled by GameWorld — routed to thinking model
       return { success: true, reason: "Planning..." };
 
+    case "modify_plan":
+      // Handled by GameWorld — routed to thinking model
+      return { success: true, reason: "Modifying plan..." };
+
+    case "complete_step":
+      return execCompleteStep(npc, action.stepIndex);
+
     case "complete_todo":
-      return execCompleteTodo(npc, action.todoIndex);
+      // Backwards compat alias — route to complete_step
+      return execCompleteStep(npc, action.todoIndex);
 
     case "think":
       // Handled specially by GameWorld — not executed here
@@ -332,29 +357,67 @@ export function executeNPCAction(
 
 // ── Individual action executors ──────────────────────────────────────
 
-function execCompleteTodo(npc: NPC, todoIndex: number): ActionResult {
-  if (todoIndex < 0 || todoIndex >= npc.todoList.length) {
-    return { success: false, reason: "Invalid todo index" };
+function execCompleteStep(npc: NPC, stepIndex: number): ActionResult {
+  if (!npc.currentGoal) {
+    return { success: false, reason: "No current goal" };
   }
-  const item = npc.todoList[todoIndex];
-  if (item.done) {
+  const { steps } = npc.currentGoal;
+  if (stepIndex < 0 || stepIndex >= steps.length) {
+    return { success: false, reason: "Invalid step index" };
+  }
+  const step = steps[stepIndex];
+  if (step.done) {
     return { success: false, reason: "Already completed" };
   }
-  item.done = true;
+  step.done = true;
 
-  // Check if all todos are done — if so, clear the list so the NPC will plan again
-  const allDone = npc.todoList.every((t) => t.done);
+  // Check if all steps are done — flag for auto-replan
+  const allDone = steps.every((s) => s.done);
   if (allDone) {
-    npc.todoList = [];
+    npc.needsReplan = true;
   }
 
-  return { success: true, reason: `Done: ${item.task}${allDone ? " (plan complete!)" : ""}` };
+  return { success: true, reason: `Done: ${step.task}${allDone ? " (all steps complete!)" : ""}` };
 }
 
+/** Max tiles to pathfind in one move_to. Longer paths are clamped to a midpoint. */
+const MAX_MOVE_DISTANCE = 15;
+
 function execMoveTo(npc: NPC, x: number, y: number, world: GameWorldNPCInterface): ActionResult {
-  const dirs = world.findPathDirections(npc.tileX, npc.tileY, x, y);
+  let targetX = x;
+  let targetY = y;
+
+  // If the destination is too far, walk toward it in a shorter hop
+  const dist = Math.abs(x - npc.tileX) + Math.abs(y - npc.tileY);
+  if (dist > MAX_MOVE_DISTANCE) {
+    const ratio = MAX_MOVE_DISTANCE / dist;
+    targetX = Math.round(npc.tileX + (x - npc.tileX) * ratio);
+    targetY = Math.round(npc.tileY + (y - npc.tileY) * ratio);
+  }
+
+  let dirs = world.findPathDirections(npc.tileX, npc.tileY, targetX, targetY);
+
+  // If target tile is blocked (e.g. water), try adjacent tiles instead
   if (!dirs || dirs.length === 0) {
-    return { success: false, reason: "No path found" };
+    let bestDirs: typeof dirs = null;
+    let bestDist = Infinity;
+    for (const dir of CARDINAL_DIRS) {
+      const ax = targetX + DIR_DX[dir];
+      const ay = targetY + DIR_DY[dir];
+      const adjDirs = world.findPathDirections(npc.tileX, npc.tileY, ax, ay);
+      if (adjDirs && adjDirs.length > 0 && adjDirs.length < bestDist) {
+        bestDirs = adjDirs;
+        bestDist = adjDirs.length;
+      }
+    }
+    dirs = bestDirs;
+  }
+
+  if (!dirs || dirs.length === 0) {
+    return {
+      success: false,
+      reason: `No path to (${targetX},${targetY}) — try a different direction or closer target`,
+    };
   }
   // Store remaining path on the NPC, pop first step now
   npc.pendingPath = dirs.slice(1);
@@ -363,7 +426,13 @@ function execMoveTo(npc: NPC, x: number, y: number, world: GameWorldNPCInterface
     npc.pendingPath = [];
     return { success: false, reason: "First step blocked" };
   }
-  return { success: true };
+  const isPartial = targetX !== x || targetY !== y;
+  return {
+    success: true,
+    reason: isPartial
+      ? `Walking partway to (${targetX},${targetY}), destination (${x},${y}) is too far — will continue next turn`
+      : `Moving to (${x},${y})`,
+  };
 }
 
 // ── Auto-walk interaction executors ──────────────────────────────────

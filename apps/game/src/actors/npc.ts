@@ -22,7 +22,7 @@ import type {
   NPCMemoryState,
   NPCSaveState,
   NPCActionState,
-  NPCTodoItem,
+  NPCGoal,
   ActionLogEntry,
 } from "../types/npc.ts";
 import { compositeCharacter } from "../systems/character-compositor.ts";
@@ -105,7 +105,9 @@ export class NPC extends ex.Actor {
   memory: NPCMemoryState;
 
   // Goal system — the NPC's current objective, drives decision-making
-  todoList: NPCTodoItem[] = [];
+  currentGoal: NPCGoal | null = null;
+  /** When true, triggers auto-replan on next decision cycle. */
+  needsReplan = false;
   /** Skip auto-check for N action cycles after a fresh plan to avoid instant re-planning. */
   todoGracePeriod = 0;
 
@@ -134,12 +136,13 @@ export class NPC extends ex.Actor {
   }
 
   /**
-   * Auto-check todo completion conditions against current state.
-   * Marks items as done if their doneWhen condition is satisfied.
+   * Auto-check step completion conditions against current state.
+   * Marks steps as done if their doneWhen condition is satisfied.
+   * Sets needsReplan when all steps are complete.
    * Called before each LLM decision to prevent redundant actions.
    */
-  autoCheckTodos(): void {
-    if (this.todoList.length === 0) return;
+  autoCheckSteps(): void {
+    if (!this.currentGoal || this.currentGoal.steps.length === 0) return;
 
     // Grace period: skip auto-check for a few cycles after a fresh plan
     // so already-met conditions don't instantly clear the new plan
@@ -154,16 +157,16 @@ export class NPC extends ex.Actor {
       .map((i) => i.id);
     const allItems = [...bagItemNames, ...equippedIds];
 
-    for (const todo of this.todoList) {
-      if (todo.done) continue;
-      const cond = todo.doneWhen.toLowerCase();
+    for (const step of this.currentGoal.steps) {
+      if (step.done) continue;
+      const cond = step.doneWhen.toLowerCase();
 
       // Check "have X in bag" or "X is in bag"
       const bagMatch = cond.match(/have (?:at least \d+ )?(\w+) in bag|(\w+) is in bag/);
       if (bagMatch) {
         const itemName = (bagMatch[1] ?? bagMatch[2]).toLowerCase();
         if (allItems.some((id) => id.toLowerCase().includes(itemName))) {
-          todo.done = true;
+          step.done = true;
           continue;
         }
       }
@@ -173,7 +176,7 @@ export class NPC extends ex.Actor {
       if (bagOrEquipMatch) {
         const itemName = bagOrEquipMatch[1].toLowerCase();
         if (allItems.some((id) => id.toLowerCase().includes(itemName))) {
-          todo.done = true;
+          step.done = true;
           continue;
         }
       }
@@ -183,7 +186,7 @@ export class NPC extends ex.Actor {
       if (equipOnlyMatch && !cond.includes("in bag")) {
         const itemName = equipOnlyMatch[1].toLowerCase();
         if (equippedIds.some((id) => id.toLowerCase().includes(itemName))) {
-          todo.done = true;
+          step.done = true;
           continue;
         }
       }
@@ -194,7 +197,7 @@ export class NPC extends ex.Actor {
         const vital = vitalMatch[1] as keyof typeof this.vitals;
         const threshold = Number(vitalMatch[2]);
         if (vital in this.vitals && this.vitals[vital] > threshold) {
-          todo.done = true;
+          step.done = true;
           continue;
         }
       }
@@ -206,15 +209,30 @@ export class NPC extends ex.Actor {
         cond.includes("have a bed")
       ) {
         if (this.claimedBed) {
-          todo.done = true;
+          step.done = true;
           continue;
         }
       }
     }
 
-    // If all done, clear the list so the NPC will plan again
-    if (this.todoList.length > 0 && this.todoList.every((t) => t.done)) {
-      this.todoList = [];
+    // Re-check done vital steps — vitals are transient and can drop again.
+    // Un-mark them so the NPC refocuses on survival.
+    for (const step of this.currentGoal.steps) {
+      if (!step.done) continue;
+      const cond = step.doneWhen.toLowerCase();
+      const vitalMatch = cond.match(/(thirst|hunger|health|energy)\s*(?:is\s*)?above\s*(\d+)/);
+      if (vitalMatch) {
+        const vital = vitalMatch[1] as keyof typeof this.vitals;
+        const threshold = Number(vitalMatch[2]);
+        if (vital in this.vitals && this.vitals[vital] <= threshold) {
+          step.done = false;
+        }
+      }
+    }
+
+    // If all steps done, flag for auto-replan
+    if (this.currentGoal.steps.every((s) => s.done)) {
+      this.needsReplan = true;
     }
   }
 
@@ -235,9 +253,9 @@ export class NPC extends ex.Actor {
 
   // Action log — rolling log of actions + results sent to LLM for context
   actionLog: ActionLogEntry[] = [];
-  private static readonly MAX_ACTION_LOG = 30;
+  private static readonly MAX_ACTION_LOG = 15;
 
-  /** Add an action log entry (keeps newest 30, FIFO). */
+  /** Add an action log entry (keeps newest 15, FIFO). */
   pushActionLog(tick: number, action: string, result: string, changes?: string): void {
     this.actionLog.push({ tick, action, result, changes });
     if (this.actionLog.length > NPC.MAX_ACTION_LOG) {
@@ -254,30 +272,25 @@ export class NPC extends ex.Actor {
   // Brain coordination
   private waitTimer = 0;
   pendingPath: Direction[] = []; // for move_to multi-step
+  /** Auto-repeat action (mining/chopping/attacking). Re-executed each tick without LLM. */
+  autoRepeatAction: import("../types/npc.ts").NPCAction | null = null;
   /** Action to execute after pendingPath completes (auto-walk-then-do pattern). */
   pendingAction: import("../types/npc.ts").NPCAction | null = null;
 
   /** Which emergency types have already triggered a replan (to avoid re-triggering every tick). */
   emergencyReplanned = new Set<string>();
 
-  // Stuck detection — consecutive failures of the same action trigger replan
-  private lastFailedAction = "";
+  // Stuck detection — consecutive failures (any action) trigger think
   private consecutiveFailures = 0;
 
-  /** Track action failure. Returns true if stuck (3+ consecutive same failures). */
-  trackFailure(actionJson: string): boolean {
-    if (actionJson === this.lastFailedAction) {
-      this.consecutiveFailures++;
-    } else {
-      this.lastFailedAction = actionJson;
-      this.consecutiveFailures = 1;
-    }
+  /** Track action failure. Returns true if stuck (3+ consecutive failures). */
+  trackFailure(_actionJson: string): boolean {
+    this.consecutiveFailures++;
     return this.consecutiveFailures >= 3;
   }
 
   /** Reset stuck detection on success. */
   trackSuccess(): void {
-    this.lastFailedAction = "";
     this.consecutiveFailures = 0;
   }
 
@@ -370,7 +383,26 @@ export class NPC extends ex.Actor {
 
     if (saved?.facing) this.facing = saved.facing;
     if (saved?.sleeping) this.sleeping = saved.sleeping;
-    if (saved?.todoList) this.todoList = saved.todoList.map((t) => ({ ...t }));
+    // Goal system: load currentGoal or migrate from old todoList
+    if (saved?.currentGoal) {
+      this.currentGoal = {
+        goal: saved.currentGoal.goal,
+        reason: saved.currentGoal.reason,
+        steps: saved.currentGoal.steps.map((s) => ({ ...s })),
+      };
+    } else if (saved?.todoList && saved.todoList.length > 0) {
+      // Migrate old save: first incomplete item becomes the goal, first 3 incomplete become steps
+      const incomplete = saved.todoList.filter((t) => !t.done);
+      if (incomplete.length > 0) {
+        this.currentGoal = {
+          goal: incomplete[0].task,
+          reason: "Continuing previous plan",
+          steps: incomplete
+            .slice(0, 3)
+            .map((t) => ({ task: t.task, done: false, doneWhen: t.doneWhen })),
+        };
+      }
+    }
     if (saved?.knownLocations) this.knownLocations = { ...saved.knownLocations };
     if (saved?.actionLog) this.actionLog = saved.actionLog.map((e) => ({ ...e }));
     if (saved?.claimedBed) this.claimedBed = { ...saved.claimedBed };
@@ -750,7 +782,13 @@ export class NPC extends ex.Actor {
       personality: this.personality,
       memory: serializeMemory(this.memory),
       sleeping: this.sleeping,
-      todoList: this.todoList.map((t) => ({ ...t })),
+      currentGoal: this.currentGoal
+        ? {
+            goal: this.currentGoal.goal,
+            reason: this.currentGoal.reason,
+            steps: this.currentGoal.steps.map((s) => ({ ...s })),
+          }
+        : null,
       claimedBed: this.claimedBed ? { ...this.claimedBed } : null,
       knownLocations: { ...this.knownLocations },
       actionLog: this.actionLog.map((e) => ({ ...e })),

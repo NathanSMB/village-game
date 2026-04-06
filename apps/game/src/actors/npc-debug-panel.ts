@@ -175,44 +175,55 @@ export class NPCDebugPanel extends ex.ScreenElement {
     ctx.textAlign = "left";
     ctx.font = "bold 10px monospace";
     ctx.fillStyle = LABEL_COLOR;
-    const maxTodoVisible = 4;
-    const todoCount = npc.todoList.length;
+    const goal = npc.currentGoal;
+    const stepCount = goal?.steps.length ?? 0;
+    const maxStepVisible = 4;
     // Clamp scroll offset
-    const maxScroll = Math.max(0, todoCount - maxTodoVisible);
+    const maxScroll = Math.max(0, stepCount - maxStepVisible);
     if (this.scrollOffset > maxScroll) this.scrollOffset = maxScroll;
 
-    ctx.fillText(
-      `PLAN (${todoCount} items)${todoCount > maxTodoVisible ? ` [↑↓ scroll ${this.scrollOffset + 1}-${Math.min(this.scrollOffset + maxTodoVisible, todoCount)}/${todoCount}]` : ""}`,
-      PAD,
-      y,
-    );
-    y += LINE;
-    if (todoCount === 0) {
+    if (!goal) {
+      ctx.fillText("GOAL (none)", PAD, y);
+      y += LINE;
       ctx.font = "9px monospace";
       ctx.fillStyle = ERR_COLOR;
-      ctx.fillText("(no plan)", PAD, y);
+      ctx.fillText("(no goal)", PAD, y);
       y += LINE - 1;
     } else {
+      ctx.fillText(`GOAL: ${truncate(goal.goal, 30)}`, PAD, y);
+      y += LINE;
+      ctx.font = "9px monospace";
+      ctx.fillStyle = DIM_COLOR;
+      ctx.fillText(`  ${truncate(goal.reason, 38)}`, PAD, y);
+      y += LINE - 1;
+      ctx.font = "bold 10px monospace";
+      ctx.fillStyle = LABEL_COLOR;
+      ctx.fillText(
+        `STEPS (${stepCount})${stepCount > maxStepVisible ? ` [↑↓ ${this.scrollOffset + 1}-${Math.min(this.scrollOffset + maxStepVisible, stepCount)}/${stepCount}]` : ""}`,
+        PAD,
+        y,
+      );
+      y += LINE;
       ctx.font = "9px monospace";
       const startIdx = this.scrollOffset;
-      const endIdx = Math.min(startIdx + maxTodoVisible, todoCount);
+      const endIdx = Math.min(startIdx + maxStepVisible, stepCount);
       if (startIdx > 0) {
         ctx.fillStyle = DIM_COLOR;
         ctx.fillText(`  ▲ ${startIdx} more above`, PAD, y);
         y += LINE - 2;
       }
       for (let i = startIdx; i < endIdx; i++) {
-        const t = npc.todoList[i];
-        ctx.fillStyle = t.done ? DIM_COLOR : "#ffdd66";
-        ctx.fillText(`${t.done ? "✓" : "○"} [${i}] ${truncate(t.task, 36)}`, PAD, y);
+        const s = goal.steps[i];
+        ctx.fillStyle = s.done ? DIM_COLOR : "#ffdd66";
+        ctx.fillText(`${s.done ? "✓" : "○"} [${i}] ${truncate(s.task, 36)}`, PAD, y);
         y += LINE - 2;
-        ctx.fillStyle = t.done ? DIM_COLOR : "#88aacc";
-        ctx.fillText(`     ↳ ${truncate(t.doneWhen, 33)}`, PAD, y);
+        ctx.fillStyle = s.done ? DIM_COLOR : "#88aacc";
+        ctx.fillText(`     ↳ ${truncate(s.doneWhen, 33)}`, PAD, y);
         y += LINE - 2;
       }
-      if (endIdx < todoCount) {
+      if (endIdx < stepCount) {
         ctx.fillStyle = DIM_COLOR;
-        ctx.fillText(`  ▼ ${todoCount - endIdx} more below`, PAD, y);
+        ctx.fillText(`  ▼ ${stepCount - endIdx} more below`, PAD, y);
         y += LINE - 2;
       }
     }

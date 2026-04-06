@@ -28,12 +28,24 @@ export interface ActionLogEntry {
   changes?: string;
 }
 
-// ── Todo List ────────────────────────────────────────────────────
+// ── Goal System ─────────────────────────────────────────────────
 
+export interface NPCStep {
+  task: string;
+  done: boolean;
+  doneWhen: string;
+}
+
+export interface NPCGoal {
+  goal: string;
+  reason: string;
+  steps: NPCStep[];
+}
+
+/** @deprecated Use NPCStep instead. Kept for save migration only. */
 export interface NPCTodoItem {
   task: string;
   done: boolean;
-  /** How to know this task is complete — a concrete observable condition. */
   doneWhen: string;
 }
 
@@ -72,8 +84,10 @@ export interface NPCSaveState {
   personality: NPCPersonality;
   memory: NPCMemoryState;
   sleeping: boolean;
-  /** The NPC's current plan — a list of tasks from the thinking model. */
-  todoList: NPCTodoItem[];
+  /** The NPC's current goal + steps. */
+  currentGoal?: NPCGoal | null;
+  /** @deprecated Kept for save migration only. */
+  todoList?: NPCTodoItem[];
   claimedBed: { x: number; y: number } | null;
   knownLocations: Record<string, string>;
   actionLog?: ActionLogEntry[];
@@ -113,15 +127,24 @@ export interface WorldSnapshot {
 
 export type NPCAction =
   | { action: "plan" }
+  | { action: "modify_plan" }
+  | { action: "complete_step"; stepIndex: number }
   | { action: "complete_todo"; todoIndex: number }
   | { action: "think" }
   | { action: "move_to"; x: number; y: number }
   | { action: "pick_bush"; x?: number; y?: number }
-  | { action: "chop_tree"; x?: number; y?: number }
-  | { action: "mine_rock"; x?: number; y?: number }
+  | { action: "chop_tree"; x?: number; y?: number; autoRepeat?: boolean }
+  | { action: "mine_rock"; x?: number; y?: number; autoRepeat?: boolean }
   | { action: "drink_water"; x?: number; y?: number }
   | { action: "pick_up_item"; itemId: string; x?: number; y?: number }
-  | { action: "attack"; direction?: Direction; targetType?: string; x?: number; y?: number }
+  | {
+      action: "attack";
+      direction?: Direction;
+      targetType?: string;
+      x?: number;
+      y?: number;
+      autoRepeat?: boolean;
+    }
   | { action: "craft"; recipeId: string }
   | { action: "cook"; inputItemId: string; x?: number; y?: number }
   | {

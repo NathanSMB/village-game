@@ -101,6 +101,7 @@ import {
   decideNextAction,
   buildWorldSnapshot,
   thinkAboutPlan,
+  thinkAboutPlanModification,
   thinkAboutQuestion,
 } from "../systems/npc-brain.ts";
 import { executeNPCAction, type GameWorldNPCInterface } from "../systems/npc-actions.ts";
@@ -5481,6 +5482,15 @@ export class GameWorld extends ex.Scene<GameWorldData> {
           continue;
         }
 
+        // Auto-repeat gathering/attack: re-execute without LLM if target still valid
+        if (npc.autoRepeatAction) {
+          if (this.shouldContinueAutoRepeat(npc)) {
+            executeNPCAction(npc, npc.autoRepeatAction, this.getNPCInterface());
+            continue;
+          }
+          npc.autoRepeatAction = null;
+        }
+
         // No LLM config or no API key — random wander fallback
         if (!this.llmConfig.apiKey && this.llmConfig.provider !== "ollama") {
           this.npcFallbackWander(npc);
@@ -5510,19 +5520,66 @@ export class GameWorld extends ex.Scene<GameWorldData> {
     }
   }
 
+  /**
+   * Check if an auto-repeat action should continue.
+   * Returns false (stop) when the target is gone or items dropped (for rocks).
+   */
+  private shouldContinueAutoRepeat(npc: NPC): boolean {
+    const action = npc.autoRepeatAction;
+    if (!action) return false;
+
+    const facing = npc.getFacingTile();
+
+    if (action.action === "chop_tree") {
+      const tree = this.treeByTile.get(tileKey(facing.x, facing.y));
+      return tree != null && !tree.isChoppedDown();
+    }
+
+    if (action.action === "mine_rock") {
+      const rock = this.rockByTile.get(tileKey(facing.x, facing.y));
+      if (!rock) return false;
+      // Stop when items dropped on ground near the rock (a drop cycle completed)
+      const nearbyKeys = [
+        tileKey(rock.tileX, rock.tileY),
+        tileKey(rock.tileX - 1, rock.tileY),
+        tileKey(rock.tileX + 1, rock.tileY),
+        tileKey(rock.tileX, rock.tileY - 1),
+        tileKey(rock.tileX, rock.tileY + 1),
+      ];
+      for (const k of nearbyKeys) {
+        const stack = this.groundItems.get(k);
+        if (stack && !stack.isEmpty()) return false; // items on ground — stop and pick up
+      }
+      return true;
+    }
+
+    if (action.action === "attack") {
+      const tx = "x" in action && action.x != null ? action.x : facing.x;
+      const ty = "y" in action && action.y != null ? action.y : facing.y;
+      const key = tileKey(tx, ty);
+      const sheep = this.sheepByTile.get(key);
+      if (sheep && !sheep.isDead) return true;
+      const cow = this.cowByTile.get(key);
+      if (cow && !cow.isDead) return true;
+      return false; // target dead or gone
+    }
+
+    return false;
+  }
+
   private triggerNPCDecision(npc: NPC): void {
     const abortController = new AbortController();
     this.npcInFlight.set(npc.npcId, abortController);
     npc.debugThinking = true;
 
     const snapshot = this.getWorldSnapshotForNPC(npc);
-    // Auto-complete todos whose conditions are already met
-    npc.autoCheckTodos();
+    // Auto-complete steps whose conditions are already met
+    npc.autoCheckSteps();
 
-    // Force replan when a NEW emergency threshold is crossed
+    // Force modify_plan when a NEW emergency threshold is crossed
     const currentEmergencies = new Set<string>();
-    if (npc.vitals.thirst <= 15) currentEmergencies.add("thirst");
-    if (npc.vitals.hunger <= 15) currentEmergencies.add("hunger");
+    if (npc.vitals.thirst <= 40) currentEmergencies.add("thirst");
+    if (npc.vitals.hunger <= 35) currentEmergencies.add("hunger");
     if (npc.vitals.energy <= 200) currentEmergencies.add("energy");
 
     // Check for newly triggered emergencies
@@ -5539,10 +5596,11 @@ export class GameWorld extends ex.Scene<GameWorldData> {
         npc.emergencyReplanned.delete(e);
       }
     }
-    if (newEmergency && npc.todoList.length > 0) {
-      console.warn(`[NPC ${npc.npcName}] New emergency — forcing replan`);
-      npc.todoList = [];
-      npc.todoGracePeriod = 0;
+    // Flag to force modify_plan after the action model call
+    let forceModifyPlan = false;
+    if (newEmergency && npc.currentGoal) {
+      console.warn(`[NPC ${npc.npcName}] New emergency — will modify plan to add survival steps`);
+      forceModifyPlan = true;
       npc.pendingPath = [];
       npc.pendingAction = null;
     }
@@ -5550,6 +5608,39 @@ export class GameWorld extends ex.Scene<GameWorldData> {
     // Diff visible entity states (HP changes, bush picked, etc.)
     const worldChanges = npc.diffVisibleEntities(snapshot.entities);
     const config = this.llmConfig;
+
+    // Auto-replan fast path: skip action model when all steps complete
+    if (npc.needsReplan && !forceModifyPlan) {
+      npc.needsReplan = false;
+      npc.debugLastAction = "(auto-replan)";
+      npc.debugLastResult = "⏳ Replanning...";
+      thinkAboutPlan(npc, snapshot, config, abortController.signal)
+        .then((goal) => {
+          npc.currentGoal = goal;
+          npc.todoGracePeriod = 3;
+          const summary = goal.steps.map((s) => s.task).join(" → ");
+          npc.debugLastResult = `✓ Goal: ${goal.goal}`;
+          npc.pushDebugHistory(
+            "(auto-replan)",
+            `✓ ${goal.goal}: ${summary.slice(0, 60)}`,
+            worldChanges,
+          );
+          npc.pushActionLog(
+            Date.now(),
+            "plan(auto)",
+            `ok: ${goal.goal} — ${summary.slice(0, 60)}`,
+            worldChanges || undefined,
+          );
+          this.npcInFlight.delete(npc.npcId);
+          npc.debugThinking = false;
+        })
+        .catch((err: unknown) => {
+          this.npcInFlight.delete(npc.npcId);
+          npc.debugThinking = false;
+          if (!String(err).includes("aborted")) npc.debugLastResult = `✗ ${String(err)}`;
+        });
+      return;
+    }
 
     decideNextAction(npc, snapshot, config, abortController.signal)
       .then(async (action) => {
@@ -5562,37 +5653,41 @@ export class GameWorld extends ex.Scene<GameWorldData> {
         // Clear chat inbox since the brain has consumed them
         npc.chatInbox = [];
 
-        // Hard enforcement: if NPC has no plan, force plan action regardless of what the model chose
+        // Hard enforcement: if NPC has no goal, force plan action
         if (
-          npc.todoList.length === 0 &&
+          !npc.currentGoal &&
           action.action !== "plan" &&
+          action.action !== "modify_plan" &&
           action.action !== "think" &&
           action.action !== "consume" &&
           action.action !== "drink_water"
         ) {
-          console.warn(`[NPC ${npc.npcName}] No plan but chose ${action.action} — forcing plan`);
-          // Allow survival actions (consume/drink) even without a plan, but redirect everything else
+          console.warn(`[NPC ${npc.npcName}] No goal but chose ${action.action} — forcing plan`);
           const forcedAction = { action: "plan" as const };
           npc.debugLastAction = JSON.stringify(action);
-          npc.debugLastResult = "→ Redirected to plan (no todo list)";
-          // Fall through to plan handler below
+          npc.debugLastResult = "→ Redirected to plan (no goal)";
           Object.assign(action, forcedAction);
         }
 
-        // Intercept plan → route through thinking model to create todo list
+        // Intercept plan → route through thinking model to create goal
         if (action.action === "plan") {
           npc.debugLastAction = '{"action":"plan"}';
           npc.debugLastResult = "⏳ Planning...";
-          const todos = await thinkAboutPlan(npc, snapshot, config, abortController.signal);
-          npc.todoList = todos;
-          npc.todoGracePeriod = 3; // skip auto-check for 3 cycles so new plan isn't instantly cleared
-          const summary = todos.map((t) => t.task).join(" → ");
-          npc.debugLastResult = `✓ Plan: ${summary.slice(0, 80)}`;
-          npc.pushDebugHistory('{"action":"plan"}', `✓ ${todos.length} todos`, worldChanges);
+          const goal = await thinkAboutPlan(npc, snapshot, config, abortController.signal);
+          npc.currentGoal = goal;
+          npc.needsReplan = false;
+          npc.todoGracePeriod = 3;
+          const summary = goal.steps.map((s) => s.task).join(" → ");
+          npc.debugLastResult = `✓ Goal: ${goal.goal}`;
+          npc.pushDebugHistory(
+            '{"action":"plan"}',
+            `✓ ${goal.goal}: ${summary.slice(0, 60)}`,
+            worldChanges,
+          );
           npc.pushActionLog(
             Date.now(),
             "plan",
-            `ok: ${todos.length} todos — ${summary.slice(0, 80)}`,
+            `ok: ${goal.goal} — ${summary.slice(0, 60)}`,
             worldChanges || undefined,
           );
           this.npcInFlight.delete(npc.npcId);
@@ -5618,6 +5713,39 @@ export class GameWorld extends ex.Scene<GameWorldData> {
           return;
         }
 
+        // Intercept modify_plan → add steps to existing goal via thinking model
+        if (action.action === "modify_plan" || forceModifyPlan) {
+          npc.debugLastAction = '{"action":"modify_plan"}';
+          npc.debugLastResult = "⏳ Modifying plan...";
+          const modified = await thinkAboutPlanModification(
+            npc,
+            snapshot,
+            config,
+            abortController.signal,
+          );
+          npc.currentGoal = modified;
+          npc.todoGracePeriod = 3;
+          const summary = modified.steps
+            .filter((s) => !s.done)
+            .map((s) => s.task)
+            .join(" → ");
+          npc.debugLastResult = `✓ Modified: ${summary.slice(0, 80)}`;
+          npc.pushDebugHistory(
+            '{"action":"modify_plan"}',
+            `✓ ${modified.steps.length} steps`,
+            worldChanges,
+          );
+          npc.pushActionLog(
+            Date.now(),
+            "modify_plan",
+            `ok: ${modified.steps.length} steps — ${summary.slice(0, 60)}`,
+            worldChanges || undefined,
+          );
+          this.npcInFlight.delete(npc.npcId);
+          npc.debugThinking = false;
+          return;
+        }
+
         // All other actions — execute normally
         const result = executeNPCAction(npc, action, this.getNPCInterface());
         const actionJson = JSON.stringify(action);
@@ -5628,15 +5756,50 @@ export class GameWorld extends ex.Scene<GameWorldData> {
         npc.pushDebugHistory(actionJson, resultStr, worldChanges);
         npc.pushActionLog(Date.now(), actionJson, resultStr, worldChanges || undefined);
 
-        // Stuck detection: if same action fails 3+ times, force replan
+        // Set up auto-repeat if action succeeded and has autoRepeat flag
+        if (
+          result.success &&
+          "autoRepeat" in action &&
+          action.autoRepeat &&
+          (action.action === "chop_tree" ||
+            action.action === "mine_rock" ||
+            action.action === "attack")
+        ) {
+          npc.autoRepeatAction = action;
+        }
+
+        // Stuck detection: if 3+ consecutive failures, modify plan to add corrective steps
         if (result.success) {
           npc.trackSuccess();
         } else {
           const stuck = npc.trackFailure(actionJson);
           if (stuck) {
-            console.warn(`[NPC ${npc.npcName}] Stuck on: ${actionJson} — forcing replan`);
-            npc.todoList = [];
+            console.warn(`[NPC ${npc.npcName}] Stuck (3+ failures) — modifying plan`);
             npc.trackSuccess(); // reset counter
+            const modified = await thinkAboutPlanModification(
+              npc,
+              snapshot,
+              config,
+              abortController.signal,
+            );
+            npc.currentGoal = modified;
+            npc.todoGracePeriod = 3;
+            const summary = modified.steps
+              .filter((s) => !s.done)
+              .map((s) => s.task)
+              .join(" → ");
+            npc.debugLastResult = `✓ Unstuck: modified plan`;
+            npc.pushDebugHistory(
+              '{"action":"modify_plan"}',
+              `✓ ${modified.steps.length} steps (stuck)`,
+              worldChanges,
+            );
+            npc.pushActionLog(
+              Date.now(),
+              "modify_plan(stuck)",
+              `ok: ${modified.steps.length} steps — ${summary.slice(0, 60)}`,
+              worldChanges || undefined,
+            );
           }
         }
         this.npcInFlight.delete(npc.npcId);
@@ -5695,7 +5858,14 @@ export class GameWorld extends ex.Scene<GameWorldData> {
         // Rock
         const rock = this.rockByTile.get(key);
         if (rock) {
-          entities.push({ type: "rock", x: tx, y: ty, details: "big rock" });
+          const progress =
+            rock.damageAccum > 0 ? ` (mining ${rock.damageAccum}/${rock.dropThreshold})` : "";
+          entities.push({
+            type: "rock",
+            x: tx,
+            y: ty,
+            details: `rock${progress} — drops small_rock/large_stone/flint`,
+          });
         }
 
         // Ground items
@@ -5720,7 +5890,16 @@ export class GameWorld extends ex.Scene<GameWorldData> {
             const slots = building.storageSlots.length;
             detail += ` [${used}/${slots} items]`;
           }
-          if (building.isBurning) detail += " [burning]";
+          if (building.type.fire) {
+            if (building.isBurning) {
+              detail += " [burning — can cook here]";
+            } else {
+              const fuel = building.type.fire.fuelCost
+                .map((f) => `${f.count}x ${f.itemId}`)
+                .join(" + ");
+              detail += ` [unlit — light with ${fuel} by interacting]`;
+            }
+          }
           // Show bed/bedroll claim status
           if (building.type.id === "bed" || building.type.id === "bedroll") {
             const bedOwner = this.claimedBeds.get(key);

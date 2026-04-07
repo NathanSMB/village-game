@@ -1,8 +1,12 @@
 #!/bin/bash
 set -e
-shopt -s globstar
 
-ASEPRITE="$HOME/.local/share/Steam/steamapps/common/Aseprite/aseprite"
+if [[ "$(uname)" == "Darwin" ]]; then
+  ASEPRITE="$HOME/Library/Application Support/Steam/steamapps/common/Aseprite/Aseprite.app/Contents/MacOS/aseprite"
+else
+  ASEPRITE="$HOME/.local/share/Steam/steamapps/common/Aseprite/aseprite"
+fi
+
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 ASSETS_DIR="$SCRIPT_DIR/../assets"
 SPRITES_DIR="$SCRIPT_DIR/../src/sprites"
@@ -62,7 +66,7 @@ echo "Exporting ground/cow..."
   --sheet-type horizontal
 
 # Character layers
-for file in "$ASSETS_DIR"/characters/**/*.aseprite; do
+while IFS= read -r file; do
   relative="${file#"$ASSETS_DIR"/}"
   name="${relative%.aseprite}"
   outdir="$SPRITES_DIR/$(dirname "$name")"
@@ -71,6 +75,6 @@ for file in "$ASSETS_DIR"/characters/**/*.aseprite; do
   "$ASEPRITE" -b "$file" \
     --sheet "$SPRITES_DIR/$name.png" \
     --sheet-type horizontal > /dev/null
-done
+done < <(find "$ASSETS_DIR/characters" -name "*.aseprite")
 
 echo "Done. Sprites exported to src/sprites/"
